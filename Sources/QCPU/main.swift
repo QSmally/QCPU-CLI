@@ -1,2 +1,2 @@
 
-print("Hello, world!")
+let _ = CLIStateController()
