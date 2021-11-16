@@ -6,8 +6,23 @@
 //
 
 extension CLIStateController {
+
+    var module: Command? {
+        switch CLIStateController.arguments.first!.lowercased() {
+            case "assemble": return AssemblerCommand(controller: self)
+            default:
+                return nil
+        }
+    }
+
     func handleCommandInput() {
-        let command = CLIStateController.arguments.first!
-        CLIStateController.newline(command)
+        if let command = module {
+            CLIStateController.newline(CLIStateController.arguments.first!)
+            command.execute(with: StateContext())
+            return
+        }
+
+        let inputCommand = CLIStateController.arguments.first!
+        CLIStateController.newline("Error: invalid command '\(inputCommand)'")
     }
 }
