@@ -13,7 +13,5 @@ class Command {
         self.controller = controller
     }
 
-    func execute(with stateContext: StateContext) {
-        
-    }
+    func execute(with stateContext: StateContext) {}
 }
