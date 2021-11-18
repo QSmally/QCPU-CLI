@@ -39,4 +39,11 @@ final class CLIStateController {
         CLIStateController.output("\u{1B}[2J")
         CLIStateController.output("\u{1B}[1;1H")
     }
+
+    static func exit(_ message: String? = nil) {
+        if let message = message {
+            CLIStateController.newline(message)
+        }
+        exit(0)
+    }
 }

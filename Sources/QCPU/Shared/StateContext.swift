@@ -27,7 +27,7 @@ class StateContext {
                 .map { try! String(contentsOfFile: $0) }
         }
 
-        fatalError("fatal error: invalid permissions")
+        CLIStateController.exit("Fatal error: invalid directory or permissions")
     }()
 
     init(controller: CLIStateController) {
