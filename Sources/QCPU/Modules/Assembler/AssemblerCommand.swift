@@ -6,5 +6,7 @@
 //
 
 class AssemblerCommand: Command {
-    override func execute(with stateContext: StateContext) {}
+    override func execute(with stateContext: StateContext) {
+        CLIStateController.newline(stateContext.files)
+    }
 }

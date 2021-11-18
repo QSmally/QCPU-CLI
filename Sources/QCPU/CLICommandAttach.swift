@@ -16,8 +16,7 @@ extension CLIStateController {
 
     func handleCommandInput() {
         if modules.count > 0 {
-            let stateContext = StateContext()
-            CLIStateController.newline(CLIStateController.arguments.first!)
+            let stateContext = StateContext(controller: self)
             modules.forEach { $0.execute(with: stateContext) }
             return
         }
