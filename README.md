@@ -9,8 +9,10 @@
 * `@ADDRESSABLE <namespace>.<label>`
 * `@OVERFLOWABLE`
 
+**Marcos**
 * `@DECLARE <label> <value>`
 
+**Indented**
 * `@IF <flag>`
 * `@ENUM <namespace>`
 * `@END`
