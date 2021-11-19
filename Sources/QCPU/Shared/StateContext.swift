@@ -36,16 +36,7 @@ class StateContext {
             return iterator.allObjects
                 .map { ($0 as! NSURL).relativePath! }
                 .filter { $0.hasSuffix(".s") }
-                .map { url in
-                    let fileContents = try! String(contentsOfFile: url)
-                        .components(separatedBy: .newlines)
-                        .map { $0.trimmingCharacters(in: .whitespaces) }
-                        .filter { !$0.isEmpty && !$0.starts(with: "//") }
-                    let filename = URL(fileURLWithPath: url)
-                        .deletingPathExtension()
-                        .lastPathComponent
-                    return MemoryComponent(filename, fromSource: fileContents)
-                }
+                .map { MemoryComponent.create(url: $0) }
         }
 
         CLIStateController.terminate("Fatal error: missing permissions to read directory")
