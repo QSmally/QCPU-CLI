@@ -7,6 +7,13 @@
 
 class AssemblerCommand: Command {
     override func execute(with stateContext: StateContext) {
-        CLIStateController.newline(stateContext.files)
+        let files = stateContext.files
+            .map { file in
+                file
+                    .components(separatedBy: .newlines)
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .filter { !$0.isEmpty && !$0.starts(with: "//") }
+            }
+        print(files)
     }
 }
