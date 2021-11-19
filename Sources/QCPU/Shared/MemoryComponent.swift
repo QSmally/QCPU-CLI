@@ -7,14 +7,15 @@
 
 class MemoryComponent {
 
-    var name: String?
-    var address: (UInt, UInt)
-    var file: [String]
+    var name: String
+    var address: (UInt, UInt)?
+    var namespaceCallable: String?
 
+    var file: [String]
     var assembledOutput = [String]()
 
-    init(_ address: (UInt, UInt), instructions: [String]) {
-        self.address = address
+    init(_ name: String, fromSource instructions: [String]) {
+        self.name = name
         self.file = instructions
     }
 }
