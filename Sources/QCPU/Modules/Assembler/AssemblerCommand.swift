@@ -8,5 +8,6 @@
 class AssemblerCommand: Command {
     override func execute(with stateContext: StateContext) {
         print(stateContext.memoryComponents.map { $0.name })
+        stateContext.memoryComponents.forEach { $0.tags() }
     }
 }
