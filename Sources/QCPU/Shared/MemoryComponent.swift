@@ -18,6 +18,8 @@ class MemoryComponent {
     var address: (UInt, UInt)?
     var namespaceCallable: String?
 
+    var tagAmount = 0
+
     var file: [String]
     var assemblyOutlet = [String]()
 
@@ -35,28 +37,5 @@ class MemoryComponent {
             .deletingPathExtension()
             .lastPathComponent
         return MemoryComponent(filename, fromSource: fileContents)
-    }
-
-    func tags() {
-        var tagAmount = 0
-
-        for tag in file.prefix(while: { $0.hasPrefix("@") }) {
-            var tagComponents = tag.components(separatedBy: .whitespaces)
-            let identifier = tagComponents.removeFirst()
-
-            if MemoryComponent.validTags.contains(identifier) {
-                print("\(name) \(identifier)")
-                tagAmount += 1
-                continue
-            }
-
-            if !MemoryComponent.skipTaglikeNotation.contains(identifier) {
-                CLIStateController.terminate("Parse error: invalid tag '\(identifier)' in file '\(name)'")
-            } else {
-                break
-            }
-        }
-
-        file.removeFirst(tagAmount)
     }
 }
