@@ -11,19 +11,20 @@ final class CLIStateController {
 
     static let arguments = CommandLine.arguments.dropFirst()
 
-    let help = [
+    static let help = [
         "USAGE:",
         "  qcpu <command> <arguments>\n",
         "COMMANDS:",
-        "  assemble <path>                 converts extended QCPU 2 assembly into machine language.",
-        "  emulate <path> <clock speed?>   executes QCPU 2 machine code.",
-        "  run <path> <clock speed?>       assembles and emulates extended QCPU 2 assembly."
+        "  assemble <path>                 converts extended QCPU assembly into machine language.",
+        "  documentate <path>              generates markdown documentation from the assembly tags.",
+        "  emulate <path> <clock speed?>   executes QCPU machine code.",
+        "  run <path> <clock speed?>       assembles and emulates extended QCPU assembly."
     ].byNewlines()
 
     init() {
         CLIStateController.arguments.count > 0 ?
             self.handleCommandInput() :
-            CLIStateController.newline(self.help)
+            CLIStateController.newline(CLIStateController.help)
     }
 
     static func output(_ text: String) {
