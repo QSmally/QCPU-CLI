@@ -11,12 +11,20 @@ class MemoryComponent {
 
     static let validTags = [
         "@PAGE", "@HEADER", "@ADDRESSABLE", "@OVERFLOWABLE",
-        "@DECLARE", "@IF", "@ENUM", "@END"]
-    static let indentedTagNotations = ["@IF", "@ENUM"]
+        "@DECLARE", "@ENUM", "@END"]
+    static let indentedTagNotations = ["@ENUM"]
+    static let breakTaglike = ["@IF"]
 
     var name: String
     var address: (UInt, UInt)?
     var namespaceCallable: String?
+    var header: (
+        name: String,
+        parameters: [String])?
+
+    var enumeration: (
+        name: String,
+        cases: [String: String])?
 
     // Accumulated outputs
     var file: [String]
@@ -25,6 +33,8 @@ class MemoryComponent {
     // Working area
     internal var tagAmount = 0
     internal var indentations = [IndentationLevel]()
+    internal var declarations = [String: String]()
+    internal var overflowable = false
 
     init(_ name: String, fromSource instructions: [String]) {
         self.name = name
