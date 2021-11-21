@@ -11,17 +11,20 @@ class MemoryComponent {
 
     static let validTags = [
         "@PAGE", "@HEADER", "@ADDRESSABLE", "@OVERFLOWABLE",
-        "@DECLARE", "@ENUM", "@END"]
-    static let skipTaglikeNotation = ["@IF"]
+        "@DECLARE", "@IF", "@ENUM", "@END"]
+    static let indentedTagNotations = ["@IF", "@ENUM"]
 
     var name: String
     var address: (UInt, UInt)?
     var namespaceCallable: String?
 
-    var tagAmount = 0
-
+    // Accumulated outputs
     var file: [String]
     var assemblyOutlet = [String]()
+
+    // Working area
+    internal var tagAmount = 0
+    internal var indentations = [IndentationLevel]()
 
     init(_ name: String, fromSource instructions: [String]) {
         self.name = name
