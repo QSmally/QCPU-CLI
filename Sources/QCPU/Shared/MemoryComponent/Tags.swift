@@ -18,11 +18,14 @@ struct IndentationLevel {
         self.arguments = arguments
         self.memoryComponent = memoryComponent
 
-        if identifier == "@ENUM" {
-            guard let namespace = arguments[optional: 0] else {
-                CLIStateController.terminate("Parse error (\(memoryComponent.name)): missing enum namespace")
-            }
-            memoryComponent.enumeration = (name: namespace, cases: [:])
+        switch identifier {
+            case "@ENUM":
+                guard let namespace = arguments[optional: 0] else {
+                    CLIStateController.terminate("Parse error (\(memoryComponent.name)): missing enum namespace")
+                }
+                memoryComponent.enumeration = (name: namespace, cases: [:])
+            default:
+                break
         }
     }
 
