@@ -6,6 +6,7 @@
 //
 
 extension MemoryComponent {
+    @discardableResult
     func tags() -> MemoryComponent {
         for tag in file {
             var tagComponents = tag.components(separatedBy: .whitespaces)

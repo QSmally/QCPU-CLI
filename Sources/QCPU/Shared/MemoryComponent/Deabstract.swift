@@ -50,10 +50,27 @@ extension MemoryComponent {
     }
 
     private func parseMarcoHeader(_ tag: String, from statement: String, helpers: [MemoryComponent]) -> [String] {
-        if let header = helpers.first(where: { $0.header?.name == tag }) {
-            // TODO:
-            // Insert marcos, enumerations and other headers into file.
-            return header.file
+        let headerComponent = helpers
+            .first(where: { $0.header?.name == tag })?
+            .clone()
+
+        if let headerComponent = headerComponent {
+            let arguments = statement
+                .components(separatedBy: .whitespaces)
+                .dropFirst()
+            guard headerComponent.header!.parameters.count == arguments.count else {
+                CLIStateController.terminate("Parse error (\(name)): signature of header '\(headerComponent.header!.name)' does not match caller")
+            }
+
+            for (index, name) in headerComponent.header!.parameters.enumerated() {
+                // Somehow the 'arguments' array slice is not zero-indexed because it uses the
+                // length of the non-first-dropped array.
+                headerComponent.declarations[name] = arguments[index + 1]
+            }
+
+            return headerComponent
+                .prepare(helpers: helpers)
+                .file
         }
 
         if let marco = declarations.first(where: { $0.key == tag }) {

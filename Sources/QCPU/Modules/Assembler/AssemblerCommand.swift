@@ -7,13 +7,12 @@
 
 class AssemblerCommand: Command {
     override func execute(with stateContext: StateContext) {
-        let _ = stateContext.memoryComponents
-            .map { $0.tags() }
+        stateContext.memoryComponents.forEach { $0.tags() }
+        let executionComponents = stateContext.memoryComponents
+            .filter { $0.isCodeBlock }
             .map { $0.prepare(helpers: stateContext.memoryComponents.insertable) }
-            .map { $0.name }
-        stateContext.memoryComponents
-            .removeAll { !$0.isCodeBlock }
+        stateContext.memoryComponents = executionComponents
 
-        print(stateContext.memoryComponents.map { $0.file })
+        print(stateContext.memoryComponents.map { ($0.name, $0.file) })
     }
 }

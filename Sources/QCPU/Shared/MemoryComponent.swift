@@ -57,4 +57,13 @@ class MemoryComponent {
             .lastPathComponent
         return MemoryComponent(filename, fromSource: fileContents)
     }
+
+    func clone() -> MemoryComponent {
+        let clonedComponent = MemoryComponent(name, fromSource: file)
+        clonedComponent.header = header
+        clonedComponent.enumeration = enumeration
+        clonedComponent.declarations = declarations
+
+        return clonedComponent
+    }
 }
