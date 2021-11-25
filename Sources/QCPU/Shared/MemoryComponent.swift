@@ -36,6 +36,10 @@ class MemoryComponent {
     internal var declarations = [String: String]()
     internal var overflowable = false
 
+    var isCodeBlock: Bool {
+        address != nil && header == nil
+    }
+
     init(_ name: String, fromSource instructions: [String]) {
         self.name = name
         self.file = instructions

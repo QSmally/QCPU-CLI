@@ -6,7 +6,7 @@
 //
 
 extension MemoryComponent {
-    func tags() {
+    func tags() -> MemoryComponent {
         for tag in file {
             var tagComponents = tag.components(separatedBy: .whitespaces)
             let identifier = tagComponents.removeFirst()
@@ -30,6 +30,7 @@ extension MemoryComponent {
         }
 
         file.removeFirst(tagAmount)
+        return self
     }
 
     internal func parseTag(_ tag: String, tagComponents: [String]) {
