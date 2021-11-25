@@ -8,6 +8,7 @@
 import Foundation
 
 enum Expressions {
-    static let function = try! NSRegularExpression(pattern: #"%([a-zA-Z_\.]+)\s(\w)\s(.*)"#)
+    static let function = try! NSRegularExpression(pattern: #"%([a-zA-Z_\.]+\s?.*)"#)
     static let tag = try! NSRegularExpression(pattern: #"@([a-zA-Z_\.]+)"#)
+    static let label = try! NSRegularExpression(pattern: #"^.([a-zA-Z_]+):$"#)
 }

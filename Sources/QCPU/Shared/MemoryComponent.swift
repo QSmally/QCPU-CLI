@@ -34,6 +34,7 @@ class MemoryComponent {
 
     // Working area
     internal var tagAmount = 0
+    internal var lineIteratorCount = 0
     internal var indentations = [IndentationController]()
     internal var declarations = [String: String]()
     internal var temporaryStack = [String]()
@@ -59,11 +60,11 @@ class MemoryComponent {
     }
 
     func clone() -> MemoryComponent {
-        let clonedComponent = MemoryComponent(name, fromSource: file)
-        clonedComponent.header = header
-        clonedComponent.enumeration = enumeration
-        clonedComponent.declarations = declarations
+        let clonedMemoryComponent = MemoryComponent(name, fromSource: file)
+        clonedMemoryComponent.header = header
+        clonedMemoryComponent.enumeration = enumeration
+        clonedMemoryComponent.declarations = declarations
 
-        return clonedComponent
+        return clonedMemoryComponent
     }
 }

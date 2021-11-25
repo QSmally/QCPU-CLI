@@ -34,6 +34,24 @@ extension MemoryComponent {
         return self
     }
 
+    func declare(_ key: String, value: String) {
+        var sanitisedString = value
+
+        if let function = Expressions.function.match(value, group: 1) {
+            let functionController = FunctionController(
+                function,
+                from: value,
+                memoryComponent: self)
+            sanitisedString = functionController.parse().first ?? value
+        }
+
+        if indentations.last?.identifier == "@ENUM" {
+            enumeration!.cases[key] = sanitisedString
+        } else {
+            declarations[key] = sanitisedString
+        }
+    }
+
     internal func parseTag(_ tag: String, tagComponents: [String]) {
         switch tag {
             case "@PAGE":
@@ -74,11 +92,7 @@ extension MemoryComponent {
                     CLIStateController.terminate("Parse error (\(name)): missing tag and/or value for declaration")
                 }
 
-                if indentations.last?.identifier == "@ENUM" {
-                    enumeration!.cases[tag] = value
-                } else {
-                    declarations[tag] = value
-                }
+                declare(tag, value: value)
 
             case "@ENUM":
                 let indent = IndentationController(

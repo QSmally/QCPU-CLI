@@ -11,6 +11,7 @@ class AssemblerCommand: Command {
         let executionComponents = stateContext.memoryComponents
             .filter { $0.isCodeBlock }
             .map { $0.prepare(helpers: stateContext.memoryComponents.insertable) }
+            .map { $0.addressingTarget() }
         stateContext.memoryComponents = executionComponents
 
         print(stateContext.memoryComponents.map { ($0.name, $0.file) })

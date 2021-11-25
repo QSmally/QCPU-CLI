@@ -42,11 +42,13 @@ struct IndentationController {
                 // Implement parsing of the condition and return true if the instruction can
                 // be used to propagate the parser.
                 return true
+
             case "@ENUM":
                 anyStatement == "@DECLARE" ?
                     memoryComponent.parseTag(anyStatement, tagComponents: tagComponents) :
                     CLIStateController.newline("Parse warning (\(memoryComponent.name)): an enum may only contain '@DECLARE' statements")
                 return false
+
             default:
                 CLIStateController.terminate("Parse error (\(memoryComponent.name)): invalid indentation tag '\(identifier)'")
         }

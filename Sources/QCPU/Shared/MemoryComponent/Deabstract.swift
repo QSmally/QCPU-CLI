@@ -32,12 +32,18 @@ extension MemoryComponent {
                 continue
             }
 
-            // TODO:
-            // Autocomplete functions like %random and %array.
+            if let function = Expressions.function.match(statement, group: 1) {
+                let functionController = FunctionController(
+                    function,
+                    from: statement,
+                    memoryComponent: self)
+                temporaryStack += functionController.parse()
+                continue
+            }
 
             if let tag = Expressions.tag.match(statement, group: 1) {
-                let instructions = parseMarcoHeader(tag, from: statement, helpers: helpers)
-                temporaryStack += instructions
+                let bytes = parseMarcoHeader(tag, from: statement, helpers: helpers)
+                temporaryStack += bytes
                 continue
             }
 
@@ -63,9 +69,7 @@ extension MemoryComponent {
             }
 
             for (index, name) in headerComponent.header!.parameters.enumerated() {
-                // Somehow the 'arguments' array slice is not zero-indexed because it uses the
-                // length of the non-first-dropped array.
-                headerComponent.declarations[name] = arguments[index + 1]
+                headerComponent.declare(name, value: arguments[index + 1])
             }
 
             return headerComponent
