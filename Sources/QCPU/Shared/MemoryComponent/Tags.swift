@@ -11,13 +11,13 @@ extension MemoryComponent {
             var tagComponents = tag.components(separatedBy: .whitespaces)
             let identifier = tagComponents.removeFirst()
 
-            if !tag.hasPrefix("@") &&
+            if !tag.starts(with: "@") &&
                 indentations.count == 0 ||
                 MemoryComponent.breakTaglike.contains(identifier) { break }
             tagAmount += 1
 
-            if indentations.count > 0 {
-                indentations.last!.validate(identifier, tagComponents: tagComponents)
+            if let level = indentations.last {
+                level.validate(identifier, tagComponents: tagComponents)
                 continue
             }
 
@@ -73,15 +73,14 @@ extension MemoryComponent {
                     CLIStateController.terminate("Parse error (\(name)): missing tag and/or value for declaration")
                 }
 
-                if indentations.last?.identifier == "@ENUM",
-                   var enumeration = enumeration {
-                    enumeration.cases[tag] = value
+                if indentations.last?.identifier == "@ENUM" {
+                    enumeration!.cases[tag] = value
                 } else {
                     declarations[tag] = value
                 }
 
             case "@ENUM":
-                let indent = IndentationLevel(
+                let indent = IndentationController(
                     identifier: tag,
                     arguments: tagComponents,
                     memoryComponent: self)

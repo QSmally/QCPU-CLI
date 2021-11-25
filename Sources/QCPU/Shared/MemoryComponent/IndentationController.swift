@@ -1,11 +1,11 @@
 //
-//  IndentationLevel.swift
+//  IndentationController.swift
 //  QCPU CLI
 //
 //  Created by Joey Smalen on 22/11/2021.
 //
 
-struct IndentationLevel {
+struct IndentationController {
 
     let identifier: String
     let arguments: [String]
@@ -29,17 +29,24 @@ struct IndentationLevel {
         }
     }
 
-    func validate(_ anyStatement: String, tagComponents: [String]) {
+    @discardableResult
+    func validate(_ anyStatement: String, tagComponents: [String]) -> Bool {
         if anyStatement == "@END" {
             memoryComponent.indentations.removeLast()
-            return
+            return false
         }
 
         switch identifier {
+            case "@IF":
+                // TODO:
+                // Implement parsing of the condition and return true if the instruction can
+                // be used to propagate the parser.
+                return true
             case "@ENUM":
                 anyStatement == "@DECLARE" ?
-                memoryComponent.parseTag(anyStatement, tagComponents: tagComponents) :
-                CLIStateController.newline("Parse warning (\(memoryComponent.name)): an enum may only contain '@DECLARE' statements")
+                    memoryComponent.parseTag(anyStatement, tagComponents: tagComponents) :
+                    CLIStateController.newline("Parse warning (\(memoryComponent.name)): an enum may only contain '@DECLARE' statements")
+                return false
             default:
                 CLIStateController.terminate("Parse error (\(memoryComponent.name)): invalid indentation tag '\(identifier)'")
         }

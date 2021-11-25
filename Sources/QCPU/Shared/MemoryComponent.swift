@@ -18,6 +18,8 @@ class MemoryComponent {
     var name: String
     var address: (UInt, UInt)?
     var namespaceCallable: String?
+    var overflowable = false
+
     var header: (
         name: String,
         parameters: [String])?
@@ -32,9 +34,9 @@ class MemoryComponent {
 
     // Working area
     internal var tagAmount = 0
-    internal var indentations = [IndentationLevel]()
+    internal var indentations = [IndentationController]()
     internal var declarations = [String: String]()
-    internal var overflowable = false
+    internal var temporaryStack = [String]()
 
     var isCodeBlock: Bool {
         address != nil && header == nil
