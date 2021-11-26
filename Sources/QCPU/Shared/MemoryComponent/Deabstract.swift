@@ -13,8 +13,8 @@ extension MemoryComponent {
         MemoryComponent.breakTaglike + ["@END"]
     }
 
-    func prepare(helpers: [MemoryComponent]) -> MemoryComponent {
-        for statement in file {
+    func prepare(helpers: [MemoryComponent]) {
+        for statement in file.removeCopy() {
             var instructionComponents = statement.components(separatedBy: .whitespaces)
             let master = instructionComponents.removeFirst()
 
@@ -37,22 +37,18 @@ extension MemoryComponent {
                     function,
                     from: statement,
                     memoryComponent: self)
-                temporaryStack += functionController.parse()
+                file += functionController.parse()
                 continue
             }
 
             if let tag = Expressions.tag.match(statement, group: 1) {
                 let bytes = parseMarcoHeader(tag, from: statement, helpers: helpers)
-                temporaryStack += bytes
+                file += bytes
                 continue
             }
 
-            temporaryStack.append(statement)
+            file.append(statement)
         }
-
-        file = temporaryStack
-        temporaryStack.removeAll()
-        return self
     }
 
     private func parseMarcoHeader(_ tag: String, from statement: String, helpers: [MemoryComponent]) -> [String] {
@@ -72,9 +68,8 @@ extension MemoryComponent {
                 headerComponent.declare(name, value: arguments[index + 1])
             }
 
-            return headerComponent
-                .prepare(helpers: helpers)
-                .file
+            headerComponent.prepare(helpers: helpers)
+            return headerComponent.file
         }
 
         if let marco = declarations.first(where: { $0.key == tag }) {

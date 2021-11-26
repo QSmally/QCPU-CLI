@@ -34,10 +34,9 @@ class MemoryComponent {
 
     // Working area
     internal var tagAmount = 0
-    internal var lineIteratorCount = 0
+    internal var lineIteratorCount: UInt = 0
     internal var indentations = [IndentationController]()
     internal var declarations = [String: String]()
-    internal var temporaryStack = [String]()
 
     var isCodeBlock: Bool {
         address != nil && header == nil

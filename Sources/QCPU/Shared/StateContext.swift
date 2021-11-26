@@ -45,4 +45,29 @@ class StateContext {
     init(controller: CLIStateController) {
         self.controller = controller
     }
+
+    @discardableResult
+    func deobfuscate() -> StateContext {
+        memoryComponents
+            .map { $0.tags() }
+            .filter { $0.isCodeBlock }
+            .forEach { $0.prepare(helpers: memoryComponents.insertable) }
+        memoryComponents
+            .removeAll { !$0.isCodeBlock }
+        return self
+    }
+
+    @discardableResult
+    func addressTargets() -> StateContext {
+        let addressables = memoryComponents
+            .filter { $0.namespaceCallable != nil }
+            .map { MemoryComponent.Label(
+                id: $0.namespaceCallable!,
+                address: (segment: $0.address!.0, page: $0.address!.1, line: 0),
+                privacy: .global) }
+
+        let labels = memoryComponents.flatMap { $0.labels() }
+        memoryComponents.forEach { $0.insertAddressTargets(labels: addressables + labels) }
+        return self
+    }
 }
