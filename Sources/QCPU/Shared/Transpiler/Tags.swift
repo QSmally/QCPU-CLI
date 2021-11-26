@@ -64,7 +64,7 @@ extension MemoryComponent {
                     CLIStateController.terminate("Parse error (\(name)): couldn't parse addressing as unsigned integers")
                 }
 
-                address = (upperMemoryAddress, lowerMemoryAddress)
+                address = Address(segment: upperMemoryAddress, page: lowerMemoryAddress)
 
             case "@HEADER":
                 guard let label = tagComponents[optional: 0] else {

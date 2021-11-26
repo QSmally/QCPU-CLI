@@ -16,7 +16,7 @@ class MemoryComponent {
     static let breakTaglike = ["@IF"]
 
     var name: String
-    var address: (UInt, UInt)?
+    var address: Address?
     var namespaceCallable: String?
     var overflowable = false
 

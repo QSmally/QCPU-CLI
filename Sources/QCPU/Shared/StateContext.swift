@@ -63,7 +63,7 @@ class StateContext {
             .filter { $0.namespaceCallable != nil }
             .map { MemoryComponent.Label(
                 id: $0.namespaceCallable!,
-                address: (segment: $0.address!.0, page: $0.address!.1, line: 0),
+                address: MemoryComponent.Address(segment: $0.address!.segment, page: $0.address!.page),
                 privacy: .global) }
 
         let labels = memoryComponents.flatMap { $0.labels() }
