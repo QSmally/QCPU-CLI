@@ -31,19 +31,18 @@ extension MemoryComponent {
                 continue
             }
 
-            if let labelId = Expressions.address.match(statement, group: 1) {
-                let replaceable = Expressions.address.match(statement, group: 0)!
-                let addressingModeTarget = Expressions.address.match(statement, group: 2) ?? "_"
-
+            if let labelId = Expressions.address.match(statement, group: 1),
+               let replaceable = Expressions.address.match(statement, group: 0),
+               let addressingModeTarget = Expressions.address.match(statement, group: 2) {
                 guard let label = labels.first(where: { $0.id == labelId }) else {
-                    CLIStateController.terminate("Parse error (\(name)): undeclared or addressless label '\(labelId)'")
+                    CLIStateController.terminate("Parse error (\(name)): undeclared or unaddressed label '\(labelId)'")
                 }
 
                 guard label.privacy == .global || label.address.segment == address!.segment else {
                     CLIStateController.terminate("Parse error (\(name)): label '\(labelId)' is declared out of the segment scope, use '@ADDRESSABLE' instead")
                 }
 
-                guard label.privacy == .segment || label.address.page == address!.page else {
+                guard label.privacy != .page || label.address.page == address!.page else {
                     CLIStateController.terminate("Parse error (\(name)): private label '\(labelId)' is used within a different page")
                 }
 
