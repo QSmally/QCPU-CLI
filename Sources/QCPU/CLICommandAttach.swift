@@ -7,17 +7,18 @@
 
 extension CLIStateController {
 
-    var modules: [Command] {
+    var module: Command? {
         switch CLIStateController.arguments.first!.lowercased() {
-            case "assemble": return [AssemblerCommand(controller: self)]
-            default: return []
+            case "assemble": return AssemblerCommand(controller: self)
+            default:
+                return nil
         }
     }
 
     func handleCommandInput() {
-        if modules.count > 0 {
+        if let module = module {
             let stateContext = StateContext(controller: self)
-            modules.forEach { $0.execute(with: stateContext) }
+            module.execute(with: stateContext)
             return
         }
 
