@@ -22,7 +22,8 @@
 * `%array <size> <values...?>`
 
 ## Addressing
-* `.label:` - define label
+* `.label:` - page-private label
+* `.&label:` - segment-scoped label
 * `.label` - lower five bits
 * `.label-` - lower byte
 * `.label+` - upper byte
