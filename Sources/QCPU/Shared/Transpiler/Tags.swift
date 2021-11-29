@@ -51,7 +51,7 @@ extension MemoryComponent {
         }
     }
 
-    internal func parseTag(_ tag: String, tagComponents: [String]) {
+    func parseTag(_ tag: String, tagComponents: [String]) {
         switch tag {
             case "@PAGE":
                 guard let upperMemoryString = tagComponents[optional: 0],

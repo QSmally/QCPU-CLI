@@ -41,8 +41,14 @@ extension MemoryComponent {
                 continue
             }
 
+            if let flag = Expressions.flag.match(statement, group: 1) {
+                let parsedStatement = parseConditionFlag(flag, from: statement)
+                file.append(parsedStatement)
+                continue
+            }
+
             if let tag = Expressions.tag.match(statement, group: 1) {
-                let bytes = parseMarcoHeader(tag, from: statement, helpers: helpers)
+                let bytes = parseInsertableMarcos(tag, from: statement, helpers: helpers)
                 file += bytes
                 continue
             }
@@ -51,7 +57,22 @@ extension MemoryComponent {
         }
     }
 
-    private func parseMarcoHeader(_ tag: String, from statement: String, helpers: [MemoryComponent]) -> [String] {
+    private func parseConditionFlag(_ flag: String, from statement: String) -> String {
+        switch flag {
+            case "true":      return "0"
+            case "cout":      return "1"
+            case "signed":    return "2"
+            case "zero":      return "3"
+            case "underflow": return "4"
+            case "!cout":     return "5"
+            case "!signed":   return "6"
+            case "!zero":     return "7"
+            default:
+                CLIStateController.terminate("Parse error (\(name)): invalid condition marco '\(flag)'")
+        }
+    }
+
+    private func parseInsertableMarcos(_ tag: String, from statement: String, helpers: [MemoryComponent]) -> [String] {
         let headerComponent = helpers
             .first(where: { $0.header?.name == tag })?
             .clone()

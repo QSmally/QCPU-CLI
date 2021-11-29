@@ -20,7 +20,7 @@ extension MemoryComponent {
 
         func parse(mode: String) -> String {
             switch mode {
-                case "": return String(line)
+                case "":  return String(line)
                 case "-": return String((page << 5) + line)
                 case "+": return String(segment)
                 default:
