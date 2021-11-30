@@ -34,15 +34,19 @@ extension MemoryComponent {
             if let labelId = Expressions.address.match(statement, group: 1),
                let replaceable = Expressions.address.match(statement, group: 0),
                let addressingModeTarget = Expressions.address.match(statement, group: 2) {
-                guard let label = labels.first(where: { $0.id == labelId }) else {
+                let labels = labels.filter({ $0.id == labelId })
+
+                guard labels.count > 0 else {
                     CLIStateController.terminate("Parse error (\(name)): undeclared or unaddressed label '\(labelId)'")
                 }
 
-                guard label.privacy == .global || label.address.segment == address!.segment else {
+                let label = priorityAddress(from: labels)
+
+                guard label.privacy == .global || label.address.equals(to: address!, basedOn: .segment) else {
                     CLIStateController.terminate("Parse error (\(name)): label '\(labelId)' is declared out of the segment scope, use '@ADDRESSABLE' instead")
                 }
 
-                guard label.privacy != .page || label.address.page == address!.page else {
+                guard label.privacy != .page || label.address.equals(to: address!, basedOn: .page) else {
                     CLIStateController.terminate("Parse error (\(name)): private label '\(labelId)' is used within a different page")
                 }
 
@@ -55,5 +59,15 @@ extension MemoryComponent {
 
             file.append(statement)
         }
+    }
+
+    private func priorityAddress(from labels: [Label]) -> Label {
+        let privateScopedPriorityLabel = labels
+            .filter { $0.address.equals(to: address!, basedOn: .page) }
+            .sorted { $0.address.line > $1.address.line }
+            .first
+        return privateScopedPriorityLabel ?? labels
+            .sorted { (entity, _) in entity.privacy == .segment }
+            .first!
     }
 }

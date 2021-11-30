@@ -12,6 +12,9 @@ class AssemblerCommand: Command {
             .addressTargets()
             // .transpile()
 
-        print(stateContext.memoryComponents.map { ($0.name, $0.file) })
+        stateContext.memoryComponents.forEach {
+            print($0.name)
+            print($0.file)
+        }
     }
 }

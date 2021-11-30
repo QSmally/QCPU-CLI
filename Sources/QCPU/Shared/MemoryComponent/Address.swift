@@ -12,10 +12,30 @@ extension MemoryComponent {
         let page: UInt
         let line: UInt
 
+        enum Mode {
+            case segment,
+                 page,
+                 line
+        }
+
         init(segment: UInt, page: UInt, line: UInt = 0) {
             self.segment = segment
             self.page = page
             self.line = line
+        }
+
+        func equals(to address: Address, basedOn mode: Mode = .line) -> Bool {
+            switch mode {
+                case .segment:
+                    return segment == address.segment
+                case .page:
+                    return segment == address.segment &&
+                        page == address.page
+                case .line:
+                    return segment == address.segment &&
+                        page == address.page &&
+                        line == address.line
+            }
         }
 
         func parse(mode: String) -> String {
