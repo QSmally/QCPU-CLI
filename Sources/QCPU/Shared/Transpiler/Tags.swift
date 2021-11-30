@@ -71,15 +71,18 @@ extension MemoryComponent {
                     CLIStateController.terminate("Parse error (\(name)): missing header label")
                 }
 
-                header = (
-                    name: label,
-                    parameters: Array(tagComponents.dropFirst()))
+                let parameters = Array(tagComponents.dropFirst())
+                parameters.forEach { StylingGuidelines.validate($0, withSource: .declaration) }
+                StylingGuidelines.validate(label, withSource: .header)
+
+                header = (name: label, parameters: parameters)
 
             case "@ADDRESSABLE":
                 guard let namespace = tagComponents[optional: 0] else {
                     CLIStateController.terminate("Parse error (\(name)): missing callable namespace")
                 }
 
+                StylingGuidelines.validate(namespace, withSource: .declaration)
                 namespaceCallable = namespace
 
             case "@OVERFLOWABLE":
@@ -91,6 +94,7 @@ extension MemoryComponent {
                     CLIStateController.terminate("Parse error (\(name)): missing tag and/or value for declaration")
                 }
 
+                StylingGuidelines.validate(tag, withSource: .declaration)
                 declare(tag, value: value)
 
             case "@ENUM":

@@ -23,6 +23,8 @@ struct IndentationController {
                 guard let namespace = arguments[optional: 0] else {
                     CLIStateController.terminate("Parse error (\(memoryComponent.name)): missing enum namespace")
                 }
+
+                StylingGuidelines.validate(namespace, withSource: .declaration)
                 memoryComponent.enumeration = (name: namespace, cases: [:])
             default:
                 break
