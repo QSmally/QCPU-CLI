@@ -42,7 +42,8 @@ extension MemoryComponent {
             }
 
             if let flag = Expressions.flag.match(statement, group: 1) {
-                let parsedStatement = parseConditionFlag(flag, from: statement)
+                let parsedFlagBit = parseConditionFlag(flag, from: statement)
+                let parsedStatement = statement.replacingOccurrences(of: "#\(flag)", with: parsedFlagBit)
                 file.append(parsedStatement)
                 continue
             }
@@ -86,7 +87,8 @@ extension MemoryComponent {
             }
 
             for (index, name) in headerComponent.header!.parameters.enumerated() {
-                headerComponent.declare(name, value: arguments[index + 1])
+                let argumentComponent = replaceSingleMarco(arguments[index + 1], helpers: helpers)
+                headerComponent.declare(name, value: argumentComponent)
             }
 
             headerComponent.prepare(helpers: helpers)
@@ -107,5 +109,26 @@ extension MemoryComponent {
         }
 
         CLIStateController.terminate("Parse error (\(name)): unknown header, macro or enum '\(tag)'")
+    }
+
+    private func replaceSingleMarco(_ definiteComponent: String, helpers: [MemoryComponent]) -> String {
+        if let tag = Expressions.tag.match(definiteComponent, group: 1) {
+            if let marco = declarations.first(where: { $0.key == tag }) {
+                return definiteComponent.replacingOccurrences(of: "@\(tag)", with: marco.value)
+            }
+
+            let enumIdentifierComponents = tag.components(separatedBy: ".")
+
+            if let namespace = enumIdentifierComponents.first,
+               let enumCaseString = enumIdentifierComponents[optional: 1],
+               let enumMemoryComponent = helpers.first(where: { $0.enumeration?.name == namespace }),
+               let value = enumMemoryComponent.enumeration!.cases[enumCaseString] {
+                return definiteComponent.replacingOccurrences(of: "@\(tag)", with: value)
+            }
+
+            CLIStateController.terminate("Parse error (\(name)): unknown header, macro or enum '\(tag)'")
+        } else {
+            return definiteComponent
+        }
     }
 }
