@@ -21,9 +21,17 @@ final class CLIStateController {
         "  run <path> <clock speed?>       assembles and emulates extended QCPU assembly."
     ].byNewlines()
 
+    var module: Command? {
+        switch CLIStateController.arguments.first!.lowercased() {
+            case "assemble": return AssemblerCommand(controller: self)
+            default:
+                return nil
+        }
+    }
+
     init() {
         CLIStateController.arguments.count > 0 ?
-            self.handleCommandInput() :
+            handleCommandInput() :
             CLIStateController.newline(CLIStateController.help)
     }
 
@@ -46,5 +54,16 @@ final class CLIStateController {
             CLIStateController.newline(message)
         }
         exit(0)
+    }
+    
+    func handleCommandInput() {
+        if let module = module {
+            let stateContext = StateContext(controller: self)
+            module.execute(with: stateContext)
+            return
+        }
+
+        let inputCommand = CLIStateController.arguments.first!
+        CLIStateController.terminate("Error: invalid command '\(inputCommand)'")
     }
 }
