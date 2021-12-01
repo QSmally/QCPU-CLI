@@ -5,16 +5,16 @@
 //  Created by Joey Smalen on 25/11/2021.
 //
 
-extension MemoryComponent {
-    func labels() -> [Label] {
-        file.compactMap { instruction in
+extension Transpiler {
+    func labels() -> [MemoryComponent.Label] {
+        memoryComponent.file.compactMap { instruction in
             if let labelTarget = Expressions.label.match(instruction, group: 2) {
                 let isPublicLabel = Expressions.label.match(instruction, group: 1) == "&"
-                let address = Address(
-                    segment: address!.segment,
-                    page: address!.page,
+                let address = MemoryComponent.Address(
+                    segment: memoryComponent.address!.segment,
+                    page: memoryComponent.address!.page,
                     line: lineIteratorCount)
-                return Label(
+                return MemoryComponent.Label(
                     id: labelTarget,
                     address: address,
                     privacy: isPublicLabel ? .segment : .page)
@@ -25,8 +25,8 @@ extension MemoryComponent {
         }
     }
 
-    func insertAddressTargets(labels: [Label]) {
-        for statement in file.removeCopy() {
+    func insertAddressTargets(labels: [MemoryComponent.Label]) {
+        for statement in memoryComponent.file.removeCopy() {
             guard Expressions.label.match(statement, group: 0) == nil else {
                 continue
             }
@@ -37,33 +37,33 @@ extension MemoryComponent {
                 let labels = labels.filter({ $0.id == labelId })
 
                 guard labels.count > 0 else {
-                    CLIStateController.terminate("Parse error (\(name)): undeclared or unaddressed label '\(labelId)'")
+                    CLIStateController.terminate("Parse error (\(memoryComponent.name)): undeclared or unaddressed label '\(labelId)'")
                 }
 
                 let label = priorityAddress(from: labels)
 
-                guard label.privacy == .global || label.address.equals(to: address!, basedOn: .segment) else {
-                    CLIStateController.terminate("Parse error (\(name)): label '\(labelId)' is declared out of the segment scope, use '@ADDRESSABLE' instead")
+                guard label.privacy == .global || label.address.equals(to: memoryComponent.address!, basedOn: .segment) else {
+                    CLIStateController.terminate("Parse error (\(memoryComponent.name)): label '\(labelId)' is declared out of the segment scope, use '@ADDRESSABLE' instead")
                 }
 
-                guard label.privacy != .page || label.address.equals(to: address!, basedOn: .page) else {
-                    CLIStateController.terminate("Parse error (\(name)): private label '\(labelId)' is used within a different page")
+                guard label.privacy != .page || label.address.equals(to: memoryComponent.address!, basedOn: .page) else {
+                    CLIStateController.terminate("Parse error (\(memoryComponent.name)): private label '\(labelId)' is used within a different page")
                 }
 
                 let addressedStatement = statement.replacingOccurrences(
                     of: replaceable,
                     with: label.address.parse(mode: addressingModeTarget))
-                file.append(addressedStatement)
+                memoryComponent.file.append(addressedStatement)
                 continue
             }
 
-            file.append(statement)
+            memoryComponent.file.append(statement)
         }
     }
 
-    private func priorityAddress(from labels: [Label]) -> Label {
+    private func priorityAddress(from labels: [MemoryComponent.Label]) -> MemoryComponent.Label {
         let privateScopedPriorityLabel = labels
-            .filter { $0.address.equals(to: address!, basedOn: .page) }
+            .filter { $0.address.equals(to: memoryComponent.address!, basedOn: .page) }
             .sorted { $0.address.line > $1.address.line }
             .first
         return privateScopedPriorityLabel ?? labels

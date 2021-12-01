@@ -7,13 +7,7 @@
 
 import Foundation
 
-class MemoryComponent {
-
-    static let validTags = [
-        "@PAGE", "@HEADER", "@ADDRESSABLE", "@OVERFLOWABLE",
-        "@DECLARE", "@ENUM", "@END"]
-    static let indentedTagNotations = ["@ENUM"]
-    static let breakTaglike = ["@IF"]
+final class MemoryComponent {
 
     var name: String
     var address: Address?
@@ -23,24 +17,14 @@ class MemoryComponent {
     var header: (
         name: String,
         parameters: [String])?
-
     var enumeration: (
         name: String,
         cases: [String: String])?
+    var declarations = [String: String]()
 
-    // Accumulated outputs
     var file: [String]
-    var assemblyOutlet = [String]()
-
-    // Working area
-    internal var tagAmount = 0
-    internal var lineIteratorCount: UInt = 0
-    internal var indentations = [IndentationController]()
-    internal var declarations = [String: String]()
-
-    var isCodeBlock: Bool {
-        address != nil && header == nil
-    }
+    var compiled = [CompiledStatement]()
+    lazy var transpiler = Transpiler(self)
 
     init(_ name: String, fromSource instructions: [String]) {
         self.name = name

@@ -7,14 +7,9 @@
 
 import Foundation
 
-extension MemoryComponent {
-
-    static var compileTags: [String] {
-        MemoryComponent.breakTaglike + ["@END"]
-    }
-
+extension Transpiler {
     func prepare(helpers: [MemoryComponent]) {
-        for statement in file.removeCopy() {
+        for statement in memoryComponent.file.removeCopy() {
             var instructionComponents = statement.components(separatedBy: .whitespaces)
             let master = instructionComponents.removeFirst()
 
@@ -23,11 +18,11 @@ extension MemoryComponent {
                 guard isParsable else { continue }
             }
 
-            if MemoryComponent.compileTags.contains(master) {
+            if Transpiler.compileTags.contains(master) {
                 let indent = IndentationController(
                     identifier: master,
                     arguments: instructionComponents,
-                    memoryComponent: self)
+                    memoryComponent: memoryComponent)
                 indentations.append(indent)
                 continue
             }
@@ -36,25 +31,25 @@ extension MemoryComponent {
                 let functionController = FunctionController(
                     function,
                     from: statement,
-                    memoryComponent: self)
-                file += functionController.parse()
+                    memoryComponent: memoryComponent)
+                memoryComponent.file += functionController.parse()
                 continue
             }
 
             if let flag = Expressions.flag.match(statement, group: 1) {
                 let parsedFlagBit = parseConditionFlag(flag, from: statement)
                 let parsedStatement = statement.replacingOccurrences(of: "#\(flag)", with: parsedFlagBit)
-                file.append(parsedStatement)
+                memoryComponent.file.append(parsedStatement)
                 continue
             }
 
             if let tag = Expressions.tag.match(statement, group: 1) {
                 let bytes = parseInsertableMarcos(tag, from: statement, helpers: helpers)
-                file += bytes
+                memoryComponent.file += bytes
                 continue
             }
 
-            file.append(statement)
+            memoryComponent.file.append(statement)
         }
     }
 
@@ -69,7 +64,7 @@ extension MemoryComponent {
             case "!signed":   return "6"
             case "!zero":     return "7"
             default:
-                CLIStateController.terminate("Parse error (\(name)): invalid condition marco '\(flag)'")
+                CLIStateController.terminate("Parse error (\(memoryComponent.name)): invalid condition marco '\(flag)'")
         }
     }
 
@@ -83,19 +78,19 @@ extension MemoryComponent {
                 .components(separatedBy: .whitespaces)
                 .dropFirst()
             guard headerComponent.header!.parameters.count == arguments.count else {
-                CLIStateController.terminate("Parse error (\(name)): signature of header '\(headerComponent.header!.name)' does not match caller")
+                CLIStateController.terminate("Parse error (\(memoryComponent.name)): signature of header '\(headerComponent.header!.name)' does not match caller")
             }
 
             for (index, name) in headerComponent.header!.parameters.enumerated() {
                 let argumentComponent = replaceSingleMarco(arguments[index + 1], helpers: helpers)
-                headerComponent.declare(name, value: argumentComponent)
+                headerComponent.transpiler.declare(name, value: argumentComponent)
             }
 
-            headerComponent.prepare(helpers: helpers)
+            headerComponent.transpiler.prepare(helpers: helpers)
             return headerComponent.file
         }
 
-        if let marco = declarations.first(where: { $0.key == tag }) {
+        if let marco = memoryComponent.declarations.first(where: { $0.key == tag }) {
             return [statement.replacingOccurrences(of: "@\(tag)", with: marco.value)]
         }
 
@@ -108,12 +103,12 @@ extension MemoryComponent {
              return [statement.replacingOccurrences(of: "@\(tag)", with: value)]
         }
 
-        CLIStateController.terminate("Parse error (\(name)): unknown header, macro or enum '\(tag)'")
+        CLIStateController.terminate("Parse error (\(memoryComponent.name)): unknown header, macro or enum '\(tag)'")
     }
 
     private func replaceSingleMarco(_ definiteComponent: String, helpers: [MemoryComponent]) -> String {
         if let tag = Expressions.tag.match(definiteComponent, group: 1) {
-            if let marco = declarations.first(where: { $0.key == tag }) {
+            if let marco = memoryComponent.declarations.first(where: { $0.key == tag }) {
                 return definiteComponent.replacingOccurrences(of: "@\(tag)", with: marco.value)
             }
 
@@ -126,7 +121,7 @@ extension MemoryComponent {
                 return definiteComponent.replacingOccurrences(of: "@\(tag)", with: value)
             }
 
-            CLIStateController.terminate("Parse error (\(name)): unknown header, macro or enum '\(tag)'")
+            CLIStateController.terminate("Parse error (\(memoryComponent.name)): unknown header, macro or enum '\(tag)'")
         } else {
             return definiteComponent
         }

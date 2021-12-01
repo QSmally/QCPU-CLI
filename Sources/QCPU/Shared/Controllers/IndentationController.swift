@@ -34,7 +34,7 @@ struct IndentationController {
     @discardableResult
     func validate(_ anyStatement: String, tagComponents: [String]) -> Bool {
         if anyStatement == "@END" {
-            memoryComponent.indentations.removeLast()
+            memoryComponent.transpiler.indentations.removeLast()
             return false
         }
 
@@ -47,7 +47,7 @@ struct IndentationController {
 
             case "@ENUM":
                 anyStatement == "@DECLARE" ?
-                    memoryComponent.parseTag(anyStatement, tagComponents: tagComponents) :
+                    memoryComponent.transpiler.parseTag(anyStatement, tagComponents: tagComponents) :
                     CLIStateController.newline("Parse warning (\(memoryComponent.name)): an enum may only contain '@DECLARE' statements")
                 return false
 

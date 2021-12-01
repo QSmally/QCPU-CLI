@@ -18,9 +18,3 @@ extension Array where Element == String {
         joined(separator: "\n")
     }
 }
-
-extension Array where Element: MemoryComponent {
-    var insertable: [MemoryComponent] {
-        filter { $0.header != nil || $0.enumeration != nil }
-    }
-}

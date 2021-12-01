@@ -7,11 +7,11 @@
 
 import Foundation
 
-class StateContext {
+final class StateContext {
 
     unowned var controller: CLIStateController
 
-    lazy var memoryComponents: [MemoryComponent] = {
+    lazy var storage: StorageComponent = {
         if CLIStateController.arguments.count < 2 {
             CLIStateController.terminate("Fatal error: input a source directory path")
         }
@@ -33,10 +33,11 @@ class StateContext {
             options: [.skipsHiddenFiles, .skipsPackageDescendants])
 
         if let iterator = iterator {
-            return iterator.allObjects
+            let memoryComponents = iterator.allObjects
                 .map { ($0 as! NSURL).relativePath! }
                 .filter { $0.hasSuffix(".s") }
                 .map { MemoryComponent.create(url: $0) }
+            return StorageComponent(memoryComponents)
         }
 
         CLIStateController.terminate("Fatal error: missing permissions to read directory")
@@ -44,30 +45,5 @@ class StateContext {
 
     init(controller: CLIStateController) {
         self.controller = controller
-    }
-
-    @discardableResult
-    func deobfuscate() -> StateContext {
-        memoryComponents
-            .map { $0.tags() }
-            .filter { $0.isCodeBlock }
-            .forEach { $0.prepare(helpers: memoryComponents.insertable) }
-        memoryComponents
-            .removeAll { !$0.isCodeBlock }
-        return self
-    }
-
-    @discardableResult
-    func addressTargets() -> StateContext {
-        let addressables = memoryComponents
-            .filter { $0.namespaceCallable != nil }
-            .map { MemoryComponent.Label(
-                id: $0.namespaceCallable!,
-                address: MemoryComponent.Address(segment: $0.address!.segment, page: $0.address!.page),
-                privacy: .global) }
-
-        let labels = memoryComponents.flatMap { $0.labels() }
-        memoryComponents.forEach { $0.insertAddressTargets(labels: addressables + labels) }
-        return self
     }
 }

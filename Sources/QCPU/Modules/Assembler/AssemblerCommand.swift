@@ -5,14 +5,14 @@
 //  Created by Joey Smalen on 16/11/2021.
 //
 
-class AssemblerCommand: Command {
+final class AssemblerCommand: Command {
     override func execute(with stateContext: StateContext) {
-        stateContext
+        stateContext.storage
             .deobfuscate()
             .addressTargets()
-            // .transpile()
+            .transpile()
 
-        stateContext.memoryComponents.forEach {
+        stateContext.storage.memoryComponents.forEach {
             print($0.name)
             print($0.file)
         }

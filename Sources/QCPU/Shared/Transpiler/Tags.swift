@@ -5,15 +5,15 @@
 //  Created by Joey Smalen on 20/11/2021.
 //
 
-extension MemoryComponent {
+extension Transpiler {
     func tags() -> MemoryComponent {
-        for tag in file {
+        for tag in memoryComponent.file {
             var tagComponents = tag.components(separatedBy: .whitespaces)
             let identifier = tagComponents.removeFirst()
 
             if !tag.starts(with: "@") &&
                 indentations.count == 0 ||
-                MemoryComponent.breakTaglike.contains(identifier) { break }
+                Transpiler.breakTaglike.contains(identifier) { break }
             tagAmount += 1
 
             if let level = indentations.last {
@@ -21,16 +21,16 @@ extension MemoryComponent {
                 continue
             }
 
-            if MemoryComponent.validTags.contains(identifier) {
+            if Transpiler.validTags.contains(identifier) {
                 parseTag(identifier, tagComponents: tagComponents)
                 continue
             }
 
-            CLIStateController.terminate("Parse error (\(name)): invalid tag '\(identifier)'")
+            CLIStateController.terminate("Parse error (\(memoryComponent.name)): invalid tag '\(identifier)'")
         }
 
-        file.removeFirst(tagAmount)
-        return self
+        memoryComponent.file.removeFirst(tagAmount)
+        return memoryComponent
     }
 
     func declare(_ key: String, value: String) {
@@ -40,14 +40,14 @@ extension MemoryComponent {
             let functionController = FunctionController(
                 function,
                 from: value,
-                memoryComponent: self)
+                memoryComponent: memoryComponent)
             sanitisedString = functionController.parse().first ?? value
         }
 
         if indentations.last?.identifier == "@ENUM" {
-            enumeration!.cases[key] = sanitisedString
+            memoryComponent.enumeration!.cases[key] = sanitisedString
         } else {
-            declarations[key] = sanitisedString
+            memoryComponent.declarations[key] = sanitisedString
         }
     }
 
@@ -56,42 +56,42 @@ extension MemoryComponent {
             case "@PAGE":
                 guard let upperMemoryString = tagComponents[optional: 0],
                       let lowerMemoryString = tagComponents[optional: 1] else {
-                    CLIStateController.terminate("Parse error (\(name)): missing address segment and/or page")
+                    CLIStateController.terminate("Parse error (\(memoryComponent.name)): missing address segment and/or page")
                 }
 
                 guard let upperMemoryAddress = UInt(upperMemoryString),
                       let lowerMemoryAddress = UInt(lowerMemoryString) else {
-                    CLIStateController.terminate("Parse error (\(name)): couldn't parse addressing as unsigned integers")
+                    CLIStateController.terminate("Parse error (\(memoryComponent.name)): couldn't parse addressing as unsigned integers")
                 }
 
-                address = Address(segment: upperMemoryAddress, page: lowerMemoryAddress)
+                memoryComponent.address = MemoryComponent.Address(segment: upperMemoryAddress, page: lowerMemoryAddress)
 
             case "@HEADER":
                 guard let label = tagComponents[optional: 0] else {
-                    CLIStateController.terminate("Parse error (\(name)): missing header label")
+                    CLIStateController.terminate("Parse error (\(memoryComponent.name)): missing header label")
                 }
 
                 let parameters = Array(tagComponents.dropFirst())
                 parameters.forEach { StylingGuidelines.validate($0, withSource: .declaration) }
                 StylingGuidelines.validate(label, withSource: .header)
 
-                header = (name: label, parameters: parameters)
+                memoryComponent.header = (name: label, parameters: parameters)
 
             case "@ADDRESSABLE":
                 guard let namespace = tagComponents[optional: 0] else {
-                    CLIStateController.terminate("Parse error (\(name)): missing callable namespace")
+                    CLIStateController.terminate("Parse error (\(memoryComponent.name)): missing callable namespace")
                 }
 
                 StylingGuidelines.validate(namespace, withSource: .declaration)
-                namespaceCallable = namespace
+                memoryComponent.namespaceCallable = namespace
 
             case "@OVERFLOWABLE":
-                overflowable = true
+                memoryComponent.overflowable = true
 
             case "@DECLARE":
                 guard let tag = tagComponents[optional: 0],
                       let value = tagComponents[optional: 1] else {
-                    CLIStateController.terminate("Parse error (\(name)): missing tag and/or value for declaration")
+                    CLIStateController.terminate("Parse error (\(memoryComponent.name)): missing tag and/or value for declaration")
                 }
 
                 StylingGuidelines.validate(tag, withSource: .declaration)
@@ -101,11 +101,11 @@ extension MemoryComponent {
                 let indent = IndentationController(
                     identifier: tag,
                     arguments: tagComponents,
-                    memoryComponent: self)
+                    memoryComponent: memoryComponent)
                 indentations.append(indent)
 
             default:
-                CLIStateController.newline("Parse warning (\(name)): unhandled tag '\(tag)'")
+                CLIStateController.newline("Parse warning (\(memoryComponent.name)): unhandled tag '\(tag)'")
         }
     }
 }
