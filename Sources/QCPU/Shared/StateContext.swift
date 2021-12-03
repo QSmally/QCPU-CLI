@@ -11,6 +11,8 @@ final class StateContext {
 
     unowned var controller: CLIStateController
 
+    var fileContext = FileManager.default
+
     lazy var storage: StorageComponent = {
         if CLIStateController.arguments.count < 2 {
             CLIStateController.terminate("Fatal error: input a source directory path")
@@ -19,7 +21,7 @@ final class StateContext {
         let directorySource = URL(fileURLWithPath: CLIStateController.arguments[2])
         var fileIsDirectory: ObjCBool = false
 
-        if !FileManager.default.fileExists(
+        if !fileContext.fileExists(
             atPath: directorySource.relativePath,
             isDirectory: &fileIsDirectory) {
             CLIStateController.terminate("Fatal error: invalid directory")
@@ -27,7 +29,7 @@ final class StateContext {
             CLIStateController.terminate("Fatal error: source path must be a directory")
         }
 
-        let iterator = FileManager.default.enumerator(
+        let iterator = fileContext.enumerator(
             at: URL(fileURLWithPath: directorySource.relativePath),
             includingPropertiesForKeys: [.isRegularFileKey],
             options: [.skipsHiddenFiles, .skipsPackageDescendants])
@@ -45,5 +47,29 @@ final class StateContext {
 
     init(controller: CLIStateController) {
         self.controller = controller
+    }
+
+    func directoryCreate(named name: String, at path: URL? = nil, overwrite: Bool = true) -> URL {
+        let absolutePathTarget = path == nil ?
+            URL(fileURLWithPath: name) :
+            path!.appendingPathComponent(name, isDirectory: true)
+        if fileContext.fileExists(atPath: absolutePathTarget.relativePath) && overwrite {
+            try! fileContext.removeItem(at: absolutePathTarget)
+        }
+
+        try! fileContext.createDirectory(
+            at: absolutePathTarget,
+            withIntermediateDirectories: true,
+            attributes: nil)
+
+        return absolutePathTarget
+    }
+
+    func write(toFile file: String, at path: URL, data: String) {
+        let absolutePathTarget = path.appendingPathComponent(file)
+        fileContext.createFile(
+            atPath: absolutePathTarget.relativePath,
+            contents: Data(data.utf8),
+            attributes: nil)
     }
 }
