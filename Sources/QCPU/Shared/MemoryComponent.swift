@@ -10,7 +10,7 @@ import Foundation
 final class MemoryComponent {
 
     var name: String
-    var address: Address?
+    var address: Address!
     var namespaceCallable: String?
     var overflowable = false
 

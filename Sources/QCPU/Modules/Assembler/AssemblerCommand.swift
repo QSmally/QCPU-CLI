@@ -20,7 +20,7 @@ final class AssemblerCommand: Command {
         let build = stateContext.directoryCreate(named: "build")
         let segments = Dictionary(
             grouping: stateContext.storage.memoryComponents,
-            by: { $0.address!.segment })
+            by: { $0.address.segment })
 
         for segmentComponent in segments {
             let segment = stateContext.directoryCreate(
@@ -28,7 +28,7 @@ final class AssemblerCommand: Command {
                 at: build)
             segmentComponent.value.forEach { page in
                 stateContext.write(
-                    toFile: "\(page.address!.page).txt",
+                    toFile: "\(page.address.page).txt",
                     at: segment,
                     data: page.file.joined(separator: "\n"))
             }

@@ -11,8 +11,8 @@ extension Transpiler {
             if let labelTarget = Expressions.label.match(instruction, group: 2) {
                 let isPublicLabel = Expressions.label.match(instruction, group: 1) == "&"
                 let address = MemoryComponent.Address(
-                    segment: memoryComponent.address!.segment,
-                    page: memoryComponent.address!.page,
+                    segment: memoryComponent.address.segment,
+                    page: memoryComponent.address.page,
                     line: lineIteratorCount)
                 return MemoryComponent.Label(
                     id: labelTarget,
@@ -42,11 +42,11 @@ extension Transpiler {
 
                 let label = priorityAddress(from: labels)
 
-                guard label.privacy == .global || label.address.equals(to: memoryComponent.address!, basedOn: .segment) else {
+                guard label.privacy == .global || label.address.equals(to: memoryComponent.address, basedOn: .segment) else {
                     CLIStateController.terminate("Parse error (\(memoryComponent.name)): label '\(labelId)' is declared out of the segment scope, use '@ADDRESSABLE' instead")
                 }
 
-                guard label.privacy != .page || label.address.equals(to: memoryComponent.address!, basedOn: .page) else {
+                guard label.privacy != .page || label.address.equals(to: memoryComponent.address, basedOn: .page) else {
                     CLIStateController.terminate("Parse error (\(memoryComponent.name)): private label '\(labelId)' is used within a different page")
                 }
 
@@ -63,7 +63,7 @@ extension Transpiler {
 
     private func priorityAddress(from labels: [MemoryComponent.Label]) -> MemoryComponent.Label {
         let privateScopedPriorityLabel = labels
-            .filter { $0.address.equals(to: memoryComponent.address!, basedOn: .page) }
+            .filter { $0.address.equals(to: memoryComponent.address, basedOn: .page) }
             .sorted { $0.address.line > $1.address.line }
             .first
         return privateScopedPriorityLabel ?? labels

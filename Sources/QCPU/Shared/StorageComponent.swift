@@ -33,7 +33,7 @@ final class StorageComponent {
             .filter { $0.namespaceCallable != nil }
             .map { MemoryComponent.Label(
                 id: $0.namespaceCallable!,
-                address: MemoryComponent.Address(segment: $0.address!.segment, page: $0.address!.page),
+                address: MemoryComponent.Address(segment: $0.address.segment, page: $0.address.page),
                 privacy: .global) }
 
         let labels = memoryComponents.flatMap { $0.transpiler.labels() }
