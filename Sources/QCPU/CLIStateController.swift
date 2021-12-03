@@ -16,14 +16,17 @@ final class CLIStateController {
         "  qcpu <command> <arguments>\n",
         "COMMANDS:",
         "  assemble <path>                 converts extended QCPU assembly into machine language.",
-        "  documentate <path>              generates markdown documentation from the assembly tags.",
+        "  documentate <path> <dest?>      generates markdown documentation from the assembly tags.",
         "  emulate <path> <clock speed?>   executes QCPU machine code.",
-        "  run <path> <clock speed?>       assembles and emulates extended QCPU assembly."
+        "  run <path> <clock speed?>       assembles and emulates extended QCPU assembly.\n",
+        "ARGUMENTS:",
+        "  clock speed   an interval in hertz",
     ].byNewlines()
 
     var module: Command? {
         switch CLIStateController.arguments.first!.lowercased() {
-            case "assemble": return AssemblerCommand(controller: self)
+            case "assemble":    return AssemblerCommand(controller: self)
+            case "documentate": return DocumentationCommand(controller: self)
             default:
                 return nil
         }
