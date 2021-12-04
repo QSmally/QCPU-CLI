@@ -27,6 +27,7 @@
 * `.label` - lower five bits
 * `.label-` - lower byte
 * `.label+` - upper byte
+* `.label!` (+, -) - ignore scope error
 
 ## Flags
 * `DEBUG`

@@ -12,7 +12,7 @@ enum Expressions {
     static let flag     = try! NSRegularExpression(pattern: #"#(!?[a-zA-Z]+)"#)
     static let tag      = try! NSRegularExpression(pattern: #"@([a-zA-Z0-9_\.]+)"#)
     static let label    = try! NSRegularExpression(pattern: #"^\.(&?)([a-zA-Z0-9_\.]+):$"#)
-    static let address  = try! NSRegularExpression(pattern: #"\.([a-zA-Z0-9_\.]+)([-+]?)"#)
+    static let address  = try! NSRegularExpression(pattern: #"\.([a-zA-Z0-9_\.]+)(\!?)([-+]?)"#)
 }
 
 enum StylingGuidelines {

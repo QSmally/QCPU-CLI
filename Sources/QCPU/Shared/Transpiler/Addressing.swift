@@ -33,7 +33,8 @@ extension Transpiler {
 
             if let labelId = Expressions.address.match(statement, group: 1),
                let replaceable = Expressions.address.match(statement, group: 0),
-               let addressingModeTarget = Expressions.address.match(statement, group: 2) {
+               let ignoreSegment = Expressions.address.match(statement, group: 2),
+               let addressingModeTarget = Expressions.address.match(statement, group: 3) {
                 let labels = labels.filter({ $0.id == labelId })
 
                 guard labels.count > 0 else {
@@ -42,8 +43,10 @@ extension Transpiler {
 
                 let label = priorityAddress(from: labels)
 
-                guard label.privacy == .global || label.address.equals(to: memoryComponent.address, basedOn: .segment) else {
-                    CLIStateController.terminate("Parse error (\(memoryComponent.name)): label '\(labelId)' is declared out of the segment scope, use '@ADDRESSABLE' instead")
+                guard label.privacy == .global ||
+                      ignoreSegment == "!" ||
+                      label.address.equals(to: memoryComponent.address, basedOn: .segment) else {
+                    CLIStateController.terminate("Parse error (\(memoryComponent.name)): label '\(labelId)' is declared out of the segment scope, use '@ADDRESSABLE' or '.\(labelId)!\(addressingModeTarget)' instead")
                 }
 
                 guard label.privacy != .page || label.address.equals(to: memoryComponent.address, basedOn: .page) else {
