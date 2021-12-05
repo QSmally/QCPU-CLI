@@ -77,13 +77,16 @@ extension Transpiler {
             let arguments = statement
                 .components(separatedBy: .whitespaces)
                 .dropFirst()
-            guard headerComponent.header!.parameters.count == arguments.count else {
+            guard arguments.count >= headerComponent.header!.parameters.count else {
                 CLIStateController.terminate("Parse error (\(memoryComponent.name)): signature of header '\(headerComponent.header!.name)' does not match caller")
             }
 
             for (index, name) in headerComponent.header!.parameters.enumerated() {
-                let argumentComponent = replaceSingleMarco(arguments[index + 1], helpers: helpers)
-                headerComponent.transpiler.declare(name, value: argumentComponent)
+                let argument = name.starts(with: "*") ?
+                    arguments[(index + 1)...].joined(separator: " ") :
+                    arguments[index + 1]
+                let replacedComponent = replaceSingleMarco(argument, helpers: helpers)
+                headerComponent.transpiler.declare(name, value: replacedComponent)
             }
 
             headerComponent.transpiler.prepare(helpers: helpers)

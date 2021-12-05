@@ -10,7 +10,7 @@ import Foundation
 enum Expressions {
     static let function = try! NSRegularExpression(pattern: #"%([a-zA-Z0-9_\.]+\s?.*)"#)
     static let flag     = try! NSRegularExpression(pattern: #"#(!?[a-zA-Z]+)"#)
-    static let tag      = try! NSRegularExpression(pattern: #"@([a-zA-Z0-9_\.]+)"#)
+    static let tag      = try! NSRegularExpression(pattern: #"@([a-zA-Z0-9_\.\*]+)"#)
     static let label    = try! NSRegularExpression(pattern: #"^\.(&?)([a-zA-Z0-9_\.]+):$"#)
     static let address  = try! NSRegularExpression(pattern: #"\.([a-zA-Z0-9_\.]+)(\!?)([-+]?)"#)
 }
@@ -30,7 +30,7 @@ enum StylingGuidelines {
     static private func regex(ofSource expression: StylingGuidelines) -> NSRegularExpression {
         switch expression{
             case .header:      return try! NSRegularExpression(pattern: #"^[A-Z0-9]+$"#)
-            case .declaration: return try! NSRegularExpression(pattern: #"^[a-z0-9_\.]+$"#)
+            case .declaration: return try! NSRegularExpression(pattern: #"^[a-z0-9_\.\*]+$"#)
         }
     }
 
