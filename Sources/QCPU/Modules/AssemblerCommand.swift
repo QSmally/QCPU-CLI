@@ -6,7 +6,10 @@
 //
 
 final class AssemblerCommand: Command {
-    override func execute(with stateContext: StateContext) {
+
+    lazy var build = stateContext.directoryCreate(named: "build")
+
+    override func execute() {
         stateContext.storage
             .deobfuscate()
             .addressTargets()
@@ -17,11 +20,13 @@ final class AssemblerCommand: Command {
             print($0.file)
         }
 
-        let build = stateContext.directoryCreate(named: "build")
         let segments = Dictionary(
             grouping: stateContext.storage.memoryComponents,
             by: { $0.address.segment })
+        outputSegmentComponents(segments)
+    }
 
+    private func outputSegmentComponents(_ segments: [UInt: [MemoryComponent]]) {
         for segmentComponent in segments {
             let segment = stateContext.directoryCreate(
                 named: String(segmentComponent.key),

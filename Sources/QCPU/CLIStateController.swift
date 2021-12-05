@@ -24,9 +24,10 @@ final class CLIStateController {
     ].byNewlines()
 
     var module: Command? {
+        let stateContext = StateContext(controller: self)
         switch CLIStateController.arguments.first!.lowercased() {
-            case "assemble":    return AssemblerCommand(controller: self)
-            case "documentate": return DocumentationCommand(controller: self)
+            case "assemble":    return AssemblerCommand(stateContext: stateContext)
+            case "documentate": return DocumentationCommand(stateContext: stateContext)
             default:
                 return nil
         }
@@ -60,13 +61,11 @@ final class CLIStateController {
     }
     
     func handleCommandInput() {
-        if let module = module {
-            let stateContext = StateContext(controller: self)
-            module.execute(with: stateContext)
-            return
+        guard let module = module else {
+            let inputCommand = CLIStateController.arguments.first!
+            CLIStateController.terminate("Error: invalid command '\(inputCommand)'")
         }
 
-        let inputCommand = CLIStateController.arguments.first!
-        CLIStateController.terminate("Error: invalid command '\(inputCommand)'")
+        module.execute()
     }
 }

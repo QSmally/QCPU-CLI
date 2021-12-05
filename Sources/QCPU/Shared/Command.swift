@@ -7,11 +7,13 @@
 
 class Command {
 
-    unowned var controller: CLIStateController
+    var stateContext: StateContext
 
-    init(controller: CLIStateController) {
-        self.controller = controller
+    init(stateContext: StateContext) {
+        self.stateContext = stateContext
     }
 
-    func execute(with stateContext: StateContext) {}
+    func execute() {
+        CLIStateController.terminate("Fatal error: command not implemented")
+    }
 }
