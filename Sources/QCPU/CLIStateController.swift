@@ -28,6 +28,7 @@ final class CLIStateController {
         switch CLIStateController.arguments.first!.lowercased() {
             case "assemble":    return AssemblerCommand(stateContext: stateContext)
             case "documentate": return DocumentationCommand(stateContext: stateContext)
+            case "run":         return RunCommand(stateContext: stateContext)
             default:
                 return nil
         }
