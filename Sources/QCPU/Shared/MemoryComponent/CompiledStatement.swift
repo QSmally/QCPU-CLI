@@ -33,6 +33,6 @@ extension MemoryComponent {
         }
 
         let instruction: Instruction
-        let operand: Int8?
+        let operand: Int?
     }
 }

@@ -35,7 +35,7 @@ final class MemoryComponent {
         let fileContents = try! String(contentsOfFile: url)
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty && !$0.starts(with: "//") }
+            .filter { !$0.isEmpty && !$0.starts(with: "//") && !$0.starts(with: ";") }
         let filename = URL(fileURLWithPath: url)
             .deletingPathExtension()
             .lastPathComponent

@@ -16,7 +16,7 @@ final class AssemblerCommand: Command {
             .transpile()
 
         stateContext.storage.memoryComponents.forEach {
-            print($0.name)
+            print("\($0.name) (\($0.file.count))")
             print($0.file)
         }
 
