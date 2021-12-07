@@ -28,6 +28,10 @@ extension Transpiler {
                     instruction: instruction,
                     operand: operand)
 
+                if instructionStatement.instruction.hasArgument && operand == nil {
+                    CLIStateController.terminate("Parse error (\(memoryComponent.name)): missing operand for instruction '\(instructionString)'")
+                }
+
                 memoryComponent.compiled.append(instructionStatement)
                 continue
             }

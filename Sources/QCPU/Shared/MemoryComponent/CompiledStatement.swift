@@ -50,7 +50,7 @@ extension MemoryComponent {
 
             var binary: String {
                 switch self {
-                    case .nop: return "00000"
+                    case .nop: return "00000000"
                     case .spt: return "00000001"
                     case .dss: return "00000010"
                     case .dls: return "00000011"
@@ -91,6 +91,28 @@ extension MemoryComponent {
                         CLIStateController.terminate("Fatal error: '\(rawValue)' does not have a binary representative value")
                 }
             }
+
+            var isInstructionModifier: Bool {
+                [.spt, .pcm, .poi].contains(self)
+            }
+
+            var hasArgument: Bool {
+                ![.nop, .spt, .dss, .dls, .spl,
+                  .nta, .pcm,
+                  .ent, .pps, .ppl, .cps, .cpl, .dds, .ddl, .ibl]
+                    .contains(self)
+            }
+
+            var amountSecondaryBytes: Int {
+                switch self {
+                    case .dss, .dls, .spl, .imm, .ent, .cps:
+                        return 1
+                    case .dds, .ddl, .ibl:
+                        return 2
+                    default:
+                        return 0
+                }
+            }
         }
 
         var display: String {
@@ -108,15 +130,15 @@ extension MemoryComponent {
         var binary: String {
             switch instruction {
                 case .word:
-                    return String(operand!, radix: 2)
+                    return String(operand, radix: 2)
                 default:
                     return operand == nil ?
                         instruction.binary :
-                        instruction.binary + String(operand!, radix: 2)
+                        instruction.binary + String(operand, radix: 2)
             }
         }
 
         let instruction: Instruction
-        let operand: Int?
+        let operand: Int!
     }
 }
