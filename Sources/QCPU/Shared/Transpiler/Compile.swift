@@ -21,8 +21,8 @@ extension Transpiler {
                     CLIStateController.terminate("Parse error (\(memoryComponent.name)): instruction '\(instructionString)' cannot have an operand")
                 }
 
-                let operand = instructionComponents.count > 1 ?
-                    integer(instructionComponents[1]) :
+                let operand = instructionComponents.count > 0 ?
+                    integer(instructionComponents.first!) :
                     nil
                 let instructionStatement = MemoryComponent.CompiledStatement(
                     instruction: instruction,
