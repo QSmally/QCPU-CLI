@@ -12,6 +12,9 @@ final class EmulatorStateController {
     // State
     var line = 0
     var mode: ExecutionContext = .kernel
+    var modifierCache: (
+        instruction: MemoryComponent.CompiledStatement,
+        arguments: [Int])?
 
     // Clock queue
     var clock: DispatchSourceTimer?
@@ -22,6 +25,10 @@ final class EmulatorStateController {
     var memory: [MemoryComponent]
     var instructionComponent: MemoryComponent!
     var dataComponent: MemoryComponent!
+
+    var condition = 0
+    var accumulator = 0
+    var registers = [Int: Int]()
 
     enum ExecutionContext {
         case application,
@@ -51,10 +58,35 @@ final class EmulatorStateController {
     }
 
     func clockTickMask() {
-        let instruction = instructionComponent.compiled.count > line ?
+        let statement = instructionComponent.compiled.count > line ?
             instructionComponent.compiled[line] :
             MemoryComponent.CompiledStatement(instruction: .nop, operand: nil)
-        clockTick(executing: instruction)
+
+        // TODO: process this beforehand to save up on execution time.
+        if let modifierCache = modifierCache, statement.instruction != .word {
+            CLIStateController.terminate("Runtime error: expected argument after '\(modifierCache.instruction.display)', not '\(statement.display)'")
+        }
+
+        if statement.instruction.amountSecondaryBytes > 0 {
+            modifierCache = (instruction: statement, arguments: [])
+            nextCycle()
+            return
+        }
+
+        if let modifierCache = modifierCache {
+            self.modifierCache?.arguments.append(statement.operand)
+
+            if modifierCache.arguments.count + 1 >= modifierCache.instruction.instruction.amountSecondaryBytes {
+                clockTick(
+                    executing: modifierCache.instruction,
+                    arguments: modifierCache.arguments)
+                self.modifierCache = nil
+            } else {
+                nextCycle()
+            }
+        } else {
+            clockTick(executing: statement, arguments: [])
+        }
     }
 
     func nextCycle(_ line: Int? = nil) {

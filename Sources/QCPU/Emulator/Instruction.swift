@@ -8,8 +8,9 @@
 import Dispatch
 
 extension EmulatorStateController {
-    func clockTick(executing instruction: MemoryComponent.CompiledStatement) {
-        print("\(line) \(instruction.display)")
+    func clockTick(executing statement: MemoryComponent.CompiledStatement, arguments: [Int]) {
+        print("\(line - statement.instruction.amountSecondaryBytes) \(statement.display)")
+
         line == 31 ?
             terminate() :
             nextCycle()

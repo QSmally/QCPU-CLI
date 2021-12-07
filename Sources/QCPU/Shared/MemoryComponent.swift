@@ -47,6 +47,7 @@ final class MemoryComponent {
         clonedMemoryComponent.header = header
         clonedMemoryComponent.enumeration = enumeration
         clonedMemoryComponent.declarations = declarations
+        clonedMemoryComponent.compiled = compiled
 
         return clonedMemoryComponent
     }
