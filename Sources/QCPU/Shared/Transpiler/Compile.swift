@@ -32,6 +32,16 @@ extension Transpiler {
                 continue
             }
 
+            if let ascii = Expressions.ascii.match(firstComponent, group: 1) {
+                for asciiCharacter in ascii.utf8 {
+                    let asciiStatement = MemoryComponent.CompiledStatement(
+                        instruction: .word,
+                        operand: Int(asciiCharacter))
+                    memoryComponent.compiled.append(asciiStatement)
+                }
+                continue
+            }
+
             if let immediate = integer(firstComponent) {
                 let immediateStatement = MemoryComponent.CompiledStatement(
                     instruction: .word,

@@ -29,11 +29,14 @@
 * `.label+` - upper byte
 * `.label!` (+, -) - ignore scope error
 
-## Flags
-* `DEBUG`
+## Immediate formats
+* `255` - decimal
+* `0xFF` - hexadecimal
+* `0b11111111` - binary
+* `$Q` - ascii letter
+* `$CPU2` - ascii string
 
-## Flags
-
+## Conditions
 * `#true`
 * `#cout`
 * `#signed`
@@ -42,3 +45,6 @@
 * `#!cout`
 * `#!signed`
 * `#!zero`
+
+## Assemble flags
+* `DEBUG`
