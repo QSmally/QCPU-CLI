@@ -27,7 +27,8 @@ final class EmulatorStateController {
     var dataComponent: MemoryComponent!
 
     var condition = 0
-    var accumulator = 0
+    var accumulator = 0 { didSet { updateConditionFlags() } }
+    var flags = [Int: Int]()
     var registers = [Int: Int]()
 
     enum ExecutionContext {
@@ -74,12 +75,12 @@ final class EmulatorStateController {
         }
 
         if let modifierCache = modifierCache {
-            self.modifierCache?.arguments.append(statement.operand)
+            self.modifierCache!.arguments.append(statement.operand)
 
             if modifierCache.arguments.count + 1 >= modifierCache.instruction.instruction.amountSecondaryBytes {
                 clockTick(
                     executing: modifierCache.instruction,
-                    arguments: modifierCache.arguments)
+                    arguments: self.modifierCache!.arguments)
                 self.modifierCache = nil
             } else {
                 nextCycle()
