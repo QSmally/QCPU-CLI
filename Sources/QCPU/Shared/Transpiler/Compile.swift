@@ -7,50 +7,42 @@
 
 extension Transpiler {
     func binary() {
-        for statement in memoryComponent.file {
+        for (index, statement) in memoryComponent.file.enumerated() {
             var instructionComponents = statement.components(separatedBy: .whitespaces)
             let firstComponent = instructionComponents.removeFirst()
             let instructionString = firstComponent.lowercased()
 
-            if let instruction = MemoryComponent.CompiledStatement.Instruction(rawValue: instructionString) {
-                if [.word].contains(instruction) {
-                    CLIStateController.terminate("Parse error (\(memoryComponent.name)): reserved instruction '\(instructionString)'")
-                }
-
-                if instructionComponents.count > 1 && instruction.binary.count == 8 {
+            if let instruction = MemoryComponent.Statement.Instruction(from: instructionString) {
+                if instructionComponents.count > 0 && !instruction.hasOperand {
                     CLIStateController.terminate("Parse error (\(memoryComponent.name)): instruction '\(instructionString)' cannot have an operand")
                 }
 
                 let operand = instructionComponents.count > 0 ?
                     integer(instructionComponents.first!) :
                     nil
-                let instructionStatement = MemoryComponent.CompiledStatement(
-                    instruction: instruction,
-                    operand: operand)
+                let instructionStatement = MemoryComponent.Statement(
+                    represents: instruction,
+                    operand: operand ?? 0)
 
-                if instructionStatement.instruction.hasArgument && operand == nil {
+                if instructionStatement.representsCompiled!.hasOperand && operand == nil {
                     CLIStateController.terminate("Parse error (\(memoryComponent.name)): missing operand for instruction '\(instructionString)'")
                 }
 
-                memoryComponent.compiled.append(instructionStatement)
+                memoryComponent.compiled[index] = instructionStatement
                 continue
             }
 
             if let ascii = Expressions.ascii.match(firstComponent, group: 1) {
                 for asciiCharacter in ascii.utf8 {
-                    let asciiStatement = MemoryComponent.CompiledStatement(
-                        instruction: .word,
-                        operand: Int(asciiCharacter))
-                    memoryComponent.compiled.append(asciiStatement)
+                    let asciiStatement = MemoryComponent.Statement(value: Int(asciiCharacter))
+                    memoryComponent.compiled[index] = asciiStatement
                 }
                 continue
             }
 
             if let immediate = integer(firstComponent) {
-                let immediateStatement = MemoryComponent.CompiledStatement(
-                    instruction: .word,
-                    operand: immediate)
-                memoryComponent.compiled.append(immediateStatement)
+                let immediateStatement = MemoryComponent.Statement(value: immediate)
+                memoryComponent.compiled[index] = immediateStatement
                 continue
             }
 

@@ -8,10 +8,10 @@
 import Dispatch
 
 extension EmulatorStateController {
-    func clockTick(executing statement: MemoryComponent.CompiledStatement, arguments: [Int]) {
-        print("\(line - statement.instruction.amountSecondaryBytes) \(statement.display)")
+    func clockTick(executing statement: MemoryComponent.Statement, arguments: [Int]) {
+        print("\(line - statement.representsCompiled!.amountSecondaryBytes) \(String(describing: statement.representsCompiled!).uppercased())")
 
-        switch statement.instruction {
+        switch statement.representsCompiled! {
             case .pst:
                 print("output: \(accumulator)")
             case .cnd: condition = statement.operand

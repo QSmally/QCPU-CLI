@@ -13,7 +13,7 @@ final class EmulatorStateController {
     var line = 0
     var mode: ExecutionContext = .kernel
     var modifierCache: (
-        instruction: MemoryComponent.CompiledStatement,
+        statement: MemoryComponent.Statement,
         arguments: [Int])?
 
     // Clock queue
@@ -59,33 +59,30 @@ final class EmulatorStateController {
     }
 
     func clockTickMask() {
-        let statement = instructionComponent.compiled.count > line ?
-            instructionComponent.compiled[line] :
-            MemoryComponent.CompiledStatement(instruction: .nop, operand: nil)
+        let statement = instructionComponent.compiled[line] ??
+            MemoryComponent.Statement(represents: .nop, operand: 0)
 
-        // TODO: process this beforehand to save up on execution time.
-        if let modifierCache = modifierCache, statement.instruction != .word {
-            CLIStateController.terminate("Runtime error: expected argument after '\(modifierCache.instruction.display)', not '\(statement.display)'")
-        }
-
-        if statement.instruction.amountSecondaryBytes > 0 {
-            modifierCache = (instruction: statement, arguments: [])
+        if statement.representsCompiled?.amountSecondaryBytes ?? 0 > 0 {
+            modifierCache = (statement: statement, arguments: [])
             nextCycle()
             return
         }
 
-        if let modifierCache = modifierCache {
-            self.modifierCache!.arguments.append(statement.operand)
+        if let unwrappedModifierCache = modifierCache {
+            self.modifierCache!.arguments.append(statement.value)
 
-            if modifierCache.arguments.count + 1 >= modifierCache.instruction.instruction.amountSecondaryBytes {
+            if unwrappedModifierCache.arguments.count + 1 >= unwrappedModifierCache.statement.representsCompiled!.amountSecondaryBytes {
                 clockTick(
-                    executing: modifierCache.instruction,
+                    executing: unwrappedModifierCache.statement,
                     arguments: self.modifierCache!.arguments)
                 self.modifierCache = nil
             } else {
                 nextCycle()
             }
         } else {
+            guard let instruction = statement.representsCompiled else {
+                CLIStateController.terminate("Runtime error: instruction '\(statement.value)' does not have an instruction compiled")
+            }
             clockTick(executing: statement, arguments: [])
         }
     }

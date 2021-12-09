@@ -23,7 +23,7 @@ final class MemoryComponent {
     var declarations = [String: String]()
 
     var file: [String]
-    var compiled = [CompiledStatement]()
+    var compiled = [Int: Statement]()
     lazy var transpiler = Transpiler(self)
 
     init(_ name: String, fromSource instructions: [String]) {
