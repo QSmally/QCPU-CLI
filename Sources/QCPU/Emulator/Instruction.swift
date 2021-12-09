@@ -29,7 +29,7 @@ extension EmulatorStateController {
             case .xor: accumulator = accumulator ^ (registers[statement.operand] ?? 0)
             case .imp: accumulator = ~accumulator | (registers[statement.operand] ?? 0)
             case .jmp:
-                nextCycle(statement.operand)
+                nextCycle(statement.address)
                 return
             default:
                 break

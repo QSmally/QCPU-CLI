@@ -88,8 +88,13 @@ extension MemoryComponent {
         var value: Int
         var representsCompiled: Instruction!
 
-        lazy var operand = { value & 0x07 }()
-        lazy var address = { value & 0x1F }()
+        lazy var operand = {
+            representsCompiled.hasOperand ? value & 0x07 : 0
+        }()
+
+        lazy var address = {
+            representsCompiled.hasOperand ? value & 0x1F : 0
+        }()
 
         lazy var formatted: String = {
             let instruction = String(describing: representsCompiled!).uppercased()
