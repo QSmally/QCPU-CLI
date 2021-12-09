@@ -9,7 +9,7 @@ import Dispatch
 
 extension EmulatorStateController {
     func clockTick(executing statement: MemoryComponent.Statement, arguments: [Int]) {
-        print("\(line - statement.representsCompiled!.amountSecondaryBytes) \(String(describing: statement.representsCompiled!).uppercased())")
+        print("\(line - statement.representsCompiled.amountSecondaryBytes) \(statement.formatted)")
 
         switch statement.representsCompiled! {
             case .pst:

@@ -6,7 +6,7 @@
 //
 
 extension MemoryComponent {
-    struct Statement {
+    class Statement {
 
         enum Instruction: Int, CaseIterable {
             case nop = 0b00000000,
@@ -86,15 +86,20 @@ extension MemoryComponent {
         }
 
         var value: Int
-        var representsCompiled: Instruction?
+        var representsCompiled: Instruction!
 
-        var operand: Int {
-            value & 0x07
-        }
+        lazy var operand = { value & 0x07 }()
+        lazy var address = { value & 0x1F }()
 
-        var address: Int {
-            value & 0x1F
-        }
+        lazy var formatted: String = {
+            let instruction = String(describing: representsCompiled!).uppercased()
+            let argument = [.jmp, .mst, .mld].contains(representsCompiled) ?
+                String(address) :
+                String(operand)
+            return representsCompiled.hasOperand ?
+                "\(instruction) \(argument)" :
+                instruction
+        }()
 
         init(represents instruction: Instruction, operand: Int) {
             self.value = instruction.rawValue | operand
@@ -103,7 +108,11 @@ extension MemoryComponent {
 
         init(value: Int) {
             self.value = value
-            self.representsCompiled = Instruction(rawValue: value)
+            compile()
+        }
+
+        private func compile() {
+            // TODO: populate 'representsCompiled' with an enumeration based on byte
         }
     }
 }

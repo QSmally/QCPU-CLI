@@ -14,7 +14,7 @@ final class EmulatorStateController {
     var mode: ExecutionContext = .kernel
     var modifierCache: (
         statement: MemoryComponent.Statement,
-        arguments: [Int])?
+        arguments: [Int])!
 
     // Clock queue
     var clock: DispatchSourceTimer?
@@ -69,19 +69,19 @@ final class EmulatorStateController {
         }
 
         if let unwrappedModifierCache = modifierCache {
-            self.modifierCache!.arguments.append(statement.value)
+            modifierCache.arguments.append(statement.value)
 
-            if unwrappedModifierCache.arguments.count + 1 >= unwrappedModifierCache.statement.representsCompiled!.amountSecondaryBytes {
+            if modifierCache.arguments.count + 1 >= unwrappedModifierCache.statement.representsCompiled.amountSecondaryBytes {
                 clockTick(
                     executing: unwrappedModifierCache.statement,
-                    arguments: self.modifierCache!.arguments)
-                self.modifierCache = nil
+                    arguments: modifierCache.arguments)
+                modifierCache = nil
             } else {
                 nextCycle()
             }
         } else {
-            guard let instruction = statement.representsCompiled else {
-                CLIStateController.terminate("Runtime error: instruction '\(statement.value)' does not have an instruction compiled")
+            guard statement.representsCompiled != nil else {
+                CLIStateController.terminate("Runtime error: instruction '\(statement.value)' does not have a compiled instruction")
             }
             clockTick(executing: statement, arguments: [])
         }
