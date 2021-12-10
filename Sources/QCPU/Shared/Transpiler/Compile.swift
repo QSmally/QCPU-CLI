@@ -13,7 +13,7 @@ extension Transpiler {
             let instructionString = firstComponent.lowercased()
 
             if let instruction = MemoryComponent.Statement.Instruction(from: instructionString) {
-                if instructionComponents.count > 0 && !instruction.hasOperand {
+                if instructionComponents.count > 0 && instruction.operand == 0 {
                     CLIStateController.terminate("Parse error (\(memoryComponent.name)): instruction '\(instructionString)' cannot have an operand")
                 }
 
@@ -24,7 +24,7 @@ extension Transpiler {
                     represents: instruction,
                     operand: operand ?? 0)
 
-                if instructionStatement.representsCompiled!.hasOperand && operand == nil {
+                if instructionStatement.representsCompiled!.operand > 0 && operand == nil {
                     CLIStateController.terminate("Parse error (\(memoryComponent.name)): missing operand for instruction '\(instructionString)'")
                 }
 

@@ -46,15 +46,17 @@ extension MemoryComponent {
                  mst = 0b11000000,
                  mld = 0b11100000
 
-            var hasOperand: Bool {
-                [
-                    .pst, .pld, .cpn, .cnd, .imm,
-                    .rst, .ast,
-                    .inc, .dec, .neg, .rsh, .add, .sub,
-                    .poi,
-                    .ior, .and, .xor, .imp,
-                    .jmp, .mst, .mld
-                ].contains(self)
+            var operand: Int {
+                switch self {
+                    case .jmp, .mst, .mld:
+                        return 5
+                    case .pst, .pld, .cpn, .cnd, .imm, .rst,
+                         .ast, .inc, .dec, .neg, .rsh, .add,
+                         .sub, .poi, .ior, .and, .xor, .imp:
+                        return 3
+                    default:
+                        return 0
+                }
             }
 
             var amountSecondaryBytes: Int {
@@ -88,21 +90,19 @@ extension MemoryComponent {
         var value: Int
         var representsCompiled: Instruction!
 
-        lazy var operand = {
-            representsCompiled.hasOperand ? value & 0x07 : 0
-        }()
-
-        lazy var address = {
-            representsCompiled.hasOperand ? value & 0x1F : 0
+        lazy var operand: Int = {
+            switch representsCompiled.operand {
+                case 5: return value & 0x1F
+                case 3: return value & 0x07
+                default:
+                    return 0
+            }
         }()
 
         lazy var formatted: String = {
             let instruction = String(describing: representsCompiled!).uppercased()
-            let argument = [.jmp, .mst, .mld].contains(representsCompiled) ?
-                String(address) :
-                String(operand)
-            return representsCompiled.hasOperand ?
-                "\(instruction) \(argument)" :
+            return representsCompiled.operand > 0 ?
+                "\(instruction) \(operand)" :
                 instruction
         }()
 
@@ -113,11 +113,8 @@ extension MemoryComponent {
 
         init(value: Int) {
             self.value = value
-            compile()
-        }
-
-        private func compile() {
-            // TODO: populate 'representsCompiled' with an enumeration based on byte
+            self.representsCompiled = Instruction.allCases
+                .first { $0.rawValue >> $0.operand == value >> $0.operand }
         }
     }
 }
