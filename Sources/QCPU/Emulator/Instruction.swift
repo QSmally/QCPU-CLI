@@ -59,12 +59,12 @@ extension EmulatorStateController {
             case .add:
                 accumulator = accumulator +
                     (registers[statement.operand] ?? 0) +
-                    pointer.propagateCarry && flags[1] ? 1 : 0
+                    (pointer.propagateCarry && flags[1]! ? 1 : 0)
                 pointer.propagateCarry = false
             case .sub:
                 accumulator = accumulator -
                     (registers[statement.operand] ?? 0) -
-                    pointer.propagateCarry && flags[1] ? 1 : 0
+                    (pointer.propagateCarry && flags[1]! ? 1 : 0)
                 pointer.propagateCarry = false
             case .poi:
                 pointer.local = statement.operand == 0 ?
@@ -88,6 +88,7 @@ extension EmulatorStateController {
                 accumulator = dataComponent?.compiled[statement.operand | pointer.local]?.value ?? 0
                 pointer.local = 0
             default:
+                CLIStateController.newline("Runtime error: missing implementation for '\(statement.formatted)'")
                 break
         }
 

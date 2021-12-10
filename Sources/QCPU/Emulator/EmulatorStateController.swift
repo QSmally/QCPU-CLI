@@ -49,6 +49,7 @@ final class EmulatorStateController {
             CLIStateController.terminate("Fatal error: no program entry (0, 0)")
         }
 
+        accumulator = 0
         instructionComponent = entry
 
         let instructionQueue = DispatchQueue(label: "eu.qbot.qcpu-cli.clock")
