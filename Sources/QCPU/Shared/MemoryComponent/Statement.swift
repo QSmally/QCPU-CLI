@@ -111,10 +111,11 @@ extension MemoryComponent {
             self.representsCompiled = instruction
         }
 
-        init(value: Int) {
+        init(value: Int, botherCompiling: Bool = true) {
             self.value = value
-            self.representsCompiled = Instruction.allCases
-                .first { $0.rawValue >> $0.operand == value >> $0.operand }
+            self.representsCompiled = botherCompiling ?
+                Instruction.allCases.first { $0.rawValue >> $0.operand == value >> $0.operand } :
+                nil
         }
     }
 }

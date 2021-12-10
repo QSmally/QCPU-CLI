@@ -42,6 +42,10 @@ final class MemoryComponent {
         return MemoryComponent(filename, fromSource: fileContents)
     }
 
+    static func empty(_ name: String = "untitled") -> MemoryComponent {
+        MemoryComponent(name, fromSource: [])
+    }
+
     func clone() -> MemoryComponent {
         let clonedMemoryComponent = MemoryComponent(name, fromSource: file)
         clonedMemoryComponent.header = header

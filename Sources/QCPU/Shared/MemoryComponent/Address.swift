@@ -24,6 +24,18 @@ extension MemoryComponent {
             self.line = line
         }
 
+        init(segment: Int, page: Int, line: Int = 0) {
+            self.segment = UInt(segment)
+            self.page = UInt(page)
+            self.line = UInt(line)
+        }
+
+        init(upper: Int, lower: Int) {
+            self.segment = UInt(upper)
+            self.page = UInt(lower >> 5)
+            self.line = UInt(lower & 0x1F)
+        }
+
         func equals(to address: Address, basedOn mode: Mode = .line) -> Bool {
             switch mode {
                 case .segment:
@@ -41,7 +53,7 @@ extension MemoryComponent {
         func parse(mode: String) -> String {
             switch mode {
                 case "":  return String(line)
-                case "-": return String((page << 5) + line)
+                case "-": return String((page << 5) | line)
                 case "+": return String(segment)
                 default:
                     CLIStateController.terminate("Fatal error: unrecognised address mode '\(mode)'")

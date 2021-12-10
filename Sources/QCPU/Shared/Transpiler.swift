@@ -17,7 +17,7 @@ final class Transpiler {
     unowned var memoryComponent: MemoryComponent
 
     var tagAmount = 0
-    var lineIteratorCount: UInt = 0
+    var lineIteratorCount = 0
     var indentations = [IndentationController]()
 
     var isCodeBlock: Bool {

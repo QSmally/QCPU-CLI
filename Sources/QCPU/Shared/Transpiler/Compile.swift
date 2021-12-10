@@ -7,7 +7,7 @@
 
 extension Transpiler {
     func binary() {
-        for (index, statement) in memoryComponent.file.enumerated() {
+        for statement in memoryComponent.file {
             var instructionComponents = statement.components(separatedBy: .whitespaces)
             let firstComponent = instructionComponents.removeFirst()
             let instructionString = firstComponent.lowercased()
@@ -28,21 +28,24 @@ extension Transpiler {
                     CLIStateController.terminate("Parse error (\(memoryComponent.name)): missing operand for instruction '\(instructionString)'")
                 }
 
-                memoryComponent.compiled[index] = instructionStatement
+                memoryComponent.compiled[lineIteratorCount] = instructionStatement
+                lineIteratorCount += 1
                 continue
             }
 
             if let ascii = Expressions.ascii.match(firstComponent, group: 1) {
                 for asciiCharacter in ascii.utf8 {
-                    let asciiStatement = MemoryComponent.Statement(value: Int(asciiCharacter))
-                    memoryComponent.compiled[index] = asciiStatement
+                    let asciiStatement = MemoryComponent.Statement(value: Int(asciiCharacter), botherCompiling: false)
+                    memoryComponent.compiled[lineIteratorCount] = asciiStatement
+                    lineIteratorCount += 1
                 }
                 continue
             }
 
             if let immediate = integer(firstComponent) {
                 let immediateStatement = MemoryComponent.Statement(value: immediate)
-                memoryComponent.compiled[index] = immediateStatement
+                memoryComponent.compiled[lineIteratorCount] = immediateStatement
+                lineIteratorCount += 1
                 continue
             }
 

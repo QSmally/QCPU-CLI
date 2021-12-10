@@ -7,13 +7,13 @@
 
 extension Transpiler {
     func labels() -> [MemoryComponent.Label] {
-        memoryComponent.file.compactMap { instruction in
+        let labels: [MemoryComponent.Label] = memoryComponent.file.compactMap { instruction in
             if let labelTarget = Expressions.label.match(instruction, group: 2) {
                 let isPublicLabel = Expressions.label.match(instruction, group: 1) == "&"
                 let address = MemoryComponent.Address(
                     segment: memoryComponent.address.segment,
                     page: memoryComponent.address.page,
-                    line: lineIteratorCount)
+                    line: UInt(lineIteratorCount))
                 return MemoryComponent.Label(
                     id: labelTarget,
                     address: address,
@@ -23,6 +23,9 @@ extension Transpiler {
                 return nil
             }
         }
+
+        lineIteratorCount = 0
+        return labels
     }
 
     func insertAddressTargets(labels: [MemoryComponent.Label]) {

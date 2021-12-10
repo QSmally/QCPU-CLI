@@ -12,6 +12,8 @@ final class EmulatorStateController {
     // State
     var line = 0
     var mode: ExecutionContext = .kernel
+    var pointer = (local: 0, storage: false, propagateCarry: false)
+
     var modifierCache: (
         statement: MemoryComponent.Statement,
         arguments: [Int])!
@@ -27,8 +29,8 @@ final class EmulatorStateController {
     var dataComponent: MemoryComponent!
 
     var condition = 0
-    var accumulator = 0 { didSet { updateConditionFlags() } }
-    var flags = [Int: Int]()
+    var accumulator = 0 { willSet { updateConditionFlags(changedTo: newValue) } }
+    var flags = [Int: Bool]()
     var registers = [Int: Int]()
 
     enum ExecutionContext {
@@ -44,12 +46,12 @@ final class EmulatorStateController {
         guard let entry = memory.first(where: {
             $0.address.segment == 0 && $0.address.page == 0
         }) else {
-            CLIStateController.terminate("Fatal error: no program entry (segment 0, page 0)")
+            CLIStateController.terminate("Fatal error: no program entry (0, 0)")
         }
 
         instructionComponent = entry
 
-        let instructionQueue = DispatchQueue(label: "eu.qbot.qcpu-cli.instruction_clock_timer")
+        let instructionQueue = DispatchQueue(label: "eu.qbot.qcpu-cli.clock")
         clock = DispatchSource.makeTimerSource(queue: instructionQueue)
         clock?.setEventHandler(handler: clockTickMask)
         clock?.schedule(deadline: .now() + 0.25, repeating: 1 / speed)
@@ -62,28 +64,33 @@ final class EmulatorStateController {
         let statement = instructionComponent.compiled[line] ??
             MemoryComponent.Statement(represents: .nop, operand: 0)
 
-        if statement.representsCompiled?.amountSecondaryBytes ?? 0 > 0 {
-            modifierCache = (statement: statement, arguments: [])
-            nextCycle()
-            return
-        }
+        if modifierCache == nil {
+            guard statement.representsCompiled != nil else {
+                CLIStateController.terminate("Runtime error: instruction '\(statement.value)' does not have a compiled instruction")
+            }
 
-        if let unwrappedModifierCache = modifierCache {
+            let bytes = pointer.storage ?
+                0 :
+                statement.representsCompiled?.amountSecondaryBytes ?? 0
+
+            if bytes > 0 {
+                modifierCache = (statement: statement, arguments: [])
+                nextCycle()
+                return
+            }
+
+            clockTick(executing: statement, arguments: [])
+        } else {
             modifierCache.arguments.append(statement.value)
-
-            if modifierCache.arguments.count + 1 >= unwrappedModifierCache.statement.representsCompiled.amountSecondaryBytes {
+            
+            if modifierCache.arguments.count == modifierCache.statement.representsCompiled.amountSecondaryBytes {
                 clockTick(
-                    executing: unwrappedModifierCache.statement,
+                    executing: modifierCache.statement,
                     arguments: modifierCache.arguments)
                 modifierCache = nil
             } else {
                 nextCycle()
             }
-        } else {
-            guard statement.representsCompiled != nil else {
-                CLIStateController.terminate("Runtime error: instruction '\(statement.value)' does not have a compiled instruction")
-            }
-            clockTick(executing: statement, arguments: [])
         }
     }
 
