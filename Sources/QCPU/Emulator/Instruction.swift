@@ -66,6 +66,17 @@ extension EmulatorStateController {
                     (registers[statement.operand] ?? 0) -
                     (pointer.propagateCarry && flags[1]! ? 1 : 0)
                 pointer.propagateCarry = false
+            case .ent:
+                mmu.argumentStack.append(arguments[0])
+                mmu.applicationKernelCall(from: statement.representsCompiled)
+                return
+            case .pps: mmu.argumentStack.append(accumulator)
+            case .ppl: accumulator = mmu.argumentStack.popLast() ?? 0
+            case .cps: mmu.addressCallStack.append(arguments[0])
+            case .cpl: accumulator = mmu.addressCallStack.popLast() ?? 0
+            case .dds, .ddl, .ibl:
+                mmu.applicationKernelCall(from: statement.representsCompiled)
+                return
             case .poi:
                 pointer.local = statement.operand == 0 ?
                     accumulator :
@@ -88,7 +99,6 @@ extension EmulatorStateController {
                 accumulator = dataComponent?.compiled[statement.operand | pointer.local]?.value ?? 0
                 pointer.local = 0
             default:
-                CLIStateController.newline("Runtime error: missing implementation for '\(statement.formatted)'")
                 break
         }
 
