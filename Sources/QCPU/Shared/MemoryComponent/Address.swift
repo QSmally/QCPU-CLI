@@ -8,9 +8,9 @@
 extension MemoryComponent {
     struct Address {
 
-        let segment: UInt
-        let page: UInt
-        let line: UInt
+        let segment: Int
+        let page: Int
+        let line: Int
 
         enum Mode {
             case segment,
@@ -18,22 +18,16 @@ extension MemoryComponent {
                  line
         }
 
-        init(segment: UInt, page: UInt, line: UInt = 0) {
+        init(segment: Int, page: Int, line: Int = 0) {
             self.segment = segment
             self.page = page
             self.line = line
         }
 
-        init(segment: Int, page: Int, line: Int = 0) {
-            self.segment = UInt(segment)
-            self.page = UInt(page)
-            self.line = UInt(line)
-        }
-
         init(upper: Int, lower: Int) {
-            self.segment = UInt(upper)
-            self.page = UInt(lower >> 5)
-            self.line = UInt(lower & 0x1F)
+            self.segment = upper
+            self.page = lower >> 5
+            self.line = lower & 0x1F
         }
 
         func equals(to address: Address, basedOn mode: Mode = .line) -> Bool {

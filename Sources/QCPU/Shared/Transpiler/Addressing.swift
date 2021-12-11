@@ -13,7 +13,7 @@ extension Transpiler {
                 let address = MemoryComponent.Address(
                     segment: memoryComponent.address.segment,
                     page: memoryComponent.address.page,
-                    line: UInt(lineIteratorCount))
+                    line: lineIteratorCount)
                 return MemoryComponent.Label(
                     id: labelTarget,
                     address: address,

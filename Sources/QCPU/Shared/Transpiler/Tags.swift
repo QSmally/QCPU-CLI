@@ -59,9 +59,9 @@ extension Transpiler {
                     CLIStateController.terminate("Parse error (\(memoryComponent.name)): missing address segment and/or page")
                 }
 
-                guard let upperMemoryAddress = UInt(upperMemoryString),
-                      let lowerMemoryAddress = UInt(lowerMemoryString) else {
-                    CLIStateController.terminate("Parse error (\(memoryComponent.name)): couldn't parse addressing as unsigned integers")
+                guard let upperMemoryAddress = Int(upperMemoryString),
+                      let lowerMemoryAddress = Int(lowerMemoryString) else {
+                    CLIStateController.terminate("Parse error (\(memoryComponent.name)): couldn't parse addressing as integers")
                 }
 
                 memoryComponent.address = MemoryComponent.Address(segment: upperMemoryAddress, page: lowerMemoryAddress)

@@ -26,7 +26,7 @@ final class AssemblerCommand: Command {
         outputSegmentComponents(segments)
     }
 
-    private func outputSegmentComponents(_ segments: [UInt: [MemoryComponent]]) {
+    private func outputSegmentComponents(_ segments: [Int: [MemoryComponent]]) {
         for segmentComponent in segments {
             let segment = stateContext.directoryCreate(
                 named: String(segmentComponent.key),
