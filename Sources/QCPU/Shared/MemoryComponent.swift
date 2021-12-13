@@ -48,6 +48,7 @@ final class MemoryComponent {
 
     func clone() -> MemoryComponent {
         let clonedMemoryComponent = MemoryComponent(name, fromSource: file)
+        clonedMemoryComponent.address = address
         clonedMemoryComponent.header = header
         clonedMemoryComponent.enumeration = enumeration
         clonedMemoryComponent.declarations = declarations

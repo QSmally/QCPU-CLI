@@ -7,7 +7,8 @@
 
 enum KernelSegments {
 
-    static let entryCall = MemoryComponent.Address(upper: 1, lower: 0)
+    static let entryCall = MemoryComponent.Address(segment: 1, page: 0)
+    static let proc      = MemoryComponent.Address(segment: 0, page: 2)
 
     static func kernelCallAddress(fromInstruction instruction: Int) -> MemoryComponent.Address {
         switch instruction {

@@ -65,6 +65,7 @@ final class MMU {
 
                 emulator.memory.removeAll { $0.address.equals(to: addressTarget, basedOn: .page) }
                 emulator.memory.append(emulator.dataComponent.clone())
+                emulator.nextCycle()
 
             case 1: // data load
                 let addressTarget = MemoryComponent.Address(
@@ -75,6 +76,7 @@ final class MMU {
                     .clone()
 
                 emulator.dataComponent = loadedComponentCopy ?? MemoryComponent.empty()
+                emulator.nextCycle()
 
             case 2: // intermediate load
                 let addressTarget = MemoryComponent.Address(
@@ -91,9 +93,8 @@ final class MMU {
                 let loadedComponent = emulator.memory.first { $0.address.equals(to: addressTarget, basedOn: .page) }
 
                 if (0...3).contains(addressTarget.segment) {
-                    let addressTarget = MemoryComponent.Address(segment: 0, page: 2)
                     let loadedComponentCopy = emulator.memory
-                        .first { $0.address.equals(to: addressTarget, basedOn: .page) }?
+                        .first { $0.address.equals(to: KernelSegments.proc, basedOn: .page) }?
                         .clone()
                     emulator.dataComponent = loadedComponentCopy ?? MemoryComponent.empty()
                 }
