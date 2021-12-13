@@ -9,16 +9,14 @@ final class MMU {
 
     var intermediateSegmentAddress = 0
 
-    var argumentStack = [Int]()
+    var parameters = [Int]()
+    var mmuArgumentStack = [Int]()
     var addressCallStack = [Int]()
     var contextStack = [Int]()
-    var contextStore = [Int: [Int]]()
+
+    var contextStore = [Int: (registers: [Int], callStack: [Int])]()
 
     unowned var emulator: EmulatorStateController
-
-    lazy var kernelEntry = {
-        MemoryComponent.Address(upper: 1, lower: 0)
-    }()
 
     init(emulator: EmulatorStateController) {
         self.emulator = emulator
@@ -32,7 +30,7 @@ final class MMU {
 
         switch address {
             case 0: contextStack.append(emulator.accumulator)
-            case 1: argumentStack.append(emulator.accumulator)
+            case 1: mmuArgumentStack.append(emulator.accumulator)
             default:
                 emulator.outputStream.append(emulator.accumulator)
         }
@@ -46,7 +44,7 @@ final class MMU {
 
         switch address {
             case 0: emulator.accumulator = contextStack.popLast() ?? 0
-            case 1: emulator.accumulator = argumentStack.popLast() ?? 0
+            case 1: emulator.accumulator = mmuArgumentStack.popLast() ?? 0
             default:
                 CLIStateController.newline("port load (\(address)):")
         }
@@ -62,16 +60,16 @@ final class MMU {
         switch address {
             case 0: // data store
                 let addressTarget = MemoryComponent.Address(
-                    upper: argumentStack[0],
-                    lower: argumentStack[1])
+                    upper: mmuArgumentStack[0],
+                    lower: mmuArgumentStack[1])
 
                 emulator.memory.removeAll { $0.address.equals(to: addressTarget, basedOn: .page) }
                 emulator.memory.append(emulator.dataComponent.clone())
 
             case 1: // data load
                 let addressTarget = MemoryComponent.Address(
-                    upper: argumentStack[0],
-                    lower: argumentStack[1])
+                    upper: mmuArgumentStack[0],
+                    lower: mmuArgumentStack[1])
                 let loadedComponentCopy = emulator.memory
                     .first { $0.address.equals(to: addressTarget, basedOn: .page) }?
                     .clone()
@@ -80,40 +78,53 @@ final class MMU {
 
             case 2: // intermediate load
                 let addressTarget = MemoryComponent.Address(
-                    upper: argumentStack[0],
-                    lower: argumentStack[optional: 1] ?? 0)
+                    upper: mmuArgumentStack[0],
+                    lower: mmuArgumentStack[optional: 1] ?? 0)
                 let loadedComponent = emulator.memory.first { $0.address.equals(to: addressTarget, basedOn: .page) }
 
-                intermediateSegmentAddress = argumentStack[0]
+                intermediateSegmentAddress = addressTarget.segment
                 emulator.instructionComponent = loadedComponent ?? MemoryComponent.empty()
                 emulator.nextCycle(Int(addressTarget.line))
 
             case 3: // kernel intermediate load
-                let addressTarget = kernelCallAddress()
+                let addressTarget = kernelCallAddress(fromInstruction: mmuArgumentStack[0])
                 let loadedComponent = emulator.memory.first { $0.address.equals(to: addressTarget, basedOn: .page) }
 
-                intermediateSegmentAddress = argumentStack[0]
+                if (0...3).contains(addressTarget.segment) {
+                    let addressTarget = MemoryComponent.Address(segment: 0, page: 2)
+                    let loadedComponentCopy = emulator.memory
+                        .first { $0.address.equals(to: addressTarget, basedOn: .page) }?
+                        .clone()
+                    emulator.dataComponent = loadedComponentCopy ?? MemoryComponent.empty()
+                }
+
+                intermediateSegmentAddress = addressTarget.segment
                 emulator.instructionComponent = loadedComponent ?? MemoryComponent.empty()
                 emulator.nextCycle(0)
 
             case 4: // exit intermediate load
                 let addressTarget = MemoryComponent.Address(
-                    upper: argumentStack[0],
-                    lower: argumentStack[optional: 1] ?? 0)
+                    upper: mmuArgumentStack[0],
+                    lower: mmuArgumentStack[optional: 1] ?? 0)
                 let loadedComponent = emulator.memory.first { $0.address.equals(to: addressTarget, basedOn: .page) }
 
-                intermediateSegmentAddress = argumentStack[0]
+                intermediateSegmentAddress = addressTarget.segment
                 emulator.mode = .application
                 emulator.instructionComponent = loadedComponent ?? MemoryComponent.empty()
                 emulator.nextCycle(Int(addressTarget.line))
 
             case 5: // context snapshot
-                contextStore[argumentStack[0]] = contextStack
+                contextStore[mmuArgumentStack[0]] = (
+                    registers: contextStack,
+                    callStack: addressCallStack)
+
                 contextStack.removeAll(keepingCapacity: true)
+                addressCallStack.removeAll(keepingCapacity: true)
                 emulator.nextCycle()
 
             case 6: // context restore
-                contextStack = contextStore[argumentStack[0]] ?? []
+                contextStack = contextStore[mmuArgumentStack[0]]?.registers ?? []
+                addressCallStack = contextStore[mmuArgumentStack[0]]?.callStack ?? []
                 emulator.nextCycle()
 
             default:
@@ -121,39 +132,43 @@ final class MMU {
                 emulator.nextCycle()
         }
 
-        argumentStack.removeAll(keepingCapacity: true)
+        mmuArgumentStack.removeAll(keepingCapacity: true)
     }
 
     func applicationKernelCall(from instruction: MemoryComponent.Statement.Instruction, withArguments arguments: [Int] = []) {
         switch instruction {
             case .ent: // enter
-                let loadedComponent = emulator.memory.first { $0.address.equals(to: kernelEntry, basedOn: .page) }
+                let entryCallComponent = MemoryComponent.Address(
+                    upper: 1,
+                    lower: 0)
+                let loadedComponent = emulator.memory
+                    .first { $0.address.equals(to: entryCallComponent, basedOn: .page) }
 
-                intermediateSegmentAddress = Int(kernelEntry.segment)
+                intermediateSegmentAddress = Int(entryCallComponent.segment)
 
                 emulator.mode = .kernel
                 emulator.instructionComponent = loadedComponent ?? MemoryComponent.empty()
-                emulator.nextCycle(Int(kernelEntry.line))
+                emulator.nextCycle(Int(entryCallComponent.line))
 
             case .dds: // direct data store
                 fallthrough
             case .ddl: // direct data load
                 fallthrough
             case .ibl: // intermediate block load
-                CLIStateController.terminate("Runtime error: unimplemented kernel instruction (\(String(describing: instruction).uppercased())")
+                CLIStateController.terminate("Runtime error: unimplemented kernel instruction (\(String(describing: instruction).uppercased()))")
                 break
             default:
-                CLIStateController.terminate("Runtime error: invalid kernel instruction (\(String(describing: instruction).uppercased())")
+                CLIStateController.terminate("Runtime error: invalid kernel instruction (\(String(describing: instruction).uppercased()))")
         }
     }
 
-    private func kernelCallAddress() -> MemoryComponent.Address {
-        switch argumentStack[0] {
+    private func kernelCallAddress(fromInstruction instruction: Int) -> MemoryComponent.Address {
+        switch instruction {
             case 0: return .init(segment: 2, page: 0)
             case 1: return .init(segment: 2, page: 2)
             case 2: return .init(segment: 2, page: 3)
             default:
-                CLIStateController.terminate("Runtime error: invalid or unimplemented kernel call (\(argumentStack[0])")
+                CLIStateController.terminate("Runtime error: invalid or unimplemented kernel call (\(instruction))")
         }
     }
 }

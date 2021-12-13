@@ -12,6 +12,10 @@ extension Array {
         return copyArray
     }
 
+    mutating func pop() -> Element {
+        popLast()!
+    }
+
     func inserted(_ element: Element, at index: Int) -> Self {
         var copyArray = self
         copyArray.insert(element, at: index)
