@@ -32,6 +32,7 @@ final class EmulatorStateController {
     var accumulator = 0 { willSet { updateConditionFlags(changedTo: newValue) } }
     var flags = [Int: Bool]()
     var registers = [Int: Int]()
+    var outputStream = [Int]()
 
     enum ExecutionContext {
         case application,
@@ -51,6 +52,7 @@ final class EmulatorStateController {
 
         accumulator = 0
         instructionComponent = entry
+        updateUI()
 
         let instructionQueue = DispatchQueue(label: "eu.qbot.qcpu-cli.clock")
         clock = DispatchSource.makeTimerSource(queue: instructionQueue)
@@ -93,6 +95,8 @@ final class EmulatorStateController {
                 nextCycle()
             }
         }
+
+        updateUI()
     }
 
     func nextCycle(_ line: Int? = nil) {

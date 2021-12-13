@@ -26,7 +26,7 @@ final class MMU {
 
     func store(at address: Int) {
         guard emulator.mode == .kernel else {
-            CLIStateController.newline("application port store (port \(address)): \(emulator.accumulator)")
+            emulator.outputStream.append(emulator.accumulator)
             return
         }
 
@@ -34,7 +34,7 @@ final class MMU {
             case 0: contextStack.append(emulator.accumulator)
             case 1: argumentStack.append(emulator.accumulator)
             default:
-                CLIStateController.newline("port store (\(address)): \(emulator.accumulator)")
+                emulator.outputStream.append(emulator.accumulator)
         }
     }
 

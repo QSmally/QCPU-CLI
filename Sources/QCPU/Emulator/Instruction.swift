@@ -7,8 +7,6 @@
 
 extension EmulatorStateController {
     func clockTick(executing statement: MemoryComponent.Statement, arguments: [Int]) {
-         CLIStateController.newline("\(line - statement.representsCompiled.amountSecondaryBytes) \(statement.formatted)")
-
         switch statement.representsCompiled! {
             case .spt: pointer.storage = true
             case .dss:

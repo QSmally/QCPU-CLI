@@ -11,6 +11,12 @@ extension Array {
         removeAll(keepingCapacity: true)
         return copyArray
     }
+
+    func inserted(_ element: Element, at index: Int) -> Self {
+        var copyArray = self
+        copyArray.insert(element, at: index)
+        return copyArray
+    }
 }
 
 extension Array where Element == String {

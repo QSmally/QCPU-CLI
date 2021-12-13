@@ -15,4 +15,8 @@ extension String {
                 return nil
         }
     }
+
+    func padding(toLength length: Int) -> String {
+        padding(toLength: length, withPad: " ", startingAt: 0)
+    }
 }
