@@ -87,7 +87,7 @@ final class MMU {
                 emulator.nextCycle(Int(addressTarget.line))
 
             case 3: // kernel intermediate load
-                let addressTarget = kernelCallAddress(fromInstruction: mmuArgumentStack[0])
+                let addressTarget = KernelSegments.kernelCallAddress(fromInstruction: mmuArgumentStack[0])
                 let loadedComponent = emulator.memory.first { $0.address.equals(to: addressTarget, basedOn: .page) }
 
                 if (0...3).contains(addressTarget.segment) {
@@ -138,17 +138,12 @@ final class MMU {
     func applicationKernelCall(from instruction: MemoryComponent.Statement.Instruction, withArguments arguments: [Int] = []) {
         switch instruction {
             case .ent: // enter
-                let entryCallComponent = MemoryComponent.Address(
-                    upper: 1,
-                    lower: 0)
-                let loadedComponent = emulator.memory
-                    .first { $0.address.equals(to: entryCallComponent, basedOn: .page) }
-
-                intermediateSegmentAddress = Int(entryCallComponent.segment)
+                let loadedComponent = emulator.memory.first { $0.address.equals(to: KernelSegments.entryCall, basedOn: .page) }
+                intermediateSegmentAddress = Int(KernelSegments.entryCall.segment)
 
                 emulator.mode = .kernel
                 emulator.instructionComponent = loadedComponent ?? MemoryComponent.empty()
-                emulator.nextCycle(Int(entryCallComponent.line))
+                emulator.nextCycle(Int(KernelSegments.entryCall.line))
 
             case .dds: // direct data store
                 fallthrough
@@ -159,16 +154,6 @@ final class MMU {
                 break
             default:
                 CLIStateController.terminate("Runtime error: invalid kernel instruction (\(String(describing: instruction).uppercased()))")
-        }
-    }
-
-    private func kernelCallAddress(fromInstruction instruction: Int) -> MemoryComponent.Address {
-        switch instruction {
-            case 0: return .init(segment: 2, page: 0)
-            case 1: return .init(segment: 2, page: 2)
-            case 2: return .init(segment: 2, page: 3)
-            default:
-                CLIStateController.terminate("Runtime error: invalid or unimplemented kernel call (\(instruction))")
         }
     }
 }
