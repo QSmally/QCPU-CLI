@@ -66,15 +66,15 @@ extension EmulatorStateController {
                 pointer.propagateCarry = false
             case .ent:
                 mmu.parameters.append(arguments[0])
-                mmu.applicationKernelCall(from: statement.representsCompiled)
+                mmu.applicationKernelCall()
                 return
             case .pps: mmu.parameters.append(accumulator)
             case .ppl: accumulator = mmu.parameters.pop()
             case .cps: mmu.addressCallStack.append(arguments[0])
             case .cpl: accumulator = mmu.addressCallStack.pop()
-            case .dds, .ddl, .ibl:
-                mmu.applicationKernelCall(from: statement.representsCompiled)
-                return
+            case .msa: mmu.mmuArgumentStack.append(arguments[0])
+            case .mda: mmu.mmuArgumentStack.append(accumulator)
+            case .mma: mmu.mmuArgumentStack.append(contentsOf: arguments)
             case .poi:
                 pointer.local = statement.operand == 0 ?
                     accumulator :

@@ -14,6 +14,7 @@ extension MemoryComponent {
                  dss = 0b00000010,
                  dls = 0b00000011,
                  spl = 0b00000100,
+                 /* 0b00000101 missing */
                  nta = 0b00000110,
                  pcm = 0b00000111,
                  pst = 0b00001000,
@@ -34,9 +35,9 @@ extension MemoryComponent {
                  ppl = 0b01110010,
                  cps = 0b01110011,
                  cpl = 0b01110100,
-                 dds = 0b01110101,
-                 ddl = 0b01110110,
-                 ibl = 0b01110111,
+                 msa = 0b01110101,
+                 mda = 0b01110110,
+                 mma = 0b01110111,
                  poi = 0b01111000,
                  ior = 0b10000000,
                  and = 0b10001000,
@@ -61,9 +62,9 @@ extension MemoryComponent {
 
             var amountSecondaryBytes: Int {
                 switch self {
-                    case .dds, .ddl, .ibl:
+                    case .mma:
                         return 2
-                    case .dss, .dls, .spl, .imm, .ent, .cps:
+                    case .dss, .dls, .spl, .imm, .ent, .cps, .msa:
                         return 1
                     default:
                         return 0

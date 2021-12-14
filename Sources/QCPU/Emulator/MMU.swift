@@ -23,14 +23,11 @@ final class MMU {
     }
 
     func store(at address: Int) {
-        guard emulator.mode == .kernel else {
-            emulator.outputStream.append(emulator.accumulator)
-            return
-        }
-
         switch address {
-            case 0: contextStack.append(emulator.accumulator)
-            case 1: mmuArgumentStack.append(emulator.accumulator)
+            case 0:
+                emulator.mode == .kernel ?
+                    contextStack.append(emulator.accumulator) :
+                    emulator.outputStream.append(emulator.accumulator)
             default:
                 emulator.outputStream.append(emulator.accumulator)
         }
@@ -38,21 +35,20 @@ final class MMU {
 
     func load(from address: Int) {
         guard emulator.mode == .kernel else {
-            CLIStateController.newline("application port load (\(address)):")
+            CLIStateController.newline("load (\(address)):")
             return
         }
 
         switch address {
             case 0: emulator.accumulator = contextStack.popLast() ?? 0
-            case 1: emulator.accumulator = mmuArgumentStack.popLast() ?? 0
             default:
-                CLIStateController.newline("port load (\(address)):")
+                CLIStateController.terminate("Runtime error: unrecognised kernel action (load \(address))")
         }
     }
 
     func pin(at address: Int) {
         guard emulator.mode == .kernel else {
-            CLIStateController.newline("application pin (\(address))")
+            CLIStateController.newline("pin (\(address))")
             emulator.nextCycle()
             return
         }
@@ -92,6 +88,7 @@ final class MMU {
                 let addressTarget = KernelSegments.kernelCallAddress(fromInstruction: mmuArgumentStack[0])
                 let loadedComponent = emulator.memory.first { $0.address.equals(to: addressTarget, basedOn: .page) }
 
+                // TODO: implement this automatically.
                 if (0...3).contains(addressTarget.segment) {
                     let loadedComponentCopy = emulator.memory
                         .first { $0.address.equals(to: KernelSegments.proc, basedOn: .page) }?
@@ -129,32 +126,22 @@ final class MMU {
                 emulator.nextCycle()
 
             default:
-                CLIStateController.newline("pin (\(address))")
-                emulator.nextCycle()
+                CLIStateController.terminate("Runtime error: unrecognised MMU action (pin \(address))")
         }
 
         mmuArgumentStack.removeAll(keepingCapacity: true)
     }
 
-    func applicationKernelCall(from instruction: MemoryComponent.Statement.Instruction, withArguments arguments: [Int] = []) {
-        switch instruction {
-            case .ent: // enter
-                let loadedComponent = emulator.memory.first { $0.address.equals(to: KernelSegments.entryCall, basedOn: .page) }
-                intermediateSegmentAddress = Int(KernelSegments.entryCall.segment)
-
-                emulator.mode = .kernel
-                emulator.instructionComponent = loadedComponent ?? MemoryComponent.empty()
-                emulator.nextCycle(Int(KernelSegments.entryCall.line))
-
-            case .dds: // direct data store
-                fallthrough
-            case .ddl: // direct data load
-                fallthrough
-            case .ibl: // intermediate block load
-                CLIStateController.terminate("Runtime error: unimplemented kernel instruction (\(String(describing: instruction).uppercased()))")
-                break
-            default:
-                CLIStateController.terminate("Runtime error: invalid kernel instruction (\(String(describing: instruction).uppercased()))")
+    func applicationKernelCall() {
+        guard emulator.mode == .application else {
+            CLIStateController.terminate("Runtime error: kernel cannot call a nested system call")
         }
+
+        let loadedComponent = emulator.memory.first { $0.address.equals(to: KernelSegments.entryCall, basedOn: .page) }
+        intermediateSegmentAddress = Int(KernelSegments.entryCall.segment)
+
+        emulator.mode = .kernel
+        emulator.instructionComponent = loadedComponent ?? MemoryComponent.empty()
+        emulator.nextCycle(Int(KernelSegments.entryCall.line))
     }
 }
