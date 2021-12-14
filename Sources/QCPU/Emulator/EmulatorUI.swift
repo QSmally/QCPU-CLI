@@ -27,36 +27,37 @@ extension EmulatorStateController {
             [
                 "State",
                 " - Page line: \(line)",
-                " - Segment address: \(mmu.intermediateSegmentAddress)"
+                " - Segment address: \(mmu.intermediateSegmentAddress)",
+                ""
             ]
+                .inserted("Ports")
+                .inserted(outputStream.map { " - \($0)" })
         ]
     }
 
+    var widthColumn: Int { 24 }
+
     func updateUI() {
-        CLIStateController.clear()
         var columnComponent = 0
-        var lastRowIndex = 0
+        var nextRowIndex = 0
 
         for column in columns {
             let rows = column
-                .map { $0.padding(toLength: 24) }
+                .map { $0.padding(toLength: widthColumn) }
                 .enumerated()
 
             for (index, row) in rows {
-                CLIStateController.output("\u{1B}[\(index + 1);\(columnComponent * 24)H")
+                CLIStateController.output("\u{1B}[\(index + 1);\(columnComponent * widthColumn)H")
                 CLIStateController.output(row)
-                lastRowIndex = index + 3
+                nextRowIndex = index + 1
+            }
+
+            for removalRowIndex in nextRowIndex...64 {
+                CLIStateController.output("\u{1B}[\(removalRowIndex + 1);\(columnComponent * widthColumn)H")
+                CLIStateController.output("".padding(toLength: widthColumn))
             }
 
             columnComponent += 1
-        }
-
-        CLIStateController.output("\u{1B}[\(lastRowIndex);\((columnComponent - 1) * 24)H")
-        CLIStateController.output("Ports")
-
-        for (index, row) in outputStream.enumerated() {
-            CLIStateController.output("\u{1B}[\(index + lastRowIndex + 1);\((columnComponent - 1) * 24)H")
-            CLIStateController.output(" - \(row)".padding(toLength: 24))
         }
     }
 }
