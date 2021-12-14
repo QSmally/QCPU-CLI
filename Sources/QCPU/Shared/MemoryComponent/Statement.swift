@@ -100,10 +100,14 @@ extension MemoryComponent {
         }()
 
         lazy var formatted: String = {
-            let instruction = String(describing: representsCompiled!).uppercased()
-            return representsCompiled.operand > 0 ?
-                "\(instruction) \(operand)" :
-                instruction
+            if let representsCompiled = representsCompiled {
+                let instruction = String(describing: representsCompiled).uppercased()
+                return representsCompiled.operand > 0 ?
+                    "\(instruction) \(operand)" :
+                    instruction
+            } else {
+                return String(value)
+            }
         }()
 
         init(represents instruction: Instruction, operand: Int) {
