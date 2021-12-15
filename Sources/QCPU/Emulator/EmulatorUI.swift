@@ -5,7 +5,20 @@
 //  Created by Joey Smalen on 13/12/2021.
 //
 
+import Dispatch
+
 extension EmulatorStateController {
+
+    var kernelInformation: [String] {
+        let depthSequence = [
+            [String.empty, "Parameter stack"],
+            mmu.parameters.map { " - \($0)" },
+            [String.empty, "Call stack"],
+            mmu.addressCallStack.map { " - \($0)" }
+        ]
+
+        return Array(depthSequence.joined())
+    }
 
     var columns: [[String]] {
         [
@@ -23,13 +36,15 @@ extension EmulatorStateController {
                 .sorted { $0.key < $1.key }
                 .map { " - B\($0): \($1)" }
                 .inserted("Registers", at: 0)
-                .inserted(" - A0: \(accumulator)", at: 1),
+                .inserted(" - A0: \(accumulator)", at: 1)
+                .inserted(kernelInformation),
             [
                 "State",
                 " - Page line: \(line)",
                 " - Segment address: \(mmu.intermediateSegmentAddress)",
-                ""
+                " - Total cycles: \(cycles)"
             ]
+                .inserted(String.empty)
                 .inserted("Ports")
                 .inserted(outputStream.map { " - \($0)" })
         ]

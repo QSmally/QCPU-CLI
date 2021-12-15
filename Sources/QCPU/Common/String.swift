@@ -6,6 +6,9 @@
 //
 
 extension String {
+
+    static var empty: String { "" }
+
     var radix: Int? {
         switch self {
             case "":   return 10

@@ -11,6 +11,7 @@ final class EmulatorStateController {
 
     // State
     var line = 0
+    var cycles: UInt = 0
     var mode: ExecutionContext = .kernel
     var pointer = (local: 0, storage: false, propagateCarry: false)
 
@@ -68,6 +69,7 @@ final class EmulatorStateController {
     func clockTickMask() {
         let statement = instructionComponent.compiled[line] ??
             MemoryComponent.Statement(represents: .nop, operand: 0)
+        cycles += 1
 
         if modifierCache == nil {
             guard statement.representsCompiled != nil else {
@@ -81,6 +83,7 @@ final class EmulatorStateController {
             if bytes > 0 {
                 modifierCache = (statement: statement, arguments: [])
                 nextCycle()
+                updateUI()
                 return
             }
 
