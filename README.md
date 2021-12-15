@@ -13,17 +13,21 @@
 * `@DECLARE <label> <value>`
 
 **Indented**
-* `@IF <flag>`
+* `@IF <CLI flag>`
+* `@IF !<CLI flag>`
+* `@ELSE`
 * `@ENUM <namespace>`
 * `@END`
 
 ## Functions
 * `%random`
-* `%array <size> <values...?>`
+* `%array <size> <repeated value>`
 
 ## Addressing
 * `.label:` - page-private label
 * `.&label:` - segment-scoped label
+
+**Embedded**
 * `.label` - lower five bits
 * `.label-` - lower byte
 * `.label+` - upper byte
@@ -45,6 +49,3 @@
 * `#!cout`
 * `#!signed`
 * `#!zero`
-
-## Assemble flags
-* `DEBUG`

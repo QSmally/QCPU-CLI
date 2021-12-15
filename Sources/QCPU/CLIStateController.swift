@@ -10,6 +10,9 @@ import Foundation
 final class CLIStateController {
 
     static let arguments = CommandLine.arguments.dropFirst()
+    static let flags = arguments
+        .filter { $0.starts(with: "--") }
+        .map { String($0.dropFirst(2)) }
 
     static let help = [
         "USAGE:",

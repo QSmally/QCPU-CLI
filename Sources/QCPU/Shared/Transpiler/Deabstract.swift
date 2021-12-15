@@ -36,14 +36,14 @@ extension Transpiler {
                 continue
             }
 
-            if let flag = Expressions.flag.match(statement, group: 1) {
+            if let flag = Expressions.condition.match(statement, group: 1) {
                 let parsedFlagBit = parseConditionFlag(flag, from: statement)
                 let parsedStatement = statement.replacingOccurrences(of: "#\(flag)", with: parsedFlagBit)
                 memoryComponent.file.append(parsedStatement)
                 continue
             }
 
-            if let tag = Expressions.tag.match(statement, group: 1) {
+            if let tag = Expressions.marco.match(statement, group: 1) {
                 let bytes = parseInsertableMarcos(tag, from: statement, helpers: helpers)
                 memoryComponent.file += bytes
                 continue
@@ -110,7 +110,7 @@ extension Transpiler {
     }
 
     private func replaceSingleMarco(_ definiteComponent: String, helpers: [MemoryComponent]) -> String {
-        if let tag = Expressions.tag.match(definiteComponent, group: 1) {
+        if let tag = Expressions.marco.match(definiteComponent, group: 1) {
             if let marco = memoryComponent.declarations.first(where: { $0.key == tag }) {
                 return definiteComponent.replacingOccurrences(of: "@\(tag)", with: marco.value)
             }

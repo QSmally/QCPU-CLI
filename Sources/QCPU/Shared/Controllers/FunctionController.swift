@@ -7,11 +7,12 @@
 
 import Foundation
 
-struct FunctionController {
+class FunctionController {
 
     let function: String
     let arguments: [String]
     let statement: String
+
     unowned var memoryComponent: MemoryComponent
 
     init(_ function: String, from statement: String, memoryComponent: MemoryComponent) {

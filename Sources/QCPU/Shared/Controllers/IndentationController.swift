@@ -5,11 +5,14 @@
 //  Created by Joey Smalen on 22/11/2021.
 //
 
-struct IndentationController {
+class IndentationController {
 
     let identifier: String
     let arguments: [String]
+
     unowned var memoryComponent: MemoryComponent
+
+    var processCache = [String: Bool]()
 
     init(identifier: String,
          arguments: [String],
@@ -19,6 +22,18 @@ struct IndentationController {
         self.memoryComponent = memoryComponent
 
         switch identifier {
+            case "@IF":
+                guard let flag = arguments[optional: 0] else {
+                    CLIStateController.terminate("Parse error (\(memoryComponent.name)): missing conditional statement")
+                }
+
+                if let flag = Expressions.flag.match(flag, group: 2),
+                   let inverse = Expressions.flag.match(flag, group: 1) {
+                    var result = CLIStateController.flags.contains(flag)
+                    if inverse == "!" { result.toggle() }
+                    processCache["if-pass"] = result
+                }
+
             case "@ENUM":
                 guard let namespace = arguments[optional: 0] else {
                     CLIStateController.terminate("Parse error (\(memoryComponent.name)): missing enum namespace")
@@ -26,6 +41,7 @@ struct IndentationController {
 
                 StylingGuidelines.validate(namespace, withSource: .declaration)
                 memoryComponent.enumeration = (name: namespace, cases: [:])
+
             default:
                 break
         }
@@ -40,10 +56,12 @@ struct IndentationController {
 
         switch identifier {
             case "@IF":
-                // TODO:
-                // Implement parsing of the condition and return true if the instruction can
-                // be used to propagate the parser.
-                return true
+                if anyStatement == "@ELSE" {
+                    processCache["if-pass"]?.toggle()
+                    return false
+                }
+
+                return processCache["if-pass"] ?? false
 
             case "@ENUM":
                 anyStatement == "@DECLARE" ?

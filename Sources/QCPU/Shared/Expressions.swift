@@ -8,13 +8,14 @@
 import Foundation
 
 enum Expressions {
-    static let function = try! NSRegularExpression(pattern: #"%([a-zA-Z0-9_\.]+\s?.*)"#)
-    static let flag     = try! NSRegularExpression(pattern: #"#(!?[a-zA-Z]+)"#)
-    static let tag      = try! NSRegularExpression(pattern: #"@([a-zA-Z0-9_\.\*]+)"#)
-    static let label    = try! NSRegularExpression(pattern: #"^\.(&?)([a-zA-Z0-9_\.]+):$"#)
-    static let address  = try! NSRegularExpression(pattern: #"\.([a-zA-Z0-9_\.]+)(\!?)([-+]?)"#)
-    static let integer  = try! NSRegularExpression(pattern: #"^(\-?)((?:0x|0b)?)([\dA-F]+)$"#)
-    static let ascii    = try! NSRegularExpression(pattern: #"^\$(.+)$"#)
+    static let function  = try! NSRegularExpression(pattern: #"%([a-zA-Z0-9_\.]+\s?.*)"#)
+    static let condition = try! NSRegularExpression(pattern: #"#(!?[a-zA-Z]+)"#)
+    static let marco     = try! NSRegularExpression(pattern: #"@([a-zA-Z0-9_\.\*]+)"#)
+    static let label     = try! NSRegularExpression(pattern: #"^\.(&?)([a-zA-Z0-9_\.]+):$"#)
+    static let address   = try! NSRegularExpression(pattern: #"\.([a-zA-Z0-9_\.]+)(\!?)([-+]?)"#)
+    static let integer   = try! NSRegularExpression(pattern: #"^(\-?)((?:0x|0b)?)([\dA-F]+)$"#)
+    static let ascii     = try! NSRegularExpression(pattern: #"^\$(.+)$"#)
+    static let flag      = try! NSRegularExpression(pattern: #"(!?)(.+)"#)
 }
 
 enum StylingGuidelines {
