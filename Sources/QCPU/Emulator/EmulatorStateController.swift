@@ -13,7 +13,8 @@ final class EmulatorStateController {
     var line = 0
     var cycles: UInt = 0
     var mode: ExecutionContext = .kernel
-    var pointer = (local: 0, storage: false, propagateCarry: false)
+
+    var modifiers = Modifiers()
 
     var modifierCache: (
         statement: MemoryComponent.Statement,
@@ -40,6 +41,12 @@ final class EmulatorStateController {
     enum ExecutionContext {
         case application,
              kernel
+    }
+
+    class Modifiers {
+        var _pointer: Int? = nil
+        var propagateCarry = false
+        var pointer: Int { _pointer ?? 0 }
     }
 
     init(memoryComponents: [MemoryComponent]) {
@@ -76,9 +83,9 @@ final class EmulatorStateController {
                 CLIStateController.terminate("Runtime error: instruction '\(statement.value)' does not have a compiled instruction")
             }
 
-            let bytes = pointer.storage ?
-                0 :
-                statement.representsCompiled?.amountSecondaryBytes ?? 0
+            let bytes = modifiers._pointer == nil ?
+                statement.representsCompiled?.amountSecondaryBytes ?? 0 :
+                0
 
             if bytes > 0 {
                 modifierCache = (statement: statement, arguments: [])

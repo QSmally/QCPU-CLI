@@ -10,10 +10,10 @@ extension MemoryComponent {
 
         enum Instruction: Int, CaseIterable {
             case nop = 0b00000000,
-                 spt = 0b00000001,
-                 dss = 0b00000010,
-                 dls = 0b00000011,
-                 spl = 0b00000100,
+                 dss = 0b00000001,
+                 dls = 0b00000010,
+                 spl = 0b00000011,
+                 /* 0b00000100 missing */
                  /* 0b00000101 missing */
                  nta = 0b00000110,
                  pcm = 0b00000111,

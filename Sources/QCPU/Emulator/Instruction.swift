@@ -8,20 +8,19 @@
 extension EmulatorStateController {
     func clockTick(executing statement: MemoryComponent.Statement, arguments: [Int]) {
         switch statement.representsCompiled! {
-            case .spt: pointer.storage = true
             case .dss:
                 let addressTarget = MemoryComponent.Address(
                     upper: mmu.intermediateSegmentAddress,
-                    lower: pointer.storage ? accumulator : arguments[0])
-                pointer.storage = false
+                    lower: arguments[0] | modifiers.pointer)
+                modifiers._pointer = nil
 
                 memory.removeAll { $0.address.equals(to: addressTarget, basedOn: .page) }
                 memory.append(dataComponent.clone())
             case .dls:
                 let addressTarget = MemoryComponent.Address(
                     upper: mmu.intermediateSegmentAddress,
-                    lower: pointer.storage ? accumulator : arguments[0])
-                pointer.storage = false
+                    lower: arguments[0] | modifiers.pointer)
+                modifiers._pointer = nil
 
                 let loadedComponentCopy = memory
                     .first { $0.address.equals(to: addressTarget, basedOn: .page) }?
@@ -31,8 +30,8 @@ extension EmulatorStateController {
             case .spl:
                 let addressTarget = MemoryComponent.Address(
                     upper: mmu.intermediateSegmentAddress,
-                    lower: pointer.storage ? accumulator : arguments[0])
-                pointer.storage = false
+                    lower: (arguments[optional: 0] ?? 0) | modifiers.pointer)
+                modifiers._pointer = nil
 
                 let loadedComponent = memory.first { $0.address.equals(to: addressTarget, basedOn: .page) }
 
@@ -40,7 +39,7 @@ extension EmulatorStateController {
                 instructionComponent = loadedComponent ?? MemoryComponent.empty()
                 return
             case .nta: accumulator = ~accumulator
-            case .pcm: pointer.propagateCarry = true
+            case .pcm: modifiers.propagateCarry = true
             case .pst: mmu.store(at: statement.operand)
             case .pld: mmu.load(from: statement.operand)
             case .cpn:
@@ -57,13 +56,13 @@ extension EmulatorStateController {
             case .add:
                 accumulator = accumulator +
                     (registers[statement.operand] ?? 0) +
-                    (pointer.propagateCarry && flags[1]! ? 1 : 0)
-                pointer.propagateCarry = false
+                    (modifiers.propagateCarry && flags[1]! ? 1 : 0)
+                modifiers.propagateCarry = false
             case .sub:
                 accumulator = accumulator -
                     (registers[statement.operand] ?? 0) -
-                    (pointer.propagateCarry && flags[1]! ? 1 : 0)
-                pointer.propagateCarry = false
+                    (modifiers.propagateCarry && flags[1]! ? 1 : 0)
+                modifiers.propagateCarry = false
             case .ent:
                 mmu.parameters.append(arguments[0])
                 mmu.applicationKernelCall()
@@ -76,7 +75,7 @@ extension EmulatorStateController {
             case .mda: mmu.mmuArgumentStack.append(accumulator)
             case .mma: mmu.mmuArgumentStack.append(contentsOf: arguments)
             case .poi:
-                pointer.local = statement.operand == 0 ?
+                modifiers._pointer = statement.operand == 0 ?
                     accumulator :
                     registers[statement.operand] ?? 0
             case .ior: accumulator = accumulator | (registers[statement.operand] ?? 0)
@@ -85,17 +84,17 @@ extension EmulatorStateController {
             case .imp: accumulator = ~accumulator | (registers[statement.operand] ?? 0)
             case .jmp:
                 if (flags[condition] ?? false) {
-                    nextCycle(statement.operand | pointer.local)
-                    pointer.local = 0
+                    nextCycle(statement.operand | modifiers.pointer)
+                    modifiers._pointer = nil
                     return
                 }
             case .mst:
                 let byte = MemoryComponent.Statement(value: accumulator)
-                dataComponent.compiled[statement.operand | pointer.local] = byte
-                pointer.local = 0
+                dataComponent.compiled[statement.operand | modifiers.pointer] = byte
+                modifiers._pointer = nil
             case .mld:
-                accumulator = dataComponent?.compiled[statement.operand | pointer.local]?.value ?? 0
-                pointer.local = 0
+                accumulator = dataComponent?.compiled[statement.operand | modifiers.pointer]?.value ?? 0
+                modifiers._pointer = nil
             default:
                 break
         }
