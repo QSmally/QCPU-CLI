@@ -90,6 +90,7 @@ extension MemoryComponent {
 
         var value: Int
         var representsCompiled: Instruction!
+        var renderComponent: Bool
 
         lazy var operand: Int = {
             switch representsCompiled.operand {
@@ -101,6 +102,10 @@ extension MemoryComponent {
         }()
 
         lazy var formatted: String = {
+            if !renderComponent {
+                return String(value)
+            }
+
             if let representsCompiled = representsCompiled {
                 let instruction = String(describing: representsCompiled).uppercased()
                 return representsCompiled.operand > 0 ?
@@ -114,6 +119,7 @@ extension MemoryComponent {
         init(represents instruction: Instruction, operand: Int) {
             self.value = instruction.rawValue | operand
             self.representsCompiled = instruction
+            self.renderComponent = true
         }
 
         init(value: Int, botherCompiling: Bool = true) {
@@ -121,6 +127,7 @@ extension MemoryComponent {
             self.representsCompiled = botherCompiling ?
                 Instruction.allCases.first { $0.rawValue >> $0.operand == value >> $0.operand } :
                 nil
+            self.renderComponent = botherCompiling
         }
     }
 }

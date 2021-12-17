@@ -43,7 +43,7 @@ extension Transpiler {
             }
 
             if let immediate = integer(firstComponent) {
-                let immediateStatement = MemoryComponent.Statement(value: immediate)
+                let immediateStatement = MemoryComponent.Statement(value: immediate, botherCompiling: false)
                 memoryComponent.compiled[lineIteratorCount] = immediateStatement
                 lineIteratorCount += 1
                 continue
