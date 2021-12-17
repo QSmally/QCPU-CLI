@@ -24,12 +24,12 @@ extension EmulatorStateController {
         [
             (dataComponent?.compiled
                 .sorted { $0.key < $1.key }
-                .map { " - \($0): \($1.value)" } ?? [])
+                .map { " - \(String($0).padding(toLength: 2)): \($1.value)" } ?? [])
                 .inserted("Data Memory", at: 0)
                 .inserted("(\(dataComponent?.name ?? "untitled"))", at: 1),
             (instructionComponent?.compiled
                 .sorted { $0.key < $1.key }
-                .map { " \(line == $0 ? ">" : "-") \($0): \($1.formatted) (\($1.value))" } ?? [])
+                .map { " \(line == $0 ? ">" : "-") \(String($0).padding(toLength: 2)): \($1.formatted) (\($1.value))" } ?? [])
                 .inserted("Instruction Memory", at: 0)
                 .inserted("(\(instructionComponent?.name ?? "untitled"))", at: 1),
             registers
