@@ -35,7 +35,9 @@ extension Transpiler {
 
             if let ascii = Expressions.ascii.match(firstComponent, group: 1) {
                 for asciiCharacter in ascii.utf8 {
-                    let asciiStatement = MemoryComponent.Statement(value: Int(asciiCharacter), botherCompiling: false)
+                    let asciiStatement = MemoryComponent.Statement(
+                        value: Int(asciiCharacter),
+                        botherCompiling: false)
                     memoryComponent.compiled[lineIteratorCount] = asciiStatement
                     lineIteratorCount += 1
                 }
@@ -43,7 +45,9 @@ extension Transpiler {
             }
 
             if let immediate = integer(firstComponent) {
-                let immediateStatement = MemoryComponent.Statement(value: immediate, botherCompiling: false)
+                let immediateStatement = MemoryComponent.Statement(
+                    value: immediate,
+                    botherCompiling: false)
                 memoryComponent.compiled[lineIteratorCount] = immediateStatement
                 lineIteratorCount += 1
                 continue
