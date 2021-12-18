@@ -88,14 +88,6 @@ final class MMU {
                 let addressTarget = KernelSegments.kernelCallAddress(fromInstruction: mmuArgumentStack[0])
                 let loadedComponent = emulator.memory.first { $0.address.equals(to: addressTarget, basedOn: .page) }
 
-                // TODO: implement this automatically.
-                if (0...3).contains(addressTarget.segment) {
-                    let loadedComponentCopy = emulator.memory
-                        .first { $0.address.equals(to: KernelSegments.proc, basedOn: .page) }?
-                        .clone()
-                    emulator.dataComponent = loadedComponentCopy ?? MemoryComponent.empty()
-                }
-
                 intermediateSegmentAddress = addressTarget.segment
                 emulator.instructionComponent = loadedComponent ?? MemoryComponent.empty()
                 emulator.nextCycle(0)
