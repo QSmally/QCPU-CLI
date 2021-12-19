@@ -14,7 +14,7 @@ final class MMU {
     var addressCallStack = [Int]()
     var contextStack = [Int]()
 
-    var contextStore = [Int: (registers: [Int], callStack: [Int])]()
+    var contextStore = [Int: [Int]]()
 
     unowned var emulator: EmulatorStateController
 
@@ -104,17 +104,12 @@ final class MMU {
                 emulator.nextCycle(Int(addressTarget.line))
 
             case 5: // context snapshot
-                contextStore[mmuArgumentStack[0]] = (
-                    registers: contextStack,
-                    callStack: addressCallStack)
-
+                contextStore[mmuArgumentStack[0]] = contextStack
                 contextStack.removeAll(keepingCapacity: true)
-                addressCallStack.removeAll(keepingCapacity: true)
                 emulator.nextCycle()
 
             case 6: // context restore
-                contextStack = contextStore[mmuArgumentStack[0]]?.registers ?? []
-                addressCallStack = contextStore[mmuArgumentStack[0]]?.callStack ?? []
+                contextStack = contextStore[mmuArgumentStack[0]] ?? []
                 emulator.nextCycle()
 
             default:
