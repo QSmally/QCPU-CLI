@@ -10,16 +10,16 @@ extension EmulatorStateController {
         switch statement.representsCompiled! {
             case .dss:
                 let addressTarget = MemoryComponent.Address(
-                    upper: mmu.intermediateSegmentAddress,
-                    lower: arguments[0] | modifiers.pointer)
+                    segment: mmu.intermediateSegmentAddress,
+                    page: arguments[0] | modifiers.pointer)
                 modifiers._pointer = nil
 
                 memory.removeAll { $0.address.equals(to: addressTarget, basedOn: .page) }
                 memory.append(dataComponent.clone())
             case .dls:
                 let addressTarget = MemoryComponent.Address(
-                    upper: mmu.intermediateSegmentAddress,
-                    lower: arguments[0] | modifiers.pointer)
+                    segment: mmu.intermediateSegmentAddress,
+                    page: arguments[0] | modifiers.pointer)
                 modifiers._pointer = nil
 
                 let loadedComponentCopy = memory
