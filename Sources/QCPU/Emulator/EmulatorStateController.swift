@@ -85,7 +85,7 @@ final class EmulatorStateController {
 
             let bytes = modifiers._pointer == nil ?
                 statement.representsCompiled?.amountSecondaryBytes ?? 0 :
-                0
+                statement.representsCompiled?.amountPointerBytes ?? 0
 
             if bytes > 0 {
                 modifierCache = (statement: statement, arguments: [])

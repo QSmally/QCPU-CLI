@@ -71,6 +71,12 @@ extension MemoryComponent {
                 }
             }
 
+            var amountPointerBytes: Int {
+                return ![.spl, .ent, .cps].contains(self) ?
+                    amountSecondaryBytes :
+                    0
+            }
+
             private static var cache = [String: Instruction]()
 
             init?(from representativeString: String) {
