@@ -69,7 +69,10 @@ extension EmulatorStateController {
                 return
             case .pps: mmu.parameters.append(accumulator)
             case .ppl: accumulator = mmu.parameters.pop()
-            case .cps: mmu.addressCallStack.append(arguments[0])
+            case .cps:
+                let address = (arguments[optional: 0] ?? 0) | modifiers.pointer
+                mmu.addressCallStack.append(address)
+                modifiers._pointer = nil
             case .cpl: accumulator = mmu.addressCallStack.pop()
             case .msa: mmu.mmuArgumentStack.append(arguments[0])
             case .mda: mmu.mmuArgumentStack.append(accumulator)

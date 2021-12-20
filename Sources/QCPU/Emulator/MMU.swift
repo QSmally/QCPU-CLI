@@ -7,14 +7,12 @@
 
 final class MMU {
 
+    var processId = 0
     var intermediateSegmentAddress = 0
 
     var parameters = [Int]()
     var mmuArgumentStack = [Int]()
     var addressCallStack = [Int]()
-    var contextStack = [Int]()
-
-    var contextStore = [Int: [Int]]()
 
     unowned var emulator: EmulatorStateController
 
@@ -23,27 +21,11 @@ final class MMU {
     }
 
     func store(at address: Int) {
-        switch address {
-            case 0:
-                emulator.mode == .kernel ?
-                    contextStack.append(emulator.accumulator) :
-                    emulator.outputStream.append(emulator.accumulator)
-            default:
-                emulator.outputStream.append(emulator.accumulator)
-        }
+        emulator.outputStream.append(emulator.accumulator)
     }
 
     func load(from address: Int) {
-        guard emulator.mode == .kernel else {
-            CLIStateController.newline("load (\(address)):")
-            return
-        }
-
-        switch address {
-            case 0: emulator.accumulator = contextStack.popLast() ?? 0
-            default:
-                CLIStateController.terminate("Runtime error: unrecognised kernel action (load \(address))")
-        }
+        CLIStateController.newline("load (\(address)):")
     }
 
     func pin(at address: Int) {
@@ -103,13 +85,12 @@ final class MMU {
                 emulator.instructionComponent = loadedComponent ?? MemoryComponent.empty()
                 emulator.nextCycle(Int(addressTarget.line))
 
-            case 5: // context snapshot
-                contextStore[mmuArgumentStack[0]] = contextStack
-                contextStack.removeAll(keepingCapacity: true)
+            case 5: // pid register
+                processId = emulator.accumulator
                 emulator.nextCycle()
 
-            case 6: // context restore
-                contextStack = contextStore[mmuArgumentStack[0]] ?? []
+            case 6: // pid load
+                emulator.accumulator = processId
                 emulator.nextCycle()
 
             default:
