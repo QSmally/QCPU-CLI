@@ -23,12 +23,12 @@ class IndentationController {
 
         switch identifier {
             case "@IF":
-                guard let flag = arguments[optional: 0] else {
+                guard let flagString = arguments[optional: 0] else {
                     CLIStateController.terminate("Parse error (\(memoryComponent.name)): missing conditional statement")
                 }
 
-                if let flag = Expressions.flag.match(flag, group: 2),
-                   let inverse = Expressions.flag.match(flag, group: 1) {
+                if let flag = Expressions.flag.match(flagString, group: 2),
+                   let inverse = Expressions.flag.match(flagString, group: 1) {
                     var result = CLIStateController.flags.contains(flag)
                     if inverse == "!" { result.toggle() }
                     processCache["if-pass"] = result
@@ -48,7 +48,7 @@ class IndentationController {
     }
 
     @discardableResult
-    func validate(_ anyStatement: String, tagComponents: [String]) -> Bool {
+    func validate(_ anyStatement: String, tagComponents: [String], mutableStatement: inout String) -> Bool {
         if anyStatement == "@END" {
             memoryComponent.transpiler.indentations.removeLast()
             return false
@@ -59,6 +59,14 @@ class IndentationController {
                 if anyStatement == "@ELSE" {
                     processCache["if-pass"]?.toggle()
                     return false
+                }
+
+                if anyStatement == "@DROPTHROUGH" {
+                    mutableStatement = mutableStatement
+                        .components(separatedBy: .whitespaces)
+                        .dropFirst()
+                        .joined(separator: " ")
+                    return true
                 }
 
                 return processCache["if-pass"] ?? false

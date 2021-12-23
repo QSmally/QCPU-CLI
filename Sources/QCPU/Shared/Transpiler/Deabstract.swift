@@ -10,11 +10,15 @@ import Foundation
 extension Transpiler {
     func prepare(helpers: [MemoryComponent]) {
         for statement in memoryComponent.file.removeCopy() {
+            var statement = statement
             var instructionComponents = statement.components(separatedBy: .whitespaces)
             let master = instructionComponents.removeFirst()
 
             if let level = indentations.last {
-                let isParsable = level.validate(master, tagComponents: instructionComponents)
+                let isParsable = level.validate(
+                    master,
+                    tagComponents: instructionComponents,
+                    mutableStatement: &statement)
                 guard isParsable else { continue }
             }
 

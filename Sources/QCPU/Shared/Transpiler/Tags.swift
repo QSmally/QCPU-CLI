@@ -8,6 +8,7 @@
 extension Transpiler {
     func tags() -> MemoryComponent {
         for tag in memoryComponent.file {
+            var tag = tag
             var tagComponents = tag.components(separatedBy: .whitespaces)
             let identifier = tagComponents.removeFirst()
 
@@ -17,7 +18,10 @@ extension Transpiler {
             tagAmount += 1
 
             if let level = indentations.last {
-                level.validate(identifier, tagComponents: tagComponents)
+                level.validate(
+                    identifier,
+                    tagComponents: tagComponents,
+                    mutableStatement: &tag)
                 continue
             }
 

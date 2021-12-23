@@ -10,14 +10,15 @@
 * `@OVERFLOWABLE`
 
 **Marcos**
-* `@DECLARE <label> <value>`
+* `@DECLARE <label> <value>` - private-page marco
 
 **Indented**
-* `@IF <CLI flag>`
-* `@IF !<CLI flag>`
-* `@ELSE`
-* `@ENUM <namespace>`
-* `@END`
+* `@IF <CLI flag>` - conditional code
+* `@IF !<CLI flag>` - inverse conditional code
+* `@DROPTHROUGH <instruction>` - ignores if-scope
+* `@ELSE` - negates if-scope
+* `@ENUM <namespace>` - public marco-group
+* `@END` - closing indent
 
 ## Functions
 * `%random`
