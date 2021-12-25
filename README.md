@@ -11,6 +11,7 @@
 
 **Marcos**
 * `@DECLARE <label> <value>` - private-page marco
+* `@<macro or header> <header arguments...>` - insert marco/header
 
 **Indented**
 * `@IF <CLI flag>` - conditional code
