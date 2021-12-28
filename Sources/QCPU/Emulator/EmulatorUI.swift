@@ -10,14 +10,15 @@ import Dispatch
 extension EmulatorStateController {
 
     var kernelInformation: [String] {
-        let depthSequence = [
-            [String.empty, "Parameter stack"],
-            mmu.parameters.map { " - \($0)" },
-            [String.empty, "Call stack"],
-            mmu.addressCallStack.map { " - \($0)" }
-        ]
+        return [String.empty, "Parameter stack"]
+            .inserted(mmu.parameters.map { " - \($0)" })
+            .inserted([String.empty, "Call stack"])
+            .inserted(mmu.addressCallStack.map { " - \($0)" })
+    }
 
-        return Array(depthSequence.joined())
+    var outputStreams: [String] {
+        return ["Ports"]
+            .inserted(outputStream.map { " - \($0)" })
     }
 
     var columns: [[String]] {
@@ -45,8 +46,7 @@ extension EmulatorStateController {
                 " - Total cycles: \(cycles)"
             ]
                 .inserted(String.empty)
-                .inserted("Ports")
-                .inserted(outputStream.map { " - \($0)" })
+                .inserted(outputStreams)
         ]
     }
 
