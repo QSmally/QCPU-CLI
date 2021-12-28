@@ -14,8 +14,11 @@ extension EmulatorStateController {
                     page: arguments[0] | modifiers.pointer)
                 modifiers._pointer = nil
 
-                memory.removeAll { $0.address.equals(to: addressTarget, basedOn: .page) }
-                memory.append(dataComponent.clone())
+                if let replacementIndex = memory.firstIndex(where: { $0.address.equals(to: addressTarget, basedOn: .page) }) {
+                    memory[replacementIndex] = dataComponent.clone()
+                } else {
+                    memory.append(dataComponent.clone())
+                }
             case .dls:
                 let addressTarget = MemoryComponent.Address(
                     segment: mmu.intermediateSegmentAddress,
@@ -26,7 +29,7 @@ extension EmulatorStateController {
                     .first { $0.address.equals(to: addressTarget, basedOn: .page) }?
                     .clone()
 
-                dataComponent = loadedComponentCopy ?? MemoryComponent.empty()
+                dataComponent = loadedComponentCopy ?? MemoryComponent.empty(atAddress: addressTarget)
             case .spl:
                 let addressTarget = MemoryComponent.Address(
                     upper: mmu.intermediateSegmentAddress,
@@ -36,7 +39,7 @@ extension EmulatorStateController {
                 let loadedComponent = memory.first { $0.address.equals(to: addressTarget, basedOn: .page) }
 
                 nextCycle(Int(addressTarget.line))
-                instructionComponent = loadedComponent ?? MemoryComponent.empty()
+                instructionComponent = loadedComponent ?? MemoryComponent.empty(atAddress: addressTarget)
                 return
             case .nta: accumulator = ~accumulator
             case .pcm: modifiers.propagateCarry = true

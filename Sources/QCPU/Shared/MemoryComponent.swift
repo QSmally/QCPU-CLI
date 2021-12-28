@@ -49,6 +49,13 @@ final class MemoryComponent {
         MemoryComponent(name, fromSource: [])
     }
 
+    static func empty(_ name: String = "untitled", atAddress address: Address) -> MemoryComponent {
+        let memoryComponent = MemoryComponent(name, fromSource: [])
+        memoryComponent.address = address
+
+        return memoryComponent
+    }
+
     func clone() -> MemoryComponent {
         let clonedMemoryComponent = MemoryComponent(name, fromSource: file)
         clonedMemoryComponent.address = address

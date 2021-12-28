@@ -53,7 +53,7 @@ final class MMU {
                     .first { $0.address.equals(to: addressTarget, basedOn: .page) }?
                     .clone()
 
-                emulator.dataComponent = loadedComponentCopy ?? MemoryComponent.empty()
+                emulator.dataComponent = loadedComponentCopy ?? MemoryComponent.empty(atAddress: addressTarget)
                 emulator.nextCycle()
 
             case 2: // intermediate load
@@ -63,7 +63,7 @@ final class MMU {
                 let loadedComponent = emulator.memory.first { $0.address.equals(to: addressTarget, basedOn: .page) }
 
                 intermediateSegmentAddress = addressTarget.segment
-                emulator.instructionComponent = loadedComponent ?? MemoryComponent.empty()
+                emulator.instructionComponent = loadedComponent ?? MemoryComponent.empty(atAddress: addressTarget)
                 emulator.nextCycle(Int(addressTarget.line))
 
             case 3: // kernel intermediate load
@@ -71,7 +71,7 @@ final class MMU {
                 let loadedComponent = emulator.memory.first { $0.address.equals(to: addressTarget, basedOn: .page) }
 
                 intermediateSegmentAddress = addressTarget.segment
-                emulator.instructionComponent = loadedComponent ?? MemoryComponent.empty()
+                emulator.instructionComponent = loadedComponent ?? MemoryComponent.empty(atAddress: addressTarget)
                 emulator.nextCycle(0)
 
             case 4: // exit intermediate load
@@ -82,7 +82,7 @@ final class MMU {
 
                 intermediateSegmentAddress = addressTarget.segment
                 emulator.mode = .application
-                emulator.instructionComponent = loadedComponent ?? MemoryComponent.empty()
+                emulator.instructionComponent = loadedComponent ?? MemoryComponent.empty(atAddress: addressTarget)
                 emulator.nextCycle(Int(addressTarget.line))
 
             case 5: // pid register
