@@ -60,6 +60,10 @@ final class EmulatorStateController {
             CLIStateController.terminate("Fatal error: no program entry (0, 0)")
         }
 
+        for register in 1...7 {
+            registers[register] = 0
+        }
+
         accumulator = 0
         instructionComponent = entry
         updateUI()
