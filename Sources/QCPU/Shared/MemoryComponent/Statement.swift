@@ -109,7 +109,8 @@ extension MemoryComponent {
 
         lazy var formatted: String = {
             if !renderComponent {
-                return String(value)
+                return String(value, radix: 2)
+                    .leftPadding(toLength: 8, withPad: "0")
             }
 
             if let representsCompiled = representsCompiled {

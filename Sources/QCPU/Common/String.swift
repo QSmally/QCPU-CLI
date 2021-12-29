@@ -19,7 +19,17 @@ extension String {
         }
     }
 
-    func padding(toLength length: Int) -> String {
-        padding(toLength: length, withPad: " ", startingAt: 0)
+    func padding(toLength length: Int, withPad pad: String = " ") -> String {
+        padding(toLength: length, withPad: pad, startingAt: 0)
+    }
+
+    func leftPadding(toLength length: Int, withPad pad: String = " ") -> String {
+        if count < length {
+            let repeatedString = String()
+                .padding(toLength: length - count, withPad: pad)
+            return String(repeatedString).appending(self)
+        } else {
+            return String(suffix(length))
+        }
     }
 }

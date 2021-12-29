@@ -14,7 +14,7 @@ extension EmulatorStateController {
             // Data memory
             (dataComponent?.compiled
                 .sorted { $0.key < $1.key }
-                .map { " - \(String($0).padding(toLength: 2)): \($1.value)".padding(toLength: 24) } ?? [])
+                .map { " - \(String($0).padding(toLength: 2)): \($1.value) (\($1.formatted))".padding(toLength: 24) } ?? [])
                 .inserted("Data Memory", at: 0)
                 .inserted("(\(dataComponent?.name ?? "untitled"))", at: 1),
 
