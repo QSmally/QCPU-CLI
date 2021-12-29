@@ -58,16 +58,19 @@ extension EmulatorStateController {
     }
 
     func updateUI() {
-        CLIStateController.output("\u{1B}[2J")
+        renderedStream.append("\u{1B}[2J")
         var columnComponent = 0
 
         for column in columns {
             for (index, row) in column.enumerated() {
-                CLIStateController.output("\u{1B}[\(index + 1);\(columnComponent * 24)H")
-                CLIStateController.output(row)
+                renderedStream.append("\u{1B}[\(index + 1);\(columnComponent * 24)H")
+                renderedStream.append(row)
             }
 
             columnComponent += 1
         }
+
+        CLIStateController.output(renderedStream)
+        renderedStream.removeAll(keepingCapacity: true)
     }
 }

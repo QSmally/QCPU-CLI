@@ -20,8 +20,9 @@ final class EmulatorStateController {
         statement: MemoryComponent.Statement,
         arguments: [Int])!
 
-    // Clock queue
+    // Clock and UI
     var clock: DispatchSourceTimer?
+    var renderedStream = String()
 
     // Memory controller
     lazy var mmu = MMU(emulator: self)
