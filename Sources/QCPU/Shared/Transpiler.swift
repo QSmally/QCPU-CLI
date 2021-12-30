@@ -9,7 +9,7 @@ final class Transpiler {
 
     static let validTags = [
         "@PAGE", "@HEADER", "@ADDRESSABLE", "@OVERFLOWABLE",
-        "@DECLARE", "@ENUM", "@END"]
+        "@MAKEPAGE", "@DECLARE", "@ENUM", "@END"]
     static let indentedTagNotations = ["@ENUM"]
     static let breakTaglike = ["@IF"]
     static var compileTags = breakTaglike + ["@END"]
@@ -19,6 +19,8 @@ final class Transpiler {
     var tagAmount = 0
     var lineIteratorCount = 0
     var indentations = [IndentationController]()
+
+    var pages = [MemoryComponent]()
 
     var isCodeBlock: Bool {
         memoryComponent.address != nil && memoryComponent.header == nil

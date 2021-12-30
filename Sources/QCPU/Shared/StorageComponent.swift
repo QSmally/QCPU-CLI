@@ -23,7 +23,13 @@ final class StorageComponent {
             .map { $0.transpiler.tags() }
             .filter { $0.transpiler.isCodeBlock }
             .forEach { $0.transpiler.prepare(helpers: insertable) }
-        memoryComponents.removeAll { !$0.transpiler.isCodeBlock }
+
+        memoryComponents
+            .map { $0.transpiler.pages }
+            .forEach { memoryComponents.append(contentsOf: $0) }
+        memoryComponents
+            .removeAll { !$0.transpiler.isCodeBlock }
+
         return self
     }
 
@@ -33,7 +39,9 @@ final class StorageComponent {
             .filter { $0.namespaceCallable != nil }
             .map { MemoryComponent.Label(
                 id: $0.namespaceCallable!,
-                address: MemoryComponent.Address(segment: $0.address.segment, page: $0.address.page),
+                address: MemoryComponent.Address(
+                    segment: $0.address.segment,
+                    page: $0.address.page),
                 privacy: .global) }
 
         let labels = memoryComponents.flatMap { $0.transpiler.labels() }

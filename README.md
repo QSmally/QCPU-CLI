@@ -8,6 +8,7 @@
 * `@HEADER <label> <arguments...?>`
 * `@ADDRESSABLE <namespace>.<label>`
 * `@OVERFLOWABLE`
+* `@MAKEPAGE <name> <upper> <lower>`
 
 **Marcos**
 * `@DECLARE <label> <value>` - private-page marco

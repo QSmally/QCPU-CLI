@@ -92,6 +92,23 @@ extension Transpiler {
             case "@OVERFLOWABLE":
                 memoryComponent.overflowable = true
 
+            case "@MAKEPAGE":
+                guard let name = tagComponents[optional: 0],
+                      let upperMemoryString = tagComponents[optional: 1],
+                      let lowerMemoryString = tagComponents[optional: 2] else {
+                    CLIStateController.terminate("Parse error (\(memoryComponent.name)): missing page name and/or addressing")
+                }
+
+                guard let upperMemoryAddress = Int(upperMemoryString),
+                      let lowerMemoryAddress = Int(lowerMemoryString) else {
+                    CLIStateController.terminate("Parse error (\(memoryComponent.name)): couldn't parse addressing as integers")
+                }
+
+                let address = MemoryComponent.Address(
+                    segment: upperMemoryAddress,
+                    page: lowerMemoryAddress)
+                pages.append(MemoryComponent.empty(name, atAddress: address))
+
             case "@DECLARE":
                 guard let tag = tagComponents[optional: 0],
                       let value = tagComponents[optional: 1] else {

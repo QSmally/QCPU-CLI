@@ -5,8 +5,6 @@
 //  Created by Joey Smalen on 13/12/2021.
 //
 
-import Dispatch
-
 extension EmulatorStateController {
 
     var columns: [[String]] {
