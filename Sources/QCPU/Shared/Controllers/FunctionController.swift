@@ -26,10 +26,17 @@ class FunctionController {
     func parse() -> [String] {
         switch function {
             case "random":
-                return [UUID().uuidString.replacingOccurrences(of: "-", with: "_")]
+                let randomString = UUID().uuidString.replacingOccurrences(of: "-", with: "_")
+                return [randomString]
 
             case "array":
-                return []
+                guard let arraySizeString = arguments[optional: 0],
+                      let arraySize = Int(arraySizeString) else {
+                    CLIStateController.terminate("Parse error (\(memoryComponent.name)): function 'array' requires an array size")
+                }
+
+                let repeatingUtf8 = arguments[optional: 1]?.utf8.first ?? 0
+                return Array(repeating: String(repeatingUtf8), count: arraySize)
 
             default:
                 CLIStateController.terminate("Parse error (\(memoryComponent.name)): invalid function '\(function)'")
