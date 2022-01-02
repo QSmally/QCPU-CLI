@@ -24,7 +24,7 @@
 
 ## Functions
 * `%random`
-* `%array <size> <repeated value>`
+* `%array <size> <repeated ascii value>`
 
 ## Addressing
 * `.label:` - page-private label
