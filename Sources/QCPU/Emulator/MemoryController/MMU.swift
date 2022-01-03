@@ -8,11 +8,12 @@
 final class MMU {
 
     var processId = 0
-    var intermediateSegmentAddress = 0
+    var instructionSegment = 0
+    var dataContext: Int? = nil
 
-    var parameters = [Int]()
+    var callStack = [Int]()
+    var parameterStack = [Int]()
     var mmuArgumentStack = [Int]()
-    var addressCallStack = [Int]()
 
     unowned var emulator: EmulatorStateController
 
@@ -20,93 +21,31 @@ final class MMU {
         self.emulator = emulator
     }
 
-    func store(at address: Int) {
-        emulator.outputStream.append(emulator.accumulator)
-    }
-
-    func load(from address: Int) {
-        CLIStateController.newline("load (\(address)):")
-    }
-
     func pin(at address: Int) {
-        guard emulator.mode == .kernel else {
-            CLIStateController.newline("pin (\(address))")
-            emulator.nextCycle()
-            return
-        }
-
+        /*
         switch address {
-            case 0: // data store
-                let addressTarget = MemoryComponent.Address(
-                    upper: mmuArgumentStack[0],
-                    lower: mmuArgumentStack[1])
-
-                emulator.memory.removeAll { $0.address.equals(to: addressTarget, basedOn: .page) }
-                emulator.memory.append(emulator.dataComponent.clone())
-                emulator.nextCycle()
-
-            case 1: // data load
-                let addressTarget = MemoryComponent.Address(
-                    upper: mmuArgumentStack[0],
-                    lower: mmuArgumentStack[1])
-                let loadedComponentCopy = emulator.memory
-                    .first { $0.address.equals(to: addressTarget, basedOn: .page) }?
-                    .clone()
-
-                emulator.dataComponent = loadedComponentCopy ?? MemoryComponent.empty(atAddress: addressTarget)
-                emulator.nextCycle()
-
-            case 2: // intermediate load
-                let addressTarget = MemoryComponent.Address(
-                    upper: mmuArgumentStack[0],
-                    lower: mmuArgumentStack[optional: 1] ?? 0)
-                let loadedComponent = emulator.memory.first { $0.address.equals(to: addressTarget, basedOn: .page) }
-
-                intermediateSegmentAddress = addressTarget.segment
-                emulator.instructionComponent = loadedComponent ?? MemoryComponent.empty(atAddress: addressTarget)
-                emulator.nextCycle(Int(addressTarget.line))
-
-            case 3: // kernel intermediate load
-                let addressTarget = KernelSegments.kernelCallAddress(fromInstruction: mmuArgumentStack[0])
-                let loadedComponent = emulator.memory.first { $0.address.equals(to: addressTarget, basedOn: .page) }
-
-                intermediateSegmentAddress = addressTarget.segment
-                emulator.instructionComponent = loadedComponent ?? MemoryComponent.empty(atAddress: addressTarget)
-                emulator.nextCycle(0)
-
-            case 4: // exit intermediate load
-                let addressTarget = MemoryComponent.Address(
-                    upper: mmuArgumentStack[0],
-                    lower: mmuArgumentStack[optional: 1] ?? 0)
-                let loadedComponent = emulator.memory.first { $0.address.equals(to: addressTarget, basedOn: .page) }
-
-                intermediateSegmentAddress = addressTarget.segment
-                emulator.mode = .application
-                emulator.instructionComponent = loadedComponent ?? MemoryComponent.empty(atAddress: addressTarget)
-                emulator.nextCycle(Int(addressTarget.line))
-
-            case 5: // pid register
-                processId = emulator.accumulator
-                emulator.nextCycle()
-
-            case 6: // pid load
-                emulator.accumulator = processId
-                emulator.nextCycle()
+            case 0: // data target
+            case 1: // intermediate load
+            case 2: // kernel intermediate load
+            case 3: // exit intermediate load
+            case 4: // pid register
+            case 5: // pid load
 
             default:
                 CLIStateController.terminate("Runtime error: unrecognised MMU action (pin \(address))")
         }
+        */
 
         mmuArgumentStack.removeAll(keepingCapacity: true)
     }
 
     func applicationKernelCall() {
         guard emulator.mode == .application else {
-            CLIStateController.terminate("Runtime error: kernel cannot call a nested system call")
+            CLIStateController.terminate("Runtime error: kernel cannot call a nested system routine")
         }
 
-        let loadedComponent = emulator.memory.first { $0.address.equals(to: KernelSegments.entryCall, basedOn: .page) }
-        intermediateSegmentAddress = Int(KernelSegments.entryCall.segment)
+        let loadedComponent = emulator.memory.at(address: KernelSegments.entryCall)
+        instructionSegment = Int(KernelSegments.entryCall.segment)
 
         emulator.mode = .kernel
         emulator.instructionComponent = loadedComponent ?? MemoryComponent.empty()

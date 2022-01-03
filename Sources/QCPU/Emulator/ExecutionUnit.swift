@@ -8,18 +8,23 @@
 extension EmulatorStateController {
     func clockTick(executing statement: MemoryComponent.Statement, arguments: [Int]) {
         switch statement.representsCompiled! {
-            case .cpl: accumulator = mmu.addressCallStack.popLast() ?? 0
-            case .ppl: accumulator = mmu.parameters.popLast() ?? 0
+            case .cpl: accumulator = mmu.callStack.popLast() ?? 0
+            case .ppl: accumulator = mmu.parameterStack.popLast() ?? 0
             case .msa: mmu.mmuArgumentStack.append(arguments[0])
             case .mda: mmu.mmuArgumentStack.append(accumulator)
             case .nta: accumulator = ~accumulator
             case .dfu: modifiers.flags = false
             case .pcm: modifiers.propagateCarry = true
-            case .pst: mmu.store(at: statement.operand)
-            case .pld: mmu.load(from: statement.operand)
+            // TODO: implement port addressing
+            case .pst: outputStream.append(accumulator)
+            case .pld: CLIStateController.newline("Port (\(statement.operand)): \(accumulator)")
             case .cpn:
-                mmu.pin(at: statement.operand)
-                return
+                if mode == .kernel {
+                    mmu.pin(at: statement.operand)
+                    return
+                } else {
+                    CLIStateController.newline("Pin (\(statement.operand))")
+                }
             case .cnd: condition = statement.operand
             case .imm: zeroTarget(statement.operand) { _ in arguments[0] }
             case .rst: registers[statement.operand] = accumulator
@@ -50,29 +55,36 @@ extension EmulatorStateController {
                 let value = statement.operand == 0 ?
                     arguments[0] :
                     (registers[statement.operand] ?? 0)
-                mmu.addressCallStack.append(value)
+                mmu.callStack.append(value)
             case .pps:
                 let value = statement.operand == 0 ?
                     arguments[0] :
                     (registers[statement.operand] ?? 0)
-                mmu.parameters.append(value)
+                mmu.parameterStack.append(value)
             case .ent:
-                mmu.parameters.append(statement.operand)
+                mmu.parameterStack.append(statement.operand)
                 mmu.applicationKernelCall()
                 return
             case .jmp:
-                nextCycle(arguments[0] | (registers[statement.operand] ?? 0))
+                let address = arguments[0] | (registers[statement.operand] ?? 0)
+                instructionCacheController(page: address >> 5)
+                nextCycle(address & 0x1F)
+                return
             case .brh:
                 if (flags[condition] ?? false) {
-                    nextCycle(arguments[0] | (registers[statement.operand] ?? 0))
+                    let address = arguments[0] | (registers[statement.operand] ?? 0)
+                    instructionCacheController(page: address >> 5)
+                    nextCycle(address & 0x1F)
                     return
                 }
             case .mst:
                 let address = arguments[0] | (registers[statement.operand] ?? 0)
                 let byte = MemoryComponent.Statement(value: accumulator)
-                dataComponent.compiled[address] = byte
+                dataCacheController(page: address >> 5)
+                dataComponent?.compiled[address & 0x1F] = byte
             case .mld:
                 let address = arguments[0] | (registers[statement.operand] ?? 0)
+                dataCacheController(page: address >> 5)
                 accumulator = dataComponent?.compiled[address]?.value ?? 0
             default:
                 break
@@ -102,6 +114,38 @@ extension EmulatorStateController {
         } else {
             accumulator = mutation(registers[operand] ?? 0)
             registers[operand] = accumulator
+        }
+    }
+
+    private func instructionCacheController(page address: Int) {
+        if instructionComponent.address?.page ?? -1 != address {
+            let targetAddress = MemoryComponent.Address(
+                segment: mmu.instructionSegment,
+                page: address)
+
+            // Swap new
+            let loadedComponentCopy = memory
+                .at(address: targetAddress)?
+                .clone()
+            instructionComponent = loadedComponentCopy ?? MemoryComponent.empty(atAddress: targetAddress)
+        }
+    }
+
+    private func dataCacheController(page address: Int) {
+        if dataComponent?.address.page ?? -1 != address {
+            let targetAddress = MemoryComponent.Address(
+                segment: mmu.dataContext ?? mmu.instructionSegment,
+                page: address)
+
+            // Swapback
+            // TODO: emulate optional backswap if data was ever changed
+            memory.insert(memoryComponent: dataComponent.clone())
+
+            // Swap new
+            let loadedComponentCopy = memory
+                .at(address: targetAddress)?
+                .clone()
+            dataComponent = loadedComponentCopy ?? MemoryComponent.empty(atAddress: targetAddress)
         }
     }
 }

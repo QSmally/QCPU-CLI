@@ -41,17 +41,18 @@ extension EmulatorStateController {
                 // State
                 "State",
                 " - Page line: \(line)",
-                " - Segment address: \(mmu.intermediateSegmentAddress)",
                 " - Total cycles: \(cycles)",
+                " - Segment address: \(mmu.instructionSegment)",
+                " - Data context address: \(mmu.dataContext ?? mmu.instructionSegment)",
                 " - Mode: \(mode)"
             ]
                 // Stacks and output
                 .inserted([String.empty, "Ports"])
                 .inserted(outputStream.map { " - \($0)" })
                 .inserted([String.empty, "Parameter stack"])
-                .inserted(mmu.parameters.map { " - \($0)" })
+                .inserted(mmu.parameterStack.map { " - \($0)" })
                 .inserted([String.empty, "Call stack"])
-                .inserted(mmu.addressCallStack.map { " - \($0)" })
+                .inserted(mmu.callStack.map { " - \($0)" })
         ]
     }
 

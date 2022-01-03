@@ -55,12 +55,11 @@ final class EmulatorStateController {
     }
 
     func startClockTimer(withSpeed speed: Double) {
-        guard let entry = memory.first(where: {
-            $0.address.segment == 0 && $0.address.page == 0
-        }) else {
+        guard let entry = memory.at(address: MemoryComponent.Address(segment: 0, page: 0)) else {
             CLIStateController.terminate("Fatal error: no program entry (0, 0)")
         }
 
+        // Initialisation
         for register in 1...7 {
             registers[register] = 0
         }
@@ -69,6 +68,7 @@ final class EmulatorStateController {
         instructionComponent = entry
         updateUI()
 
+        // Clock
         let instructionQueue = DispatchQueue(label: "eu.qbot.qcpu-cli.clock")
         clock = DispatchSource.makeTimerSource(queue: instructionQueue)
         clock?.setEventHandler(handler: clockTickMask)
@@ -89,7 +89,7 @@ final class EmulatorStateController {
             }
 
             let bytes = statement.representsCompiled?
-                .amountSecondaryBytes(withOperand: statement.operand) ?? 0
+                .amountSecondaryBytes(operand: statement.operand) ?? 0
 
             if bytes > 0 {
                 immediateCache = (

@@ -34,3 +34,25 @@ extension Array where Element == String {
         joined(separator: "\n")
     }
 }
+
+extension Array where Element == MemoryComponent {
+    func at(address: MemoryComponent.Address) -> MemoryComponent? {
+        first { $0.address.equals(
+            to: address,
+            basedOn: .page) }
+    }
+
+    func index(ofAddress address: MemoryComponent.Address) -> Int? {
+        firstIndex { $0.address.equals(
+            to: address,
+            basedOn: .page) }
+    }
+
+    mutating func insert(memoryComponent: MemoryComponent) {
+        if let index = index(ofAddress: memoryComponent.address) {
+            self[index] = memoryComponent
+        } else {
+            append(memoryComponent)
+        }
+    }
+}

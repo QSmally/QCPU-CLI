@@ -77,7 +77,7 @@ extension MemoryComponent {
                 }
             }
 
-            func amountSecondaryBytes(withOperand operand: Int) -> Int {
+            func amountSecondaryBytes(operand: Int) -> Int {
                 if [.cps, .pps].contains(self) && operand == 0 {
                     return 1
                 }
