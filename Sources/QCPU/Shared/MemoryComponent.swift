@@ -37,6 +37,7 @@ final class MemoryComponent {
             .map { $0
                 .components(separatedBy: "//").first!
                 .components(separatedBy: ";").first! }
+            .flatMap { $0.components(separatedBy: ",") }
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
         let filename = URL(fileURLWithPath: url)
