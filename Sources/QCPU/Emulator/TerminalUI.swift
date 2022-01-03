@@ -1,5 +1,5 @@
 //
-//  EmulatorUI.swift
+//  TerminalUI.swift
 //  QCPU CLI
 //
 //  Created by Joey Smalen on 13/12/2021.
