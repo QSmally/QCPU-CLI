@@ -8,40 +8,12 @@
 extension EmulatorStateController {
     func clockTick(executing statement: MemoryComponent.Statement, arguments: [Int]) {
         switch statement.representsCompiled! {
-            case .dss:
-                let addressTarget = MemoryComponent.Address(
-                    segment: mmu.intermediateSegmentAddress,
-                    page: arguments[0] | modifiers.pointer)
-                modifiers._pointer = nil
-
-                if let replacementIndex = memory.firstIndex(where: { $0.address.equals(to: addressTarget, basedOn: .page) }) {
-                    memory[replacementIndex] = dataComponent.clone()
-                } else {
-                    memory.append(dataComponent.clone())
-                }
-            case .dls:
-                let addressTarget = MemoryComponent.Address(
-                    segment: mmu.intermediateSegmentAddress,
-                    page: arguments[0] | modifiers.pointer)
-                modifiers._pointer = nil
-
-                let loadedComponentCopy = memory
-                    .first { $0.address.equals(to: addressTarget, basedOn: .page) }?
-                    .clone()
-
-                dataComponent = loadedComponentCopy ?? MemoryComponent.empty(atAddress: addressTarget)
-            case .spl:
-                let addressTarget = MemoryComponent.Address(
-                    upper: mmu.intermediateSegmentAddress,
-                    lower: (arguments[optional: 0] ?? 0) | modifiers.pointer)
-                modifiers._pointer = nil
-
-                let loadedComponent = memory.first { $0.address.equals(to: addressTarget, basedOn: .page) }
-
-                nextCycle(Int(addressTarget.line))
-                instructionComponent = loadedComponent ?? MemoryComponent.empty(atAddress: addressTarget)
-                return
+            case .cpl: accumulator = mmu.addressCallStack.popLast() ?? 0
+            case .ppl: accumulator = mmu.parameters.popLast() ?? 0
+            case .msa: mmu.mmuArgumentStack.append(arguments[0])
+            case .mda: mmu.mmuArgumentStack.append(accumulator)
             case .nta: accumulator = ~accumulator
+            case .dfu: modifiers.flags = false
             case .pcm: modifiers.propagateCarry = true
             case .pst: mmu.store(at: statement.operand)
             case .pld: mmu.load(from: statement.operand)
@@ -66,41 +38,42 @@ extension EmulatorStateController {
                     (registers[statement.operand] ?? 0) -
                     (modifiers.propagateCarry && flags[1]! ? 1 : 0)
                 modifiers.propagateCarry = false
-            case .ent:
-                mmu.parameters.append(arguments[0])
-                mmu.applicationKernelCall()
-                return
-            case .pps: mmu.parameters.append(accumulator)
-            case .ppl: accumulator = mmu.parameters.pop()
-            case .cps:
-                let address = (arguments[optional: 0] ?? 0) | modifiers.pointer
-                mmu.addressCallStack.append(address)
-                modifiers._pointer = nil
-            case .cpl: accumulator = mmu.addressCallStack.pop()
-            case .msa: mmu.mmuArgumentStack.append(arguments[0])
-            case .mda: mmu.mmuArgumentStack.append(accumulator)
-            case .mma: mmu.mmuArgumentStack.append(contentsOf: arguments)
-            case .poi:
-                modifiers._pointer = statement.operand == 0 ?
-                    accumulator :
-                    registers[statement.operand] ?? 0
             case .ior: accumulator = accumulator | (registers[statement.operand] ?? 0)
             case .and: accumulator = accumulator & (registers[statement.operand] ?? 0)
             case .xor: accumulator = accumulator ^ (registers[statement.operand] ?? 0)
-            case .imp: accumulator = ~accumulator | (registers[statement.operand] ?? 0)
+            case .imp: accumulator = ~accumulator & (registers[statement.operand] ?? 0)
+            case .bsl: accumulator = accumulator << statement.operand
+            case .bpl: accumulator = accumulator << (registers[statement.operand] ?? 0)
+            case .bsr: accumulator = accumulator >> statement.operand
+            case .bpr: accumulator = accumulator >> (registers[statement.operand] ?? 0)
+            case .cps:
+                let value = statement.operand == 0 ?
+                    arguments[0] :
+                    (registers[statement.operand] ?? 0)
+                mmu.addressCallStack.append(value)
+            case .pps:
+                let value = statement.operand == 0 ?
+                    arguments[0] :
+                    (registers[statement.operand] ?? 0)
+                mmu.parameters.append(value)
+            case .ent:
+                mmu.parameters.append(statement.operand)
+                mmu.applicationKernelCall()
+                return
             case .jmp:
+                nextCycle(arguments[0] | (registers[statement.operand] ?? 0))
+            case .brh:
                 if (flags[condition] ?? false) {
-                    nextCycle(statement.operand | modifiers.pointer)
-                    modifiers._pointer = nil
+                    nextCycle(arguments[0] | (registers[statement.operand] ?? 0))
                     return
                 }
             case .mst:
+                let address = arguments[0] | (registers[statement.operand] ?? 0)
                 let byte = MemoryComponent.Statement(value: accumulator)
-                dataComponent.compiled[statement.operand | modifiers.pointer] = byte
-                modifiers._pointer = nil
+                dataComponent.compiled[address] = byte
             case .mld:
-                accumulator = dataComponent?.compiled[statement.operand | modifiers.pointer]?.value ?? 0
-                modifiers._pointer = nil
+                let address = arguments[0] | (registers[statement.operand] ?? 0)
+                accumulator = dataComponent?.compiled[address]?.value ?? 0
             default:
                 break
         }
@@ -109,14 +82,18 @@ extension EmulatorStateController {
     }
 
     func updateConditionFlags(changedTo newAccumulator: Int) {
-        flags[0] = true
-        flags[1] = newAccumulator > 255
-        flags[2] = newAccumulator < 0
-        flags[3] = newAccumulator == 0
-        flags[4] = accumulator & 0x01 == 1
-        flags[5] = !flags[1]!
-        flags[6] = !flags[2]!
-        flags[7] = !flags[3]!
+        if modifiers.flags {
+            flags[0] = true
+            flags[1] = newAccumulator > 255
+            flags[2] = newAccumulator < 0
+            flags[3] = newAccumulator == 0
+            flags[4] = accumulator & 0x01 == 1
+            flags[5] = !flags[1]!
+            flags[6] = !flags[2]!
+            flags[7] = !flags[3]!
+        } else {
+            modifiers.flags = true
+        }
     }
 
     private func zeroTarget(_ operand: Int, mutation: (Int) -> Int) {

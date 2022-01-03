@@ -16,8 +16,9 @@ final class EmulatorStateController {
 
     var modifiers = Modifiers()
 
-    var modifierCache: (
+    var immediateCache: (
         statement: MemoryComponent.Statement,
+        bytesNeeded: Int,
         arguments: [Int])!
 
     // Clock and UI
@@ -45,9 +46,8 @@ final class EmulatorStateController {
     }
 
     class Modifiers {
-        var _pointer: Int? = nil
+        var flags = true
         var propagateCarry = false
-        var pointer: Int { _pointer ?? 0 }
     }
 
     init(memoryComponents: [MemoryComponent]) {
@@ -83,41 +83,41 @@ final class EmulatorStateController {
             MemoryComponent.Statement(represents: .nop, operand: 0)
         cycles += 1
 
-        if modifierCache == nil {
+        if immediateCache == nil {
             guard statement.representsCompiled != nil else {
-                CLIStateController.terminate("Runtime error: instruction '\(statement.value)' does not have a compiled instruction")
+                CLIStateController.terminate("Runtime error: byte '\(statement.value)' isn't a compiled instruction")
             }
 
-            let bytes = modifiers._pointer == nil ?
-                statement.representsCompiled?.amountSecondaryBytes ?? 0 :
-                statement.representsCompiled?.amountPointerBytes ?? 0
+            let bytes = statement.representsCompiled?
+                .amountSecondaryBytes(withOperand: statement.operand) ?? 0
 
             if bytes > 0 {
-                modifierCache = (statement: statement, arguments: [])
+                immediateCache = (
+                    statement: statement,
+                    bytesNeeded: bytes,
+                    arguments: [])
                 nextCycle()
-                updateUI()
                 return
             }
 
             clockTick(executing: statement, arguments: [])
         } else {
-            modifierCache.arguments.append(statement.value)
-            
-            if modifierCache.arguments.count == modifierCache.statement.representsCompiled.amountSecondaryBytes {
+            immediateCache.arguments.append(statement.value)
+
+            if immediateCache.arguments.count == immediateCache.bytesNeeded {
                 clockTick(
-                    executing: modifierCache.statement,
-                    arguments: modifierCache.arguments)
-                modifierCache = nil
+                    executing: immediateCache.statement,
+                    arguments: immediateCache.arguments)
+                immediateCache = nil
             } else {
                 nextCycle()
             }
         }
-
-        updateUI()
     }
 
     func nextCycle(_ line: Int? = nil) {
         self.line = line ?? self.line + 1
+        updateUI()
     }
 
     func terminate() {

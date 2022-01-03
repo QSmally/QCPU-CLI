@@ -9,72 +9,56 @@ extension MemoryComponent {
     class Statement {
 
         enum Instruction: Int, CaseIterable {
-            case nop = 0b00000000,
-                 dss = 0b00000001,
-                 dls = 0b00000010,
-                 spl = 0b00000011,
-                 /* 0b00000100 missing */
-                 /* 0b00000101 missing */
-                 nta = 0b00000110,
-                 pcm = 0b00000111,
-                 pst = 0b00001000,
-                 pld = 0b00010000,
-                 cpn = 0b00011000,
-                 cnd = 0b00100000,
-                 imm = 0b00101000,
-                 rst = 0b00110000,
-                 ast = 0b00111000,
-                 inc = 0b01000000,
-                 dec = 0b01001000,
-                 neg = 0b01010000,
-                 rsh = 0b01011000,
-                 add = 0b01100000,
-                 sub = 0b01101000,
-                 ent = 0b01110000,
-                 pps = 0b01110001,
-                 ppl = 0b01110010,
-                 cps = 0b01110011,
-                 cpl = 0b01110100,
-                 msa = 0b01110101,
-                 mda = 0b01110110,
-                 mma = 0b01110111,
-                 poi = 0b01111000,
-                 ior = 0b10000000,
-                 and = 0b10001000,
-                 xor = 0b10010000,
-                 imp = 0b10011000,
-                 jmp = 0b10100000,
-                 mst = 0b11000000,
-                 mld = 0b11100000
+            case nop = 0b0_0000_000,
+                 cpl = 0b0_0000_001,
+                 ppl = 0b0_0000_010,
+                 msa = 0b0_0000_011,
+                 mda = 0b0_0000_100,
+                 nta = 0b0_0000_101,
+                 dfu = 0b0_0000_110,
+                 pcm = 0b0_0000_111,
+                 pst = 0b0_0001_000,
+                 pld = 0b0_0010_000,
+                 cpn = 0b0_0011_000,
+                 cnd = 0b0_0100_000,
+                 imm = 0b0_0101_000,
+                 rst = 0b0_0110_000,
+                 ast = 0b0_0111_000,
+                 inc = 0b0_1000_000,
+                 dec = 0b0_1001_000,
+                 neg = 0b0_1010_000,
+                 rsh = 0b0_1011_000,
+                 add = 0b0_1100_000,
+                 sub = 0b0_1101_000,
+                 ior = 0b0_1110_000,
+                 and = 0b0_1111_000,
+                 xor = 0b1_0000_000,
+                 imp = 0b1_0001_000,
+                 bsl = 0b1_0010_000,
+                 bpl = 0b1_0011_000,
+                 bsr = 0b1_0100_000,
+                 bpr = 0b1_0101_000,
+                 cps = 0b1_0110_000,
+                 pps = 0b1_0111_000,
+                 ent = 0b1_1000_000,
+                 jmp = 0b1_1100_000,
+                 brh = 0b1_1101_000,
+                 mst = 0b1_1110_000,
+                 mld = 0b1_1111_000
 
             var operand: Int {
                 switch self {
-                    case .jmp, .mst, .mld:
+                    case .ent:
                         return 5
                     case .pst, .pld, .cpn, .cnd, .imm, .rst,
                          .ast, .inc, .dec, .neg, .rsh, .add,
-                         .sub, .poi, .ior, .and, .xor, .imp:
+                         .sub, .ior, .and, .xor, .imp, .bsl,
+                         .bpl, .bsr, .bpr, .cps, .pps, .jmp,
+                         .brh, .mst, .mld:
                         return 3
                     default:
                         return 0
                 }
-            }
-
-            var amountSecondaryBytes: Int {
-                switch self {
-                    case .mma:
-                        return 2
-                    case .dss, .dls, .spl, .imm, .ent, .cps, .msa:
-                        return 1
-                    default:
-                        return 0
-                }
-            }
-
-            var amountPointerBytes: Int {
-                return ![.spl, .ent, .cps].contains(self) ?
-                    amountSecondaryBytes :
-                    0
             }
 
             private static var cache = [String: Instruction]()
@@ -91,6 +75,16 @@ extension MemoryComponent {
                 } else {
                     return nil
                 }
+            }
+
+            func amountSecondaryBytes(withOperand operand: Int) -> Int {
+                if [.cps, .pps].contains(self) && operand == 0 {
+                    return 1
+                }
+
+                return [.msa, .mda, .imm, .jmp, .brh, .mst, .mld].contains(self) ?
+                    1 :
+                    0
             }
         }
 
