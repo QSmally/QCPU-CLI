@@ -80,8 +80,10 @@ extension EmulatorStateController {
             case .mst:
                 let address = arguments[0] | (registers[statement.operand] ?? 0)
                 let byte = MemoryComponent.Statement(value: accumulator)
+
                 dataCacheController(page: address >> 5)
                 dataComponent?.compiled[address & 0x1F] = byte
+                mmu.dataCacheNeedsStore = true
             case .mld:
                 let address = arguments[0] | (registers[statement.operand] ?? 0)
                 dataCacheController(page: address >> 5)
@@ -118,7 +120,7 @@ extension EmulatorStateController {
     }
 
     private func instructionCacheController(page address: Int) {
-        if instructionComponent.address?.page ?? -1 != address {
+        if instructionComponent.address?.page ?? -1 != address || !mmu.instructionCacheValidated {
             let targetAddress = MemoryComponent.Address(
                 segment: mmu.instructionSegment,
                 page: address)
@@ -128,19 +130,22 @@ extension EmulatorStateController {
                 .at(address: targetAddress)?
                 .clone()
             instructionComponent = loadedComponentCopy ?? MemoryComponent.empty(atAddress: targetAddress)
+            mmu.instructionCacheValidated = true
         }
     }
 
     private func dataCacheController(page address: Int) {
-        if dataComponent?.address.page ?? -1 != address {
+        if dataComponent?.address.page ?? -1 != address || !mmu.dataCacheValidated {
             let targetAddress = MemoryComponent.Address(
-                segment: mmu.dataContext ?? mmu.instructionSegment,
+                segment: mmu.kernelDataContext ??
+                    mmu.dataContext ??
+                    mmu.instructionSegment,
                 page: address)
 
             // Swapback
-            // TODO: emulate optional backswap if data was ever changed
-            if let dataComponent = dataComponent {
+            if let dataComponent = dataComponent && mmu.dataCacheNeedsStore {
                 memory.insert(memoryComponent: dataComponent.clone())
+                mmu.dataCacheNeedsStore = false
             }
 
             // Swap new
@@ -148,6 +153,7 @@ extension EmulatorStateController {
                 .at(address: targetAddress)?
                 .clone()
             dataComponent = loadedComponentCopy ?? MemoryComponent.empty(atAddress: targetAddress)
+            mmu.dataCacheValidated = true
         }
     }
 }
