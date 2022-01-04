@@ -86,7 +86,7 @@ extension Transpiler {
             }
 
             for (index, name) in headerComponent.header!.parameters.enumerated() {
-                let argument = name.starts(with: "*") ?
+                let argument = name.hasSuffix("...") ?
                     arguments[(index + 1)...].joined(separator: " ") :
                     arguments[index + 1]
                 let replacedComponent = replaceSingleMarco(argument, helpers: helpers)
