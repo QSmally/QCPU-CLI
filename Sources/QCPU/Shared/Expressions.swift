@@ -12,7 +12,7 @@ enum Expressions {
     static let condition = try! NSRegularExpression(pattern: #"#(!?[a-zA-Z]+)"#)
     static let marco     = try! NSRegularExpression(pattern: #"@([a-zA-Z0-9_\.\*]+)"#)
     static let label     = try! NSRegularExpression(pattern: #"^\.(&?)([a-zA-Z0-9_\.]+):$"#)
-    static let address   = try! NSRegularExpression(pattern: #"\.([a-zA-Z0-9_\.]+)(\!?)([-+\*]?)"#)
+    static let address   = try! NSRegularExpression(pattern: #"\.([a-zA-Z0-9_\.]+)(\!?)([+]?)"#)
     static let integer   = try! NSRegularExpression(pattern: #"^(\-?)((?:0x|0b)?)([\dA-F]+)$"#)
     static let ascii     = try! NSRegularExpression(pattern: #"^\$(.+)$"#)
     static let flag      = try! NSRegularExpression(pattern: #"(!?)(.+)"#)

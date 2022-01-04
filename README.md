@@ -31,11 +31,9 @@
 * `.&label:` - segment-scoped label
 
 **Embedded**
-* `.label` - lower five bits
-* `.label*` - page in lower bits 
-* `.label-` - lower byte
-* `.label+` - upper byte
-* `.label!(+,-,*)` - ignore scope error
+* `.label` - lower byte 
+* `.label+` - segment byte
+* `.label!(+)` - ignore scope error
 
 ## Immediate formats
 * `255` - decimal
