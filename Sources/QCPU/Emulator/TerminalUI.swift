@@ -13,14 +13,14 @@ extension EmulatorStateController {
             (dataComponent?.compiled
                 .sorted { $0.key < $1.key }
                 .map { " - \(String($0).padding(toLength: 2)): \($1.value) (\($1.formatted))".padding(toLength: 24) } ?? [])
-                .inserted("Data Memory", at: 0)
+                .inserted("Data Memory (\(mmu.dataCacheValidated ? "V" : "I"))", at: 0)
                 .inserted("(\(dataComponent?.name ?? "untitled"))", at: 1),
 
             // Instruction memory
             (instructionComponent?.compiled
                 .sorted { $0.key < $1.key }
                 .map { " \(line == $0 ? ">" : "-") \(String($0).padding(toLength: 2)): \($1.formatted) (\($1.value))" } ?? [])
-                .inserted("Instruction Memory", at: 0)
+                .inserted("Instruction Memory (\(mmu.instructionCacheValidated ? "V" : "I"))", at: 0)
                 .inserted("(\(instructionComponent?.name ?? "untitled"))", at: 1),
 
             [
@@ -43,7 +43,7 @@ extension EmulatorStateController {
                 " - Page line: \(line)",
                 " - Total cycles: \(cycles)",
                 " - Segment address: \(mmu.instructionSegment)",
-                " - Data context address: \(mmu.dataContext ?? mmu.instructionSegment)",
+                " - Data context address: \(mmu.kernelDataContext ?? mmu.dataContext ?? mmu.instructionSegment)",
                 " - Mode: \(mode)"
             ]
                 // Stacks and output
