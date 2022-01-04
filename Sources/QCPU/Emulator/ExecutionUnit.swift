@@ -85,7 +85,7 @@ extension EmulatorStateController {
             case .mld:
                 let address = arguments[0] | (registers[statement.operand] ?? 0)
                 dataCacheController(page: address >> 5)
-                accumulator = dataComponent?.compiled[address]?.value ?? 0
+                accumulator = dataComponent?.compiled[address & 0x1F]?.value ?? 0
             default:
                 break
         }
@@ -139,7 +139,9 @@ extension EmulatorStateController {
 
             // Swapback
             // TODO: emulate optional backswap if data was ever changed
-            memory.insert(memoryComponent: dataComponent.clone())
+            if let dataComponent = dataComponent {
+                memory.insert(memoryComponent: dataComponent.clone())
+            }
 
             // Swap new
             let loadedComponentCopy = memory
