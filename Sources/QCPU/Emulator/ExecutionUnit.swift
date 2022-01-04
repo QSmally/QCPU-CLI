@@ -8,8 +8,8 @@
 extension EmulatorStateController {
     func clockTick(executing statement: MemoryComponent.Statement, arguments: [Int]) {
         switch statement.representsCompiled! {
-            case .cpl: accumulator = mmu.callStack.popLast() ?? 0
-            case .ppl: accumulator = mmu.parameterStack.popLast() ?? 0
+            case .cpl: accumulator = mmu.callStack.pop()
+            case .ppl: accumulator = mmu.parameterStack.pop()
             case .msa: mmu.mmuArgumentStack.append(arguments[0])
             case .mda: mmu.mmuArgumentStack.append(accumulator)
             case .nta: accumulator = ~accumulator
@@ -54,38 +54,54 @@ extension EmulatorStateController {
             case .cps:
                 let value = statement.operand == 0 ?
                     arguments[0] :
-                    (registers[statement.operand] ?? 0)
+                    statement.operand == 7 ?
+                        accumulator :
+                        registers[statement.operand] ?? 0
                 mmu.callStack.append(value)
             case .pps:
                 let value = statement.operand == 0 ?
                     arguments[0] :
-                    (registers[statement.operand] ?? 0)
+                    statement.operand == 7 ?
+                        accumulator :
+                        registers[statement.operand] ?? 0
                 mmu.parameterStack.append(value)
             case .ent:
-                mmu.parameterStack.append(statement.operand)
-                mmu.applicationKernelCall()
+                mmu.applicationKernelCall(operand: statement.operand)
                 return
             case .jmp:
-                let address = arguments[0] | (registers[statement.operand] ?? 0)
+                let pointer = statement.operand == 7 ?
+                    accumulator :
+                    registers[statement.operand] ?? 0
+                let address = arguments[0] | pointer
+
                 instructionCacheController(page: address >> 5)
                 nextCycle(address & 0x1F)
                 return
             case .brh:
                 if (flags[condition] ?? false) {
-                    let address = arguments[0] | (registers[statement.operand] ?? 0)
+                    let pointer = statement.operand == 7 ?
+                        accumulator :
+                        registers[statement.operand] ?? 0
+                    let address = arguments[0] | pointer
                     instructionCacheController(page: address >> 5)
                     nextCycle(address & 0x1F)
                     return
                 }
             case .mst:
-                let address = arguments[0] | (registers[statement.operand] ?? 0)
+                let pointer = statement.operand == 7 ?
+                    accumulator :
+                    registers[statement.operand] ?? 0
+                let address = arguments[0] | pointer
                 let byte = MemoryComponent.Statement(value: accumulator)
 
                 dataCacheController(page: address >> 5)
                 dataComponent?.compiled[address & 0x1F] = byte
                 mmu.dataCacheNeedsStore = true
             case .mld:
-                let address = arguments[0] | (registers[statement.operand] ?? 0)
+                let pointer = statement.operand == 7 ?
+                    accumulator :
+                    registers[statement.operand] ?? 0
+                let address = arguments[0] | pointer
                 dataCacheController(page: address >> 5)
                 accumulator = dataComponent?.compiled[address & 0x1F]?.value ?? 0
             default:
@@ -143,7 +159,7 @@ extension EmulatorStateController {
                 page: address)
 
             // Swapback
-            if let dataComponent = dataComponent && mmu.dataCacheNeedsStore {
+            if dataComponent != nil && mmu.dataCacheNeedsStore {
                 memory.insert(memoryComponent: dataComponent.clone())
                 mmu.dataCacheNeedsStore = false
             }

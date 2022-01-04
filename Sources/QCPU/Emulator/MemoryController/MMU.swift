@@ -87,10 +87,13 @@ final class MMU {
         mmuArgumentStack.removeAll(keepingCapacity: true)
     }
 
-    func applicationKernelCall() {
+    func applicationKernelCall(operand: Int) {
         guard emulator.mode == .application else {
             CLIStateController.terminate("Runtime error: kernel cannot call a nested system routine")
         }
+
+        let skipsSwap = KernelSegments.skipSwap[operand] ?? 0
+        parameterStack.append((operand << 1) | skipsSwap)
 
         let loadedComponent = emulator.memory.at(address: KernelSegments.entryCall)
         instructionSegment = KernelSegments.entryCall.segment
@@ -98,5 +101,7 @@ final class MMU {
         emulator.mode = .kernel
         emulator.instructionComponent = loadedComponent ?? MemoryComponent.empty(atAddress: KernelSegments.entryCall)
         emulator.nextCycle(KernelSegments.entryCall.line)
+
+        instructionCacheValidated = true
     }
 }

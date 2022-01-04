@@ -82,7 +82,7 @@ extension MemoryComponent {
                     return 1
                 }
 
-                return [.msa, .mda, .imm, .jmp, .brh, .mst, .mld].contains(self) ?
+                return [.msa, .imm, .jmp, .brh, .mst, .mld].contains(self) ?
                     1 :
                     0
             }
