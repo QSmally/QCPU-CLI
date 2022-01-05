@@ -16,8 +16,6 @@ extension EmulatorStateController {
             case .dfu: modifiers.flags = false
             case .pcm: modifiers.propagateCarry = true
             // TODO: implement port addressing
-            case .pst: outputStream.append(accumulator)
-            case .pld: CLIStateController.newline("Port (\(statement.operand)): \(accumulator)")
             case .cpn:
                 if mode == .kernel {
                     mmu.pin(at: statement.operand)
@@ -51,6 +49,12 @@ extension EmulatorStateController {
             case .bpl: accumulator = accumulator << (registers[statement.operand] ?? 0)
             case .bsr: accumulator = accumulator >> statement.operand
             case .bpr: accumulator = accumulator >> (registers[statement.operand] ?? 0)
+            case .pst:
+                // TODO: implement port addressing and devices
+                // let address = arguments[0] | (registers[statement.operand] ?? 0)
+                outputStream.append(accumulator)
+            case .pld:
+                CLIStateController.newline("Port (\(statement.operand)): \(accumulator)")
             case .cps:
                 let value = statement.operand == 0 ?
                     arguments[0] :
