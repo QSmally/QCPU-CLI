@@ -8,8 +8,8 @@
 extension EmulatorStateController {
     func clockTick(executing statement: MemoryComponent.Statement, arguments: [Int]) {
         switch statement.representsCompiled! {
-            case .cpl: accumulator = mmu.callStack.pop()
-            case .ppl: accumulator = mmu.parameterStack.pop()
+            case .cpl: accumulator = mmu.callStack.popLast() ?? 0
+            case .ppl: accumulator = mmu.parameterStack.popLast() ?? 0
             case .msa: mmu.mmuArgumentStack.append(arguments[0])
             case .mda: mmu.mmuArgumentStack.append(accumulator)
             case .nta: accumulator = ~accumulator

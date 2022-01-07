@@ -32,11 +32,15 @@ final class MMU {
                 dataContext = mmuArgumentStack[0]
                 emulator.nextCycle()
 
-            case 1: // kernel data target
+            case 1: // reset data target
+                dataContext = nil
+                emulator.nextCycle()
+
+            case 2: // kernel data target
                 kernelDataContext = mmuArgumentStack[0]
                 emulator.nextCycle()
 
-            case 2: // intermediate load
+            case 3: // intermediate load
                 let addressTarget = MemoryComponent.Address(
                     upper: mmuArgumentStack[0],
                     lower: mmuArgumentStack[optional: 1] ?? 0)
@@ -48,7 +52,7 @@ final class MMU {
 
                 instructionCacheValidated = true
 
-            case 3: // kernel intermediate load
+            case 4: // kernel intermediate load
                 let addressTarget = KernelSegments.kernelCallAddress(fromInstruction: mmuArgumentStack[0])
                 let loadedComponent = emulator.memory.at(address: addressTarget)
 
@@ -58,7 +62,7 @@ final class MMU {
 
                 instructionCacheValidated = true
 
-            case 4: // exit intermediate load
+            case 5: // exit intermediate load
                 let addressTarget = MemoryComponent.Address(
                     upper: mmuArgumentStack[0],
                     lower: mmuArgumentStack[optional: 1] ?? 0)
@@ -72,11 +76,11 @@ final class MMU {
                 kernelDataContext = nil
                 instructionCacheValidated = true
 
-            case 5: // pid register
+            case 6: // pid register
                 processId = emulator.accumulator
                 emulator.nextCycle()
 
-            case 6: // pid load
+            case 7: // pid load
                 emulator.accumulator = processId
                 emulator.nextCycle()
 
