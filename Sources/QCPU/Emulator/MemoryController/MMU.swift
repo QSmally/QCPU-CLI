@@ -77,6 +77,7 @@ final class MMU {
                 instructionCacheValidated = true
 
             case 6: // pid register
+                dataContext = nil
                 processId = emulator.accumulator
                 emulator.nextCycle()
 
