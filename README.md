@@ -29,11 +29,12 @@
 ## Addressing
 * `.label:` - page-private label
 * `.&label:` - segment-scoped label
+* `.[&]label(16):` - change address
 
 **Embedded**
 * `.label` - lower byte 
 * `.label+` - segment byte
-* `.label!(+)` - ignore scope error
+* `.label![+]` - ignore scope error
 
 ## Immediate formats
 * `255` - decimal

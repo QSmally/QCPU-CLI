@@ -57,7 +57,7 @@ extension Transpiler {
         }
     }
 
-    private func integer(_ representativeString: String) -> Int? {
+    func integer(_ representativeString: String) -> Int? {
         if let negativeSymbol = Expressions.integer.match(representativeString, group: 1),
            let base = Expressions.integer.match(representativeString, group: 2),
            let integer = Expressions.integer.match(representativeString, group: 3) {

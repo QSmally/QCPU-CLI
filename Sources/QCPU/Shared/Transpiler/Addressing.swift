@@ -9,11 +9,22 @@ extension Transpiler {
     func labels() -> [MemoryComponent.Label] {
         let labels: [MemoryComponent.Label] = memoryComponent.file.compactMap { instruction in
             if let labelTarget = Expressions.label.match(instruction, group: 2) {
+                if !Expressions.label.match(instruction, group: 3)!.isEmpty {
+                    let addressTarget = Expressions.label.match(instruction, group: 4)!
+                    guard let parsedOrg = integer(addressTarget) else {
+                        CLIStateController.terminate("Parse error (\(memoryComponent.name)): invalid org address '\(addressTarget)'")
+                    }
+
+                    // TODO: redesign org labels to bind to instructions
+                    lineIteratorCount = parsedOrg
+                }
+
                 let isPublicLabel = Expressions.label.match(instruction, group: 1) == "&"
                 let address = MemoryComponent.Address(
                     segment: memoryComponent.address.segment,
                     page: memoryComponent.address.page,
                     line: lineIteratorCount)
+
                 return MemoryComponent.Label(
                     id: labelTarget,
                     address: address,
