@@ -13,7 +13,9 @@ extension EmulatorStateController {
             (dataComponent?.compiled
                 .sorted { $0.key < $1.key }
                 .map { " - \(String($0).padding(toLength: 2)): \($1.value) (\($1.formatted))".padding(toLength: 24) } ?? [])
-                .inserted("Data Memory (\(mmu.dataCacheValidated ? "V" : "I"))", at: 0)
+                // dataCacheValidated 'V'valid 'I'nvalid
+                // dataCacheNeedsStore 'M'modified/unsynced 'U'nchanged/static
+                .inserted("Data Memory (\(mmu.dataCacheValidated ? "V" : "I")) (\(mmu.dataCacheNeedsStore ? "D" : "S"))", at: 0)
                 .inserted("(\(dataComponent?.name ?? "untitled"))", at: 1),
 
             // Instruction memory
