@@ -15,7 +15,6 @@ extension EmulatorStateController {
             case .nta: accumulator = ~accumulator
             case .dfu: modifiers.flags = false
             case .pcm: modifiers.propagateCarry = true
-            // TODO: implement port addressing
             case .cpn:
                 if mode == .kernel {
                     mmu.pin(at: statement.operand)
