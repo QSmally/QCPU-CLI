@@ -10,38 +10,48 @@ extension MemoryComponent {
 
         enum Instruction: Int, CaseIterable {
             case nop = 0b0_0000_000,
-                 cpl = 0b0_0000_001,
+                 psp = 0b0_0000_001,
                  ppl = 0b0_0000_010,
-                 msa = 0b0_0000_011,
-                 mda = 0b0_0000_100,
-                 nta = 0b0_0000_101,
-                 dfu = 0b0_0000_110,
+                 cpl = 0b0_0000_011,
+                 cpa = 0b0_0000_100,
+                 msa = 0b0_0000_101,
+                 nta = 0b0_0000_110,
                  pcm = 0b0_0000_111,
-                 cpn = 0b0_0001_000,
-                 cnd = 0b0_0010_000,
-                 imm = 0b0_0011_000,
+                 // General
+                 cnd = 0b0_0001_000,
+                 imm = 0b0_0010_000,
+                 // Register management
+                 xch = 0b0_0011_000,
                  rst = 0b0_0100_000,
                  ast = 0b0_0101_000,
+                 // Arithmetic
                  inc = 0b0_0110_000,
                  dec = 0b0_0111_000,
                  neg = 0b0_1000_000,
                  rsh = 0b0_1001_000,
                  add = 0b0_1010_000,
                  sub = 0b0_1011_000,
+                 // Logic
                  ior = 0b0_1100_000,
                  and = 0b0_1101_000,
                  xor = 0b0_1110_000,
                  imp = 0b0_1111_000,
+                 // Barrel shifter
                  bsl = 0b1_0000_000,
                  bpl = 0b1_0001_000,
                  bsr = 0b1_0010_000,
                  bpr = 0b1_0011_000,
-                 pst = 0b1_0100_000,
-                 pld = 0b1_0101_000,
-                 cps = 0b1_0110_000,
-                 pps = 0b1_0111_000,
-                 ent = 0b1_1000_000,
-                 jmp = 0b1_1100_000,
+                 // Kernel
+                 ent = 0b1_010_0000,
+                 mmu = 0b1_0110_000,
+                 mda = 0b1_0111_000,
+                 pps = 0b1_1000_000,
+                 // Ports
+                 pst = 0b1_1001_000,
+                 pld = 0b1_1010_000,
+                 // Memory management
+                 jmp = 0b1_1011_000,
+                 cts = 0b1_1100_000,
                  brh = 0b1_1101_000,
                  mst = 0b1_1110_000,
                  mld = 0b1_1111_000
@@ -49,12 +59,12 @@ extension MemoryComponent {
             var operand: Int {
                 switch self {
                     case .ent:
-                        return 5
-                    case .pst, .pld, .cpn, .cnd, .imm, .rst,
-                         .ast, .inc, .dec, .neg, .rsh, .add,
-                         .sub, .ior, .and, .xor, .imp, .bsl,
-                         .bpl, .bsr, .bpr, .cps, .pps, .jmp,
-                         .brh, .mst, .mld:
+                        return 4
+                    case .cnd, .imm, .xch, .rst, .ast, .inc,
+                         .dec, .neg, .rsh, .add, .sub, .ior,
+                         .and, .xor, .imp, .bsl, .bpl, .bsr,
+                         .bpr, .mmu, .mda, .pps, .pst, .pld,
+                         .jmp, .cts, .brh, .mst, .mld:
                         return 3
                     default:
                         return 0
@@ -77,14 +87,8 @@ extension MemoryComponent {
                 }
             }
 
-            func amountSecondaryBytes(operand: Int) -> Int {
-                if [.cps, .pps].contains(self) && operand == 0 {
-                    return 1
-                }
-
-                return [.msa, .imm, .pst, .pld, .jmp, .brh, .mst, .mld].contains(self) ?
-                    1 :
-                    0
+            var hasSecondaryByte: Bool {
+                [.psp, .msa, .imm, .pst, .pld, .jmp, .cts, .brh, .mst, .mld].contains(self)
             }
         }
 
@@ -94,7 +98,7 @@ extension MemoryComponent {
 
         lazy var operand: Int = {
             switch representsCompiled.operand {
-                case 5: return value & 0x1F
+                case 4: return value & 0x0F
                 case 3: return value & 0x07
                 default:
                     return 0

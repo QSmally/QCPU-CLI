@@ -26,8 +26,8 @@ final class MMU {
         self.emulator = emulator
     }
 
-    func pin(at address: Int) {
-        switch address {
+    func execute(instruction: Int) {
+        switch instruction {
             case 0: // data target
                 dataContext = mmuArgumentStack[0]
                 emulator.nextCycle()
@@ -86,7 +86,7 @@ final class MMU {
                 emulator.nextCycle()
 
             default:
-                CLIStateController.terminate("Runtime error: unrecognised MMU action (pin \(address))")
+                CLIStateController.terminate("Runtime error: unrecognised MMU action (pin \(instruction))")
         }
 
         mmuArgumentStack.removeAll(keepingCapacity: true)

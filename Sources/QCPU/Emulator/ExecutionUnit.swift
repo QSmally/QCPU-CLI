@@ -6,107 +6,92 @@
 //
 
 extension EmulatorStateController {
-    func clockTick(executing statement: MemoryComponent.Statement, arguments: [Int]) {
+    func clockTick(executing statement: MemoryComponent.Statement, argument: Int!) {
         switch statement.representsCompiled! {
-            case .cpl: accumulator = mmu.callStack.popLast() ?? 0
+            case .psp: mmu.parameterStack.append(argument)
             case .ppl: accumulator = mmu.parameterStack.popLast() ?? 0
-            case .msa: mmu.mmuArgumentStack.append(arguments[0])
-            case .mda: mmu.mmuArgumentStack.append(accumulator)
+            case .cpl: accumulator = mmu.parameterStack.popLast() ?? 0
+            case .cpa: modifiers.callStackPointer = mmu.parameterStack.popLast() ?? 0
+            case .msa: mmu.mmuArgumentStack.append(argument)
             case .nta: accumulator = ~accumulator
-            case .dfu: modifiers.flags = false
             case .pcm: modifiers.propagateCarry = true
-            case .cpn:
-                if mode == .kernel {
-                    mmu.pin(at: statement.operand)
-                    return
-                } else {
-                    CLIStateController.newline("Pin (\(statement.operand))")
-                }
+
             case .cnd: condition = statement.operand
-            case .imm: zeroTarget(statement.operand) { _ in arguments[0] }
+            case .imm: zeroTarget(statement.operand) { _ in argument }
+
+            case .xch:
+                let accumulatorCopy = accumulator
+                accumulator = registers[statement.operand] ?? 0
+                registers[statement.operand] = accumulatorCopy
             case .rst: registers[statement.operand] = accumulator
             case .ast: accumulator = registers[statement.operand] ?? 0
+
             case .inc: zeroTarget(statement.operand) { $0 + 1 }
             case .dec: zeroTarget(statement.operand) { $0 - 1 }
-            case .neg: zeroTarget(statement.operand) { -$0 }
+            case .neg: zeroTarget(statement.operand) { ~$0 }
             case .rsh: zeroTarget(statement.operand) { $0 >> 1 }
             case .add:
                 accumulator = accumulator +
                     (registers[statement.operand] ?? 0) +
                     (modifiers.propagateCarry && flags[1]! ? 1 : 0)
                 modifiers.propagateCarry = false
-            case .sub:
-                accumulator = accumulator -
-                    (registers[statement.operand] ?? 0) -
-                    (modifiers.propagateCarry && flags[1]! ? 1 : 0)
-                modifiers.propagateCarry = false
+            case .sub: accumulator = accumulator - (registers[statement.operand] ?? 0)
+
             case .ior: accumulator = accumulator | (registers[statement.operand] ?? 0)
             case .and: accumulator = accumulator & (registers[statement.operand] ?? 0)
             case .xor: accumulator = accumulator ^ (registers[statement.operand] ?? 0)
             case .imp: accumulator = ~accumulator & (registers[statement.operand] ?? 0)
+
             case .bsl: accumulator = accumulator << statement.operand
             case .bpl: accumulator = accumulator << (registers[statement.operand] ?? 0)
             case .bsr: accumulator = accumulator >> statement.operand
             case .bpr: accumulator = accumulator >> (registers[statement.operand] ?? 0)
-            case .pst:
-                // TODO: implement port addressing and devices
-                // let address = arguments[0] | (registers[statement.operand] ?? 0)
-                outputStream.append(accumulator)
-            case .pld:
-                CLIStateController.newline("Port (\(statement.operand)): \(accumulator)")
-            case .cps:
-                let value = statement.operand == 0 ?
-                    arguments[0] :
-                    statement.operand == 7 ?
-                        accumulator :
-                        registers[statement.operand] ?? 0
-                mmu.callStack.append(value)
-            case .pps:
-                let value = statement.operand == 0 ?
-                    arguments[0] :
-                    statement.operand == 7 ?
-                        accumulator :
-                        registers[statement.operand] ?? 0
-                mmu.parameterStack.append(value)
+
             case .ent:
                 mmu.applicationKernelCall(operand: statement.operand)
                 return
-            case .jmp:
-                let pointer = statement.operand == 7 ?
-                    accumulator :
-                    registers[statement.operand] ?? 0
-                let address = arguments[0] | pointer
+            case .mmu:
+                if mode == .kernel {
+                    mmu.execute(instruction: statement.operand)
+                    return
+                }
+            case .mda: mmu.mmuArgumentStack.append(sevenTarget(statement.operand))
+            case .pps: mmu.parameterStack.append(sevenTarget(statement.operand))
 
+            // TODO: implement port addressing and devices
+            case .pst: outputStream.append(accumulator)
+            case .pld: outputStream.append(argument)
+
+            case .jmp:
+                let address = sevenTarget(statement.operand) | argument
+                instructionCacheController(page: address >> 5)
+                nextCycle(address & 0x1F)
+                return
+            case .cts:
+                let address = sevenTarget(statement.operand) | argument
+                mmu.callStack.append(instructionComponent.address?.page ?? -1 | line + 1)
                 instructionCacheController(page: address >> 5)
                 nextCycle(address & 0x1F)
                 return
             case .brh:
                 if (flags[condition] ?? false) {
-                    let pointer = statement.operand == 7 ?
-                        accumulator :
-                        registers[statement.operand] ?? 0
-                    let address = arguments[0] | pointer
+                    let address = sevenTarget(statement.operand) | argument
                     instructionCacheController(page: address >> 5)
                     nextCycle(address & 0x1F)
                     return
                 }
             case .mst:
-                let pointer = statement.operand == 7 ?
-                    accumulator :
-                    registers[statement.operand] ?? 0
-                let address = arguments[0] | pointer
+                let address = sevenTarget(statement.operand) | argument
                 let byte = MemoryComponent.Statement(value: accumulator)
 
                 dataCacheController(page: address >> 5)
                 dataComponent?.compiled[address & 0x1F] = byte
                 mmu.dataCacheNeedsStore = true
             case .mld:
-                let pointer = statement.operand == 7 ?
-                    accumulator :
-                    registers[statement.operand] ?? 0
-                let address = arguments[0] | pointer
+                let address = sevenTarget(statement.operand) | argument
                 dataCacheController(page: address >> 5)
                 accumulator = dataComponent?.compiled[address & 0x1F]?.value ?? 0
+
             default:
                 break
         }
@@ -115,18 +100,14 @@ extension EmulatorStateController {
     }
 
     func updateConditionFlags(changedTo newAccumulator: Int) {
-        if modifiers.flags {
-            flags[0] = true
-            flags[1] = newAccumulator > 255
-            flags[2] = newAccumulator < 0
-            flags[3] = newAccumulator == 0
-            flags[4] = accumulator & 0x01 == 1
-            flags[5] = !flags[1]!
-            flags[6] = !flags[2]!
-            flags[7] = !flags[3]!
-        } else {
-            modifiers.flags = true
-        }
+        flags[0] = true
+        flags[1] = newAccumulator > 255
+        flags[2] = newAccumulator < 0
+        flags[3] = newAccumulator == 0
+        flags[4] = accumulator & 0x01 == 1
+        flags[5] = !flags[1]!
+        flags[6] = !flags[2]!
+        flags[7] = !flags[3]!
     }
 
     private func zeroTarget(_ operand: Int, mutation: (Int) -> Int) {
@@ -136,6 +117,12 @@ extension EmulatorStateController {
             accumulator = mutation(registers[operand] ?? 0)
             registers[operand] = accumulator
         }
+    }
+
+    private func sevenTarget(_ operand: Int) -> Int {
+        operand == 7 ?
+            accumulator :
+            (registers[operand] ?? 0)
     }
 
     private func instructionCacheController(page address: Int) {

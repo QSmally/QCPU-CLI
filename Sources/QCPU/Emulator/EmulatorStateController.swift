@@ -18,8 +18,7 @@ final class EmulatorStateController {
 
     var immediateCache: (
         statement: MemoryComponent.Statement,
-        bytesNeeded: Int,
-        arguments: [Int])!
+        argument: Int?)!
 
     // Clock and UI
     var clock: DispatchSourceTimer?
@@ -46,8 +45,8 @@ final class EmulatorStateController {
     }
 
     class Modifiers {
-        var flags = true
         var propagateCarry = false
+        var callStackPointer = 0
     }
 
     init(memoryComponents: [MemoryComponent]) {
@@ -79,44 +78,33 @@ final class EmulatorStateController {
     }
 
     func clockTickMask() {
-        let statement = instructionComponent.compiled[line] ??
-            MemoryComponent.Statement(represents: .nop, operand: 0)
-        cycles += 1
+        guard let statement = instructionComponent.compiled[line] else {
+            nextCycle()
+            return
+        }
 
-        if immediateCache == nil {
+        if let immediateCache = immediateCache {
+            clockTick(
+                executing: immediateCache.statement,
+                argument: immediateCache.argument)
+        } else {
             guard statement.representsCompiled != nil else {
                 CLIStateController.terminate("Runtime error: byte '\(statement.value)' isn't a compiled instruction")
             }
 
-            let bytes = statement.representsCompiled?
-                .amountSecondaryBytes(operand: statement.operand) ?? 0
-
-            if bytes > 0 {
-                immediateCache = (
-                    statement: statement,
-                    bytesNeeded: bytes,
-                    arguments: [])
+            if statement.representsCompiled?.hasSecondaryByte ?? false {
+                immediateCache = (statement: statement, argument: nil)
                 nextCycle()
                 return
             }
 
-            clockTick(executing: statement, arguments: [])
-        } else {
-            immediateCache.arguments.append(statement.value)
-
-            if immediateCache.arguments.count == immediateCache.bytesNeeded {
-                clockTick(
-                    executing: immediateCache.statement,
-                    arguments: immediateCache.arguments)
-                immediateCache = nil
-            } else {
-                nextCycle()
-            }
+            clockTick(executing: statement, argument: nil)
         }
     }
 
     func nextCycle(_ line: Int? = nil) {
         self.line = line ?? self.line + 1
+        cycles += 1
         updateUI()
     }
 
