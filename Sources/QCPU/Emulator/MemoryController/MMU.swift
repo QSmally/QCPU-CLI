@@ -28,31 +28,23 @@ final class MMU {
 
     func execute(instruction: Int) {
         switch instruction {
-            case 0: // data target
+            case 0: // instruction segment store
+                instructionSegment = mmuArgumentStack[0]
+                emulator.nextCycle()
+
+            case 1: // append segment to call stack
+                callStack.append(instructionSegment)
+                emulator.nextCycle()
+
+            case 2: // data segment store
                 dataContext = mmuArgumentStack[0]
                 emulator.nextCycle()
 
-            case 1: // reset data target
-                dataContext = nil
-                emulator.nextCycle()
-
-            case 2: // kernel data target
+            case 3: // kernel data segment store
                 kernelDataContext = mmuArgumentStack[0]
                 emulator.nextCycle()
 
-            case 3: // intermediate load
-                let addressTarget = MemoryComponent.Address(
-                    upper: mmuArgumentStack[0],
-                    lower: mmuArgumentStack[optional: 1] ?? 0)
-                let loadedComponent = emulator.memory.at(address: addressTarget)
-
-                instructionSegment = addressTarget.segment
-                emulator.instructionComponent = loadedComponent ?? MemoryComponent.empty(atAddress: addressTarget)
-                emulator.nextCycle(addressTarget.line)
-
-                instructionCacheValidated = true
-
-            case 4: // kernel intermediate load
+            case 4: // load kernel instruction page
                 let addressTarget = KernelSegments.kernelCallAddress(fromInstruction: mmuArgumentStack[0])
                 let loadedComponent = emulator.memory.at(address: addressTarget)
 
@@ -62,19 +54,10 @@ final class MMU {
 
                 instructionCacheValidated = true
 
-            case 5: // exit intermediate load
-                let addressTarget = MemoryComponent.Address(
-                    upper: mmuArgumentStack[0],
-                    lower: mmuArgumentStack[optional: 1] ?? 0)
-                let loadedComponent = emulator.memory.at(address: addressTarget)
-
-                instructionSegment = addressTarget.segment
+            case 5: // exit kernel mode
                 emulator.mode = .application
-                emulator.instructionComponent = loadedComponent ?? MemoryComponent.empty(atAddress: addressTarget)
-                emulator.nextCycle(addressTarget.line)
-
                 kernelDataContext = nil
-                instructionCacheValidated = true
+                emulator.nextCycle()
 
             case 6: // pid register
                 dataContext = nil
@@ -86,7 +69,7 @@ final class MMU {
                 emulator.nextCycle()
 
             default:
-                CLIStateController.terminate("Runtime error: unrecognised MMU action (pin \(instruction))")
+                CLIStateController.terminate("Runtime error: unrecognised MMU action (\(instruction))")
         }
 
         mmuArgumentStack.removeAll(keepingCapacity: true)
