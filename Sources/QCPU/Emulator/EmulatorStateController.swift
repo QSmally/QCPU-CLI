@@ -15,10 +15,7 @@ final class EmulatorStateController {
     var mode: ExecutionContext = .kernel
 
     var modifiers = Modifiers()
-
-    var immediateCache: (
-        statement: MemoryComponent.Statement,
-        argument: Int?)!
+    var immediateStatement: MemoryComponent.Statement!
 
     // Clock and UI
     var clock: DispatchSourceTimer?
@@ -83,22 +80,23 @@ final class EmulatorStateController {
             return
         }
 
-        if let immediateCache = immediateCache {
+        if let immediateStatement = immediateStatement {
             clockTick(
-                executing: immediateCache.statement,
-                argument: immediateCache.argument)
+                executing: immediateStatement,
+                argument: statement.value)
+            self.immediateStatement = nil
         } else {
             guard statement.representsCompiled != nil else {
                 CLIStateController.terminate("Runtime error: byte '\(statement.value)' isn't a compiled instruction")
             }
 
             if statement.representsCompiled?.hasSecondaryByte ?? false {
-                immediateCache = (statement: statement, argument: nil)
+                immediateStatement = statement
                 nextCycle()
                 return
             }
 
-            clockTick(executing: statement, argument: nil)
+            clockTick(executing: statement, argument: 0)
         }
     }
 

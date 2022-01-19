@@ -6,7 +6,7 @@
 //
 
 extension EmulatorStateController {
-    func clockTick(executing statement: MemoryComponent.Statement, argument: Int!) {
+    func clockTick(executing statement: MemoryComponent.Statement, argument: Int) {
         switch statement.representsCompiled! {
             case .psp: mmu.parameterStack.append(argument)
             case .ppl: accumulator = mmu.parameterStack.popLast() ?? 0
