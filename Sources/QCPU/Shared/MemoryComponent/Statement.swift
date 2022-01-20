@@ -12,9 +12,9 @@ extension MemoryComponent {
             case nop = 0b0_0000_000,
                  psp = 0b0_0000_001,
                  ppl = 0b0_0000_010,
-                 cpl = 0b0_0000_011,
-                 cpa = 0b0_0000_100,
-                 /* 0b0_0000_101 empty */
+                 cpp = 0b0_0000_011,
+                 cpl = 0b0_0000_100,
+                 cpa = 0b0_0000_101,
                  nta = 0b0_0000_110,
                  pcm = 0b0_0000_111,
                  // General

@@ -42,8 +42,8 @@ final class EmulatorStateController {
     }
 
     class Modifiers {
+        var pointer = 0
         var propagateCarry = false
-        var callStackPointer = 0
     }
 
     init(memoryComponents: [MemoryComponent]) {

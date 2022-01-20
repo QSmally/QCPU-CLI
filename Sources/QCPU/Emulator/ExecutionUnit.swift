@@ -10,8 +10,9 @@ extension EmulatorStateController {
         switch statement.representsCompiled! {
             case .psp: mmu.parameterStack.append(argument)
             case .ppl: accumulator = mmu.parameterStack.popLast() ?? 0
+            case .cpp: mmu.callStack.append(line + 2)
             case .cpl: accumulator = mmu.parameterStack.popLast() ?? 0
-            case .cpa: modifiers.callStackPointer = mmu.parameterStack.popLast() ?? 0
+            case .cpa: modifiers.pointer |= mmu.parameterStack.popLast() ?? 0
             case .nta: accumulator = ~accumulator
             case .pcm: modifiers.propagateCarry = true
 
@@ -62,34 +63,43 @@ extension EmulatorStateController {
             case .pld: outputStream.append(argument)
 
             case .jmp:
-                let address = sevenTarget(statement.operand) | argument
+                let address = sevenTarget(statement.operand) | argument | modifiers.pointer
+
                 instructionCacheController(page: address >> 5)
                 nextCycle(address & 0x1F)
+                modifiers.pointer = 0
                 return
             case .cts:
-                let address = sevenTarget(statement.operand) | argument
+                let address = sevenTarget(statement.operand) | argument | modifiers.pointer
+
                 mmu.callStack.append(instructionComponent.address?.page ?? -1 | line + 1)
                 instructionCacheController(page: address >> 5)
                 nextCycle(address & 0x1F)
+                modifiers.pointer = 0
                 return
             case .brh:
                 if (flags[condition] ?? false) {
-                    let address = sevenTarget(statement.operand) | argument
+                    let address = sevenTarget(statement.operand) | argument | modifiers.pointer
+
                     instructionCacheController(page: address >> 5)
                     nextCycle(address & 0x1F)
+                    modifiers.pointer = 0
                     return
                 }
             case .mst:
-                let address = sevenTarget(statement.operand) | argument
+                let address = sevenTarget(statement.operand) | argument | modifiers.pointer
                 let byte = MemoryComponent.Statement(value: accumulator)
 
                 dataCacheController(page: address >> 5)
                 dataComponent?.compiled[address & 0x1F] = byte
                 mmu.dataCacheNeedsStore = true
+                modifiers.pointer = 0
             case .mld:
-                let address = sevenTarget(statement.operand) | argument
+                let address = sevenTarget(statement.operand) | argument | modifiers.pointer
+
                 dataCacheController(page: address >> 5)
                 accumulator = dataComponent?.compiled[address & 0x1F]?.value ?? 0
+                modifiers.pointer = 0
 
             default:
                 break
