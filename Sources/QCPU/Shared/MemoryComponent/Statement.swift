@@ -14,7 +14,7 @@ extension MemoryComponent {
                  ppl = 0b0_0000_010,
                  cpl = 0b0_0000_011,
                  cpa = 0b0_0000_100,
-                 msa = 0b0_0000_101,
+                 /* 0b0_0000_101 empty */
                  nta = 0b0_0000_110,
                  pcm = 0b0_0000_111,
                  // General
@@ -44,7 +44,7 @@ extension MemoryComponent {
                  // Kernel
                  ent = 0b1_010_0000,
                  mmu = 0b1_0110_000,
-                 mda = 0b1_0111_000,
+                 prf = 0b1_0111_000,
                  pps = 0b1_1000_000,
                  // Ports
                  pst = 0b1_1001_000,
@@ -63,7 +63,7 @@ extension MemoryComponent {
                     case .cnd, .imm, .xch, .rst, .ast, .inc,
                          .dec, .neg, .rsh, .add, .sub, .ior,
                          .and, .xor, .imp, .bsl, .bpl, .bsr,
-                         .bpr, .mmu, .mda, .pps, .pst, .pld,
+                         .bpr, .mmu, .prf, .pps, .pst, .pld,
                          .jmp, .cts, .brh, .mst, .mld:
                         return 3
                     default:
@@ -88,7 +88,7 @@ extension MemoryComponent {
             }
 
             var hasSecondaryByte: Bool {
-                [.psp, .msa, .imm, .pst, .pld, .jmp, .cts, .brh, .mst, .mld].contains(self)
+                [.psp, .imm, .pst, .pld, .jmp, .cts, .brh, .mst, .mld].contains(self)
             }
         }
 

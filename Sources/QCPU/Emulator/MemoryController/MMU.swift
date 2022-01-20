@@ -18,7 +18,6 @@ final class MMU {
 
     var callStack = [Int]()
     var parameterStack = [Int]()
-    var mmuArgumentStack = [Int]()
 
     unowned var emulator: EmulatorStateController
 
@@ -29,7 +28,7 @@ final class MMU {
     func execute(instruction: Int) {
         switch instruction {
             case 0: // instruction segment store
-                instructionSegment = mmuArgumentStack[0]
+                instructionSegment = emulator.accumulator
                 emulator.nextCycle()
 
             case 1: // append segment to call stack
@@ -37,15 +36,15 @@ final class MMU {
                 emulator.nextCycle()
 
             case 2: // data segment store
-                dataContext = mmuArgumentStack[0]
+                dataContext = emulator.accumulator
                 emulator.nextCycle()
 
             case 3: // kernel data segment store
-                kernelDataContext = mmuArgumentStack[0]
+                kernelDataContext = emulator.accumulator
                 emulator.nextCycle()
 
             case 4: // load kernel instruction page
-                let addressTarget = KernelSegments.kernelCallAddress(fromInstruction: mmuArgumentStack[0])
+                let addressTarget = KernelSegments.kernelCallAddress(fromInstruction: emulator.accumulator)
                 let loadedComponent = emulator.memory.at(address: addressTarget)
 
                 instructionSegment = addressTarget.segment
@@ -71,8 +70,6 @@ final class MMU {
             default:
                 CLIStateController.terminate("Runtime error: unrecognised MMU action (\(instruction))")
         }
-
-        mmuArgumentStack.removeAll(keepingCapacity: true)
     }
 
     func applicationKernelCall(operand: Int) {

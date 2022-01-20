@@ -12,7 +12,6 @@ extension EmulatorStateController {
             case .ppl: accumulator = mmu.parameterStack.popLast() ?? 0
             case .cpl: accumulator = mmu.parameterStack.popLast() ?? 0
             case .cpa: modifiers.callStackPointer = mmu.parameterStack.popLast() ?? 0
-            case .msa: mmu.mmuArgumentStack.append(argument)
             case .nta: accumulator = ~accumulator
             case .pcm: modifiers.propagateCarry = true
 
@@ -55,7 +54,7 @@ extension EmulatorStateController {
                     mmu.execute(instruction: statement.operand)
                     return
                 }
-            case .mda: mmu.mmuArgumentStack.append(sevenTarget(statement.operand))
+            case .prf: dataCacheController(page: statement.operand)
             case .pps: mmu.parameterStack.append(sevenTarget(statement.operand))
 
             // TODO: implement port addressing and devices
