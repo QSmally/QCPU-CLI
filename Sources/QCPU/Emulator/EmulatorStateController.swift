@@ -86,11 +86,11 @@ final class EmulatorStateController {
                 argument: statement.value)
             self.immediateStatement = nil
         } else {
-            guard statement.representsCompiled != nil else {
+            guard let compiledStatement = statement.representsCompiled else {
                 CLIStateController.terminate("Runtime error: byte '\(statement.value)' isn't a compiled instruction")
             }
 
-            if statement.representsCompiled?.hasSecondaryByte ?? false {
+            if compiledStatement.hasSecondaryByte {
                 immediateStatement = statement
                 nextCycle()
                 return
