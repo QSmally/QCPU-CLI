@@ -67,7 +67,7 @@ extension EmulatorStateController {
                 nextCycle(address & 0b0001_1111)
                 modifiers.pointer = 0
                 return
-            case .cts:
+            case .cal:
                 let address = sevenTarget(statement.operand) | argument | modifiers.pointer
 
                 mmu.callStack.append(instructionComponent.address?.page ?? -1 | line + 1)
