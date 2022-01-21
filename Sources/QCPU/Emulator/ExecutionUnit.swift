@@ -8,16 +8,16 @@
 extension EmulatorStateController {
     func clockTick(executing statement: MemoryComponent.Statement, argument: Int) {
         switch statement.representsCompiled! {
-            case .psp: mmu.parameterStack.append(argument)
+            case .ppi: mmu.parameterStack.append(argument)
             case .ppl: accumulator = mmu.parameterStack.popLast() ?? 0
             case .cpp: mmu.callStack.append(line + 2)
             case .cpl: accumulator = mmu.parameterStack.popLast() ?? 0
-            case .cpa: modifiers.pointer |= mmu.parameterStack.popLast() ?? 0
             case .nta: accumulator = ~accumulator
             case .pcm: modifiers.propagateCarry = true
 
             case .cnd: condition = statement.operand
             case .imm: zeroTarget(statement.operand) { _ in argument }
+            case .pps: mmu.parameterStack.append(sevenTarget(statement.operand))
 
             case .xch:
                 let accumulatorCopy = accumulator
@@ -40,7 +40,6 @@ extension EmulatorStateController {
             case .ior: accumulator = accumulator | (registers[statement.operand] ?? 0)
             case .and: accumulator = accumulator & (registers[statement.operand] ?? 0)
             case .xor: accumulator = accumulator ^ (registers[statement.operand] ?? 0)
-            case .imp: accumulator = ~accumulator & (registers[statement.operand] ?? 0)
 
             case .bsl: accumulator = accumulator << statement.operand
             case .bpl: accumulator = accumulator << (registers[statement.operand] ?? 0)
@@ -56,7 +55,6 @@ extension EmulatorStateController {
                     return
                 }
             case .prf: dataCacheController(page: statement.operand)
-            case .pps: mmu.parameterStack.append(sevenTarget(statement.operand))
 
             // TODO: implement port addressing and devices
             case .pst: outputStream.append(accumulator)
@@ -66,7 +64,7 @@ extension EmulatorStateController {
                 let address = sevenTarget(statement.operand) | argument | modifiers.pointer
 
                 instructionCacheController(page: address >> 5)
-                nextCycle(address & 0x1F)
+                nextCycle(address & 0b0001_1111)
                 modifiers.pointer = 0
                 return
             case .cts:
@@ -74,7 +72,7 @@ extension EmulatorStateController {
 
                 mmu.callStack.append(instructionComponent.address?.page ?? -1 | line + 1)
                 instructionCacheController(page: address >> 5)
-                nextCycle(address & 0x1F)
+                nextCycle(address & 0b0001_1111)
                 modifiers.pointer = 0
                 return
             case .brh:
@@ -82,7 +80,7 @@ extension EmulatorStateController {
                     let address = sevenTarget(statement.operand) | argument | modifiers.pointer
 
                     instructionCacheController(page: address >> 5)
-                    nextCycle(address & 0x1F)
+                    nextCycle(address & 0b0001_1111)
                     modifiers.pointer = 0
                     return
                 }
@@ -91,14 +89,14 @@ extension EmulatorStateController {
                 let byte = MemoryComponent.Statement(value: accumulator)
 
                 dataCacheController(page: address >> 5)
-                dataComponent?.compiled[address & 0x1F] = byte
+                dataComponent?.compiled[address & 0b0001_1111] = byte
                 mmu.dataCacheNeedsStore = true
                 modifiers.pointer = 0
             case .mld:
                 let address = sevenTarget(statement.operand) | argument | modifiers.pointer
 
                 dataCacheController(page: address >> 5)
-                accumulator = dataComponent?.compiled[address & 0x1F]?.value ?? 0
+                accumulator = dataComponent?.compiled[address & 0b0001_1111]?.value ?? 0
                 modifiers.pointer = 0
 
             default:
