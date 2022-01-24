@@ -59,14 +59,14 @@ extension Transpiler {
 
     private func parseConditionFlag(_ flag: String, from statement: String) -> String {
         switch flag {
-            case "true":      return "0"
-            case "cout":      return "1"
-            case "signed":    return "2"
-            case "zero":      return "3"
-            case "underflow": return "4"
-            case "!cout":     return "5"
-            case "!signed":   return "6"
-            case "!zero":     return "7"
+            case "cout":       return "0"
+            case "signed":     return "1"
+            case "zero":       return "2"
+            case "underflow":  return "3"
+            case "!cout":      return "4"
+            case "!signed":    return "5"
+            case "!zero":      return "6"
+            case "!underflow": return "7"
             default:
                 CLIStateController.terminate("Parse error (\(memoryComponent.name)): invalid condition marco '\(flag)'")
         }

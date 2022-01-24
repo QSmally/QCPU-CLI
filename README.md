@@ -44,7 +44,6 @@
 * `$CPU2` - ascii string
 
 ## Conditions
-* `#true`
 * `#cout`
 * `#signed`
 * `#zero`
@@ -52,3 +51,4 @@
 * `#!cout`
 * `#!signed`
 * `#!zero`
+* `#!underflow`
