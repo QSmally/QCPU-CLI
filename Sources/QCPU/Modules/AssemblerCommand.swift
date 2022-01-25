@@ -10,18 +10,18 @@ final class AssemblerCommand: Command {
     lazy var build = stateContext.directoryCreate(named: "build")
 
     override func execute() {
-        stateContext.storage
+        stateContext
             .deobfuscate()
             .addressTargets()
             .transpile()
 
-        stateContext.storage.memoryComponents.forEach {
+        stateContext.memoryComponents.forEach {
             print("\($0.name) (\($0.file.count))")
             print($0.file)
         }
 
         let segments = Dictionary(
-            grouping: stateContext.storage.memoryComponents,
+            grouping: stateContext.memoryComponents,
             by: { $0.address.segment })
         outputSegmentComponents(segments)
     }

@@ -12,12 +12,12 @@ final class RunCommand: Command {
         5
 
     override func execute() {
-        stateContext.storage
+        stateContext
             .deobfuscate()
             .addressTargets()
             .transpile()
 
-        EmulatorStateController(memoryComponents: stateContext.storage.memoryComponents)
+        EmulatorStateController(memoryComponents: stateContext.memoryComponents)
             .startClockTimer(withSpeed: speed)
     }
 }

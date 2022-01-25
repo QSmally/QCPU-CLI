@@ -30,18 +30,12 @@ extension MemoryComponent {
             self.line = lower & 0x1F
         }
 
-        func equals(to address: Address, basedOn mode: Mode = .line) -> Bool {
-            switch mode {
-                case .segment:
-                    return segment == address.segment
-                case .page:
-                    return segment == address.segment &&
-                        page == address.page
-                case .line:
-                    return segment == address.segment &&
-                        page == address.page &&
-                        line == address.line
-            }
+        func equals(toSegment address: Address) -> Bool {
+            segment == address.segment
+        }
+
+        func equals(toPage address: Address) -> Bool {
+            segment == address.segment && page == address.page
         }
 
         func parse(mode: String) -> String {

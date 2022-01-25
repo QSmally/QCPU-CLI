@@ -17,7 +17,7 @@ final class DocumentationCommand: Command {
         let headers = stateContext.directoryCreate(
             named: "headers",
             at: documentations)
-        stateContext.storage.memoryComponents
+        stateContext.memoryComponents
             .map { $0.transpiler.tags() }
             .filter { $0.header != nil }
             .forEach { headerContent(memoryComponent: $0, at: headers) }

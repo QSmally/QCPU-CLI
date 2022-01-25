@@ -13,7 +13,11 @@ final class StateContext {
 
     var fileContext = FileManager.default
 
-    lazy var storage: StorageComponent = {
+    var insertableComponents: [MemoryComponent] {
+        memoryComponents.filter { $0.header != nil || $0.enumeration != nil }
+    }
+
+    lazy var memoryComponents: [MemoryComponent] = {
         if CLIStateController.arguments.count < 2 {
             CLIStateController.terminate("Fatal error: input a source directory path")
         }
@@ -35,11 +39,10 @@ final class StateContext {
             options: [.skipsHiddenFiles, .skipsPackageDescendants])
 
         if let iterator = iterator {
-            let memoryComponents = iterator.allObjects
+            return iterator.allObjects
                 .map { ($0 as! NSURL).relativePath! }
                 .filter { $0.hasSuffix(".s") }
                 .map { MemoryComponent.create(url: $0) }
-            return StorageComponent(memoryComponents)
         }
 
         CLIStateController.terminate("Fatal error: missing permissions to read directory")
@@ -71,5 +74,40 @@ final class StateContext {
             atPath: absolutePathTarget.relativePath,
             contents: Data(data.utf8),
             attributes: nil)
+    }
+
+    @discardableResult func deobfuscate() -> StateContext {
+        memoryComponents
+            .map { $0.transpiler.tags() }
+            .filter { $0.transpiler.isCodeBlock }
+            .forEach { $0.transpiler.prepare(helpers: insertableComponents) }
+
+        memoryComponents
+            .map { $0.transpiler.pages }
+            .forEach { memoryComponents.append(contentsOf: $0) }
+        memoryComponents
+            .removeAll { !$0.transpiler.isCodeBlock }
+
+        return self
+    }
+
+    @discardableResult func addressTargets() -> StateContext {
+        let addressables = memoryComponents
+            .filter { $0.namespaceCallable != nil }
+            .map { MemoryComponent.Label(
+                id: $0.namespaceCallable!,
+                address: MemoryComponent.Address(
+                    segment: $0.address.segment,
+                    page: $0.address.page),
+                privacy: .global) }
+
+        let labels = memoryComponents.flatMap { $0.transpiler.labels() }
+        memoryComponents.forEach { $0.transpiler.insertAddressTargets(labels: addressables + labels) }
+        return self
+    }
+
+    @discardableResult func transpile() -> StateContext {
+        memoryComponents.forEach { $0.transpiler.binary() }
+        return self
     }
 }

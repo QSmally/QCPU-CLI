@@ -22,16 +22,18 @@ final class MemoryComponent {
         cases: [String: String])?
     var declarations = [String: String]()
 
-    var file: [String]
-    var compiled = [Int: Statement]()
+    var instructions: RandomInsertArray<Statement>
     lazy var transpiler = Transpiler(self)
 
-    init(_ name: String, fromSource instructions: [String]) {
+    init(_ name: String, fromSource instructions: [Statement]) {
         self.name = name
-        self.file = instructions
+        self.instructions = RandomInsertArray(contentsOf: instructions)
     }
 
     static func create(url: String) -> MemoryComponent {
+        let filename = URL(fileURLWithPath: url)
+            .deletingPathExtension()
+            .lastPathComponent
         let fileContents = try! String(contentsOfFile: url)
             .components(separatedBy: .newlines)
             .map { $0
@@ -40,9 +42,7 @@ final class MemoryComponent {
             .flatMap { $0.components(separatedBy: ",") }
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
-        let filename = URL(fileURLWithPath: url)
-            .deletingPathExtension()
-            .lastPathComponent
+            .map { Statement(fromString: $0) }
         return MemoryComponent(filename, fromSource: fileContents)
     }
 
@@ -63,7 +63,7 @@ final class MemoryComponent {
         clonedMemoryComponent.header = header
         clonedMemoryComponent.enumeration = enumeration
         clonedMemoryComponent.declarations = declarations
-        clonedMemoryComponent.compiled = compiled
+        clonedMemoryComponent.instructions = instructions
 
         return clonedMemoryComponent
     }
