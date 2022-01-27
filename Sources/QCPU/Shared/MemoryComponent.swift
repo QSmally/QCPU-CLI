@@ -22,12 +22,13 @@ final class MemoryComponent {
         cases: [String: String])?
     var declarations = [String: String]()
 
-    var instructions: RandomInsertArray<Statement>
+    var representativeStrings: [String]
+    var binary = RandomInsertArray<Statement>()
     lazy var transpiler = Transpiler(self)
 
-    init(_ name: String, fromSource instructions: [Statement]) {
+    init(_ name: String, fromSource instructions: [String]) {
         self.name = name
-        self.instructions = RandomInsertArray(contentsOf: instructions)
+        self.representativeStrings = instructions
     }
 
     static func create(url: String) -> MemoryComponent {
@@ -42,7 +43,6 @@ final class MemoryComponent {
             .flatMap { $0.components(separatedBy: ",") }
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
-            .map { Statement(fromString: $0) }
         return MemoryComponent(filename, fromSource: fileContents)
     }
 
@@ -58,13 +58,31 @@ final class MemoryComponent {
     }
 
     func clone() -> MemoryComponent {
-        let clonedMemoryComponent = MemoryComponent(name, fromSource: file)
+        let clonedMemoryComponent = MemoryComponent(name, fromSource: representativeStrings)
         clonedMemoryComponent.address = address
         clonedMemoryComponent.header = header
         clonedMemoryComponent.enumeration = enumeration
         clonedMemoryComponent.declarations = declarations
-        clonedMemoryComponent.instructions = instructions
+        clonedMemoryComponent.binary = binary
 
         return clonedMemoryComponent
+    }
+}
+
+extension Array where Element == MemoryComponent {
+    func locate(address: MemoryComponent.Address) -> MemoryComponent? {
+        first { $0.address.equals(toPage: address) }
+    }
+
+    func index(ofAddress address: MemoryComponent.Address) -> Int? {
+        firstIndex { $0.address.equals(toPage: address) }
+    }
+
+    mutating func insert(memoryComponent: MemoryComponent) {
+        if let index = index(ofAddress: memoryComponent.address) {
+            self[index] = memoryComponent
+        } else {
+            append(memoryComponent)
+        }
     }
 }

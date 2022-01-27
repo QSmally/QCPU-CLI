@@ -76,38 +76,42 @@ final class StateContext {
             attributes: nil)
     }
 
-    @discardableResult func deobfuscate() -> StateContext {
-        memoryComponents
-            .map { $0.transpiler.tags() }
-            .filter { $0.transpiler.isCodeBlock }
-            .forEach { $0.transpiler.prepare(helpers: insertableComponents) }
-
-        memoryComponents
-            .map { $0.transpiler.pages }
-            .forEach { memoryComponents.append(contentsOf: $0) }
-        memoryComponents
-            .removeAll { !$0.transpiler.isCodeBlock }
+    // Tags, headers and macros
+    @discardableResult func preprocessor() -> StateContext {
+//        memoryComponents
+//            .map { $0.transpiler.parseTags() }
+//            .filter { $0.transpiler.isCodeBlock }
+//            .forEach { $0.transpiler.preprocessor(withComponents: insertableComponents) }
+//
+//        memoryComponents
+//            .map { $0.transpiler.pagesGenerated }
+//            .forEach { memoryComponents.append(contentsOf: $0) }
+//
+//        memoryComponents
+//            .removeAll { !$0.transpiler.isCodeBlock }
 
         return self
     }
 
-    @discardableResult func addressTargets() -> StateContext {
-        let addressables = memoryComponents
-            .filter { $0.namespaceCallable != nil }
-            .map { MemoryComponent.Label(
-                id: $0.namespaceCallable!,
-                address: MemoryComponent.Address(
-                    segment: $0.address.segment,
-                    page: $0.address.page),
-                privacy: .global) }
-
-        let labels = memoryComponents.flatMap { $0.transpiler.labels() }
-        memoryComponents.forEach { $0.transpiler.insertAddressTargets(labels: addressables + labels) }
+    // Labels and addressing
+    @discardableResult func references() -> StateContext {
+//        let addressables = memoryComponents
+//            .filter { $0.namespaceCallable != nil }
+//            .map { MemoryComponent.Label(
+//                id: $0.namespaceCallable!,
+//                address: MemoryComponent.Address(
+//                    segment: $0.address.segment,
+//                    page: $0.address.page),
+//                privacy: .global) }
+//
+//        let labels = memoryComponents.flatMap { $0.transpiler.labels() }
+//        memoryComponents.forEach { $0.transpiler.insertAddressTargets(labels: addressables + labels) }
         return self
     }
 
+    // Transpiler to QCPU 2 machine binary
     @discardableResult func transpile() -> StateContext {
-        memoryComponents.forEach { $0.transpiler.binary() }
+//        memoryComponents.forEach { $0.transpiler.binary() }
         return self
     }
 }

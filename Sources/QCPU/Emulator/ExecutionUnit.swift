@@ -89,14 +89,14 @@ extension EmulatorStateController {
                 let byte = MemoryComponent.Statement(value: accumulator)
 
                 dataCacheController(page: address >> 5)
-                dataComponent?.compiled[address & 0b0001_1111] = byte
+                dataComponent?.binary[address & 0b0001_1111] = byte
                 mmu.dataCacheNeedsStore = true
                 modifiers.pointer = 0
             case .mld:
                 let address = sevenTarget(statement.operand) | argument | modifiers.pointer
 
                 dataCacheController(page: address >> 5)
-                accumulator = dataComponent?.compiled[address & 0b0001_1111]?.value ?? 0
+                accumulator = dataComponent?.binary[address & 0b0001_1111]?.value ?? 0
                 modifiers.pointer = 0
 
             default:
@@ -140,7 +140,7 @@ extension EmulatorStateController {
 
             // Swap new
             let loadedComponentCopy = memory
-                .at(address: targetAddress)?
+                .locate(address: targetAddress)?
                 .clone()
             instructionComponent = loadedComponentCopy ?? MemoryComponent.empty(atAddress: targetAddress)
             mmu.instructionCacheValidated = true
@@ -163,7 +163,7 @@ extension EmulatorStateController {
 
             // Swap new
             let loadedComponentCopy = memory
-                .at(address: targetAddress)?
+                .locate(address: targetAddress)?
                 .clone()
             dataComponent = loadedComponentCopy ?? MemoryComponent.empty(atAddress: targetAddress)
             mmu.dataCacheValidated = true

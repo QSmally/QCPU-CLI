@@ -17,10 +17,8 @@ final class Transpiler {
     unowned var memoryComponent: MemoryComponent
 
     var tagAmount = 0
-    var lineIteratorCount = 0
-    var indentations = [IndentationController]()
-
-    var pages = [MemoryComponent]()
+    var layers = [IndentationLayer]()
+    var pagesGenerated = [MemoryComponent]()
 
     var isCodeBlock: Bool {
         memoryComponent.address != nil && memoryComponent.header == nil

@@ -7,19 +7,16 @@
 
 struct RandomInsertArray<Element> {
 
-    private var pointer = 0
-    private(set) var dictionary = [Int: Element]()
+    var pointer = 0
+    var dictionary = [Int: Element]()
 
     var size: Int {
         dictionary.count
     }
 
-    init(contentsOf elements: [Element]) {
-        append(contentsOf: elements)
-    }
-
     subscript(_ pointer: Int) -> Element? {
-        dictionary[pointer]
+        get { dictionary[pointer] }
+        set(value) { dictionary[pointer] = value }
     }
 
     mutating func append(_ element: Element) {
@@ -31,13 +28,19 @@ struct RandomInsertArray<Element> {
         elements.forEach { append($0) }
     }
 
-    func enumerated() -> Dictionary<Int, Element>.Iterator {
-        dictionary.enumerated()
+    mutating func removeCopyEnumerated() -> Dictionary<Int, Element> {
+        let dictionaryCopy = dictionary
+        dictionary.removeAll()
+        pointer = 0
+
+        return dictionaryCopy
     }
 
-    mutating func removeCopyEnumerated() -> Dictionary<Int, Element>.Iterator {
-        var enumeration = dictionary.enumerated()
-        dictionary.removeAll()
-        return enumeration
+    mutating func drop(amount: Int) {
+        for (index, element) in removeCopyEnumerated() {
+            if index >= amount {
+                dictionary[index - amount] = element
+            }
+        }
     }
 }

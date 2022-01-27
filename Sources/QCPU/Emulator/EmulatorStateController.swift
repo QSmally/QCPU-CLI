@@ -51,7 +51,7 @@ final class EmulatorStateController {
     }
 
     func startClockTimer(withSpeed speed: Double) {
-        guard let entry = memory.at(address: MemoryComponent.Address(segment: 0, page: 0)) else {
+        guard let entry = memory.locate(address: MemoryComponent.Address(segment: 0, page: 0)) else {
             CLIStateController.terminate("Fatal error: no program entry (0, 0)")
         }
 
@@ -75,7 +75,7 @@ final class EmulatorStateController {
     }
 
     func clockTickMask() {
-        guard let statement = instructionComponent.compiled[line] else {
+        guard let statement = instructionComponent.binary[line] else {
             nextCycle()
             return
         }
@@ -87,7 +87,7 @@ final class EmulatorStateController {
             self.immediateStatement = nil
         } else {
             guard let compiledStatement = statement.representsCompiled else {
-                CLIStateController.terminate("Runtime error: byte '\(statement.value)' isn't a compiled instruction")
+                CLIStateController.terminate("Runtime error: byte '\(statement.formatted)' (line \(line) isn't a compiled instruction")
             }
 
             if compiledStatement.hasSecondaryByte {

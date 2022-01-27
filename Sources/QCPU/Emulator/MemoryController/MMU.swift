@@ -45,7 +45,7 @@ final class MMU {
 
             case 4: // load kernel instruction page
                 let addressTarget = KernelSegments.kernelCallAddress(fromInstruction: emulator.accumulator)
-                let loadedComponent = emulator.memory.at(address: addressTarget)
+                let loadedComponent = emulator.memory.locate(address: addressTarget)
 
                 instructionSegment = addressTarget.segment
                 emulator.instructionComponent = loadedComponent ?? MemoryComponent.empty(atAddress: addressTarget)
@@ -80,7 +80,7 @@ final class MMU {
         let skipsSwap = KernelSegments.skipSwap[operand] ?? 0
         parameterStack.append((operand << 1) | skipsSwap)
 
-        let loadedComponent = emulator.memory.at(address: KernelSegments.entryCall)
+        let loadedComponent = emulator.memory.locate(address: KernelSegments.entryCall)
         instructionSegment = KernelSegments.entryCall.segment
 
         emulator.mode = .kernel
