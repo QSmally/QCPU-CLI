@@ -78,17 +78,17 @@ final class StateContext {
 
     // Tags, headers and macros
     @discardableResult func preprocessor() -> StateContext {
-//        memoryComponents
-//            .map { $0.transpiler.parseTags() }
-//            .filter { $0.transpiler.isCodeBlock }
-//            .forEach { $0.transpiler.preprocessor(withComponents: insertableComponents) }
-//
-//        memoryComponents
-//            .map { $0.transpiler.pagesGenerated }
-//            .forEach { memoryComponents.append(contentsOf: $0) }
-//
-//        memoryComponents
-//            .removeAll { !$0.transpiler.isCodeBlock }
+        memoryComponents
+            .map { $0.transpiler.parseTags() }
+            .filter { $0.transpiler.isCodeBlock }
+            .forEach { $0.transpiler.preprocessor(withComponents: insertableComponents) }
+
+        memoryComponents
+            .map { $0.transpiler.pagesGenerated }
+            .forEach { memoryComponents.append(contentsOf: $0) }
+
+        memoryComponents
+            .removeAll { !$0.transpiler.isCodeBlock }
 
         return self
     }

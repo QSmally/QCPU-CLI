@@ -1,19 +1,16 @@
 //
-//  AssemblerCommand.swift
+//  PreprocessCommand.swift
 //  QCPU CLI
 //
-//  Created by Joey Smalen on 16/11/2021.
+//  Created by Joey Smalen on 27/01/2022.
 //
 
-final class AssemblerCommand: Command {
+final class PreprocessCommand: Command {
 
-    lazy var build = stateContext.directoryCreate(named: "build")
+    lazy var assembly = stateContext.directoryCreate(named: "assembly")
 
     override func execute() {
-        stateContext
-            .preprocessor()
-            .references()
-            .transpile()
+        stateContext.preprocessor()
 
         stateContext.memoryComponents.forEach {
             print("\($0.name) (\($0.representativeStrings.count))")
@@ -30,14 +27,12 @@ final class AssemblerCommand: Command {
         for (index, segmentComponents) in segments {
             let segment = stateContext.directoryCreate(
                 named: String(index),
-                at: build)
+                at: assembly)
             segmentComponents.forEach { page in
                 stateContext.write(
                     toFile: "\(page.address.page).txt",
                     at: segment,
-                    data: page.binary.dictionary
-                        .map { $1.formatted }
-                        .byNewlines())
+                    data: page.representativeStrings.byNewlines())
             }
         }
     }
