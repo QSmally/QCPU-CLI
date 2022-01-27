@@ -11,13 +11,13 @@ final class AssemblerCommand: Command {
 
     override func execute() {
         stateContext
-            .deobfuscate()
-            .addressTargets()
+            .preprocessor()
+            .references()
             .transpile()
 
         stateContext.memoryComponents.forEach {
-            print("\($0.name) (\($0.file.count))")
-            print($0.file)
+            print("\($0.name) (\($0.representativeStrings.count))")
+            print($0.representativeStrings)
         }
 
         let segments = Dictionary(
@@ -35,7 +35,9 @@ final class AssemblerCommand: Command {
                 stateContext.write(
                     toFile: "\(page.address.page).txt",
                     at: segment,
-                    data: page.file.joined(separator: "\n"))
+                    data: page.binary.dictionary
+                        .map { $1.formatted }
+                        .joined(separator: "\n"))
             }
         }
     }

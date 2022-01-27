@@ -18,7 +18,7 @@ final class DocumentationCommand: Command {
             named: "headers",
             at: documentations)
         stateContext.memoryComponents
-            .map { $0.transpiler.tags() }
+            .map { $0.transpiler.parseTags() }
             .filter { $0.header != nil }
             .forEach { headerContent(memoryComponent: $0, at: headers) }
     }

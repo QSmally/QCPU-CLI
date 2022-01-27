@@ -13,8 +13,8 @@ final class RunCommand: Command {
 
     override func execute() {
         stateContext
-            .deobfuscate()
-            .addressTargets()
+            .preprocessor()
+            .references()
             .transpile()
 
         EmulatorStateController(memoryComponents: stateContext.memoryComponents)
