@@ -7,7 +7,7 @@
 
 final class PreprocessCommand: Command {
 
-    lazy var assembly = stateContext.directoryCreate(named: "assembly")
+    lazy var prebuild = stateContext.directoryCreate(named: "prebuild")
 
     override func execute() {
         stateContext.preprocessor()
@@ -27,7 +27,7 @@ final class PreprocessCommand: Command {
         for (index, segmentComponents) in segments {
             let segment = stateContext.directoryCreate(
                 named: String(index),
-                at: assembly)
+                at: prebuild)
             segmentComponents.forEach { page in
                 stateContext.write(
                     toFile: "\(page.address.page).txt",
