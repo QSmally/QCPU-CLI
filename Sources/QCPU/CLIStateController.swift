@@ -54,13 +54,9 @@ final class CLIStateController {
         CLIStateController.output(text.appending("\n"))
     }
 
-    static func clear() {
-        CLIStateController.output("\u{1B}[2J")
-        CLIStateController.output("\u{1B}[1;1H")
-    }
-
     static func terminate(_ message: String? = nil) -> Never {
         if let message = message {
+            CLIStateController.newline(Thread.callStackSymbols.byNewlines())
             CLIStateController.newline(message)
         }
         exit(0)
