@@ -5,7 +5,7 @@
 //  Created by Joey Smalen on 27/01/2022.
 //
 
-final class PreprocessCommand: Command {
+final class PrebuildCommand: Command {
 
     lazy var prebuild = stateContext.directoryCreate(named: "prebuild")
 

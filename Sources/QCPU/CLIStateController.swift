@@ -18,7 +18,7 @@ final class CLIStateController {
         "USAGE:",
         "  qcpu <command> <arguments>\n",
         "COMMANDS:",
-        "  preprocess <path>               processes macros and outputs assembly with only labels.",
+        "  prebuild <path>                 processes macros and outputs assembly with only labels.",
         "  assemble <path>                 converts extended QCPU assembly into machine language.",
         "  documentate <path> <dest?>      generates markdown documentation from the assembly tags.",
         "  emulate <path> <clock speed?>   executes QCPU machine code.",
@@ -30,7 +30,7 @@ final class CLIStateController {
     var module: Command? {
         let stateContext = StateContext(controller: self)
         switch CLIStateController.arguments.first!.lowercased() {
-            case "preprocess":  return PreprocessCommand(stateContext: stateContext)
+            case "prebuild":    return PrebuildCommand(stateContext: stateContext)
             case "assemble":    return AssemblerCommand(stateContext: stateContext)
             case "documentate": return DocumentationCommand(stateContext: stateContext)
             case "run":         return RunCommand(stateContext: stateContext)
