@@ -8,6 +8,7 @@
 import Foundation
 
 enum Expressions {
+
     static let function  = try! NSRegularExpression(pattern: #"%([a-zA-Z0-9_\.]+\s?.*)"#)
     static let condition = try! NSRegularExpression(pattern: #"#(!?[a-zA-Z]+)"#)
     static let marco     = try! NSRegularExpression(pattern: #"@([a-zA-Z0-9_\.]+(?:\.{3})?)"#)
@@ -16,31 +17,19 @@ enum Expressions {
     static let integer   = try! NSRegularExpression(pattern: #"^(\-?)((?:0x|0b)?)([\dA-F]+)$"#)
     static let ascii     = try! NSRegularExpression(pattern: #"^\$(.+)$"#)
     static let flag      = try! NSRegularExpression(pattern: #"(!?)(.+)"#)
-}
 
-enum StylingGuidelines {
+    static private let headerStyle      = try! NSRegularExpression(pattern: #"^[A-Z0-9]+$"#)
+    static private let declarationStyle = try! NSRegularExpression(pattern: #"^[a-z0-9_\.]+(?:\.{3})?$"#)
 
-    case header,
-         declaration
-
-    static func validate(_ input: String, withSource expression: StylingGuidelines) {
-        if regex(ofSource: expression).match(input) == nil {
-            let prefix = "Style warning (\(input))"
-            CLIStateController.newline("\(prefix): \(message(ofSource: expression))")
+    static func stylingGuideline(forHeader input: String) {
+        if headerStyle.match(input) == nil {
+            CLIStateController.newline("Style warning \(input): a header should only contain capital letters, joined without spacing or underscores")
         }
     }
 
-    static private func regex(ofSource expression: StylingGuidelines) -> NSRegularExpression {
-        switch expression{
-            case .header:      return try! NSRegularExpression(pattern: #"^[A-Z0-9]+$"#)
-            case .declaration: return try! NSRegularExpression(pattern: #"^[a-z0-9_\.]+(?:\.{3})?$"#)
-        }
-    }
-
-    static private func message(ofSource expression: StylingGuidelines) -> String {
-        switch expression {
-            case .header:      return "a header should only contain capital letters, joined without spacing or underscores"
-            case .declaration: return "declarations should be snake_cased and only have lowercase characters"
+    static func stylingGuideline(forDeclaration input: String) {
+        if declarationStyle.match(input) == nil {
+            CLIStateController.newline("Style warning \(input): declarations should be snake_cased and only have lowercase characters")
         }
     }
 }

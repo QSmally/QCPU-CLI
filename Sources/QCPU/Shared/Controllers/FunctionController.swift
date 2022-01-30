@@ -9,18 +9,26 @@ import Foundation
 
 class FunctionController {
 
-    let function: String
-    let arguments: [String]
-    let statement: String
+    var line: String
 
-    unowned var memoryComponent: MemoryComponent
+    lazy var function: String = {
+        var components = line.components(separatedBy: .whitespaces)
+        return components.removeFirst()
+    }()
 
-    init(_ function: String, from statement: String, memoryComponent: MemoryComponent) {
-        var components = function.components(separatedBy: .whitespaces)
-        self.function = components.removeFirst()
-        self.arguments = components
-        self.statement = statement
-        self.memoryComponent = memoryComponent
+    lazy var arguments: [String] = {
+        let arraySlice = line
+            .components(separatedBy: .whitespaces)
+            .dropFirst()
+        return Array(arraySlice)
+    }()
+
+    init(line: String) {
+        self.line = line
+    }
+
+    static func create(_ line: String) -> FunctionController {
+        FunctionController(line: line)
     }
 
     func parse() -> [String] {
@@ -32,14 +40,16 @@ class FunctionController {
             case "array":
                 guard let arraySizeString = arguments[optional: 0],
                       let arraySize = Int(arraySizeString) else {
-                    CLIStateController.terminate("Parse error (\(memoryComponent.name)): function 'array' requires an array size")
+                    CLIStateController.terminate("Parse error: function 'array' requires an array size")
                 }
 
                 let repeatingUtf8 = arguments[optional: 1]?.utf8.first ?? 0
-                return Array(repeating: String(repeatingUtf8), count: arraySize)
+                return Array(
+                    repeating: String(repeatingUtf8),
+                    count: arraySize)
 
             default:
-                CLIStateController.terminate("Parse error (\(memoryComponent.name)): invalid function '\(function)'")
+                CLIStateController.terminate("Parse error: invalid function '\(function)'")
         }
     }
 }
