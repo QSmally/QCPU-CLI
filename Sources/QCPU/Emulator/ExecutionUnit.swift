@@ -86,7 +86,7 @@ extension EmulatorStateController {
                 }
             case .mst:
                 let address = sevenTarget(statement.operand) | argument | modifiers.pointer
-                let byte = MemoryComponent.Statement(value: accumulator)
+                let byte = MemoryComponent.Statement().transpile(value: accumulator)
 
                 dataCacheController(page: address >> 5)
                 dataComponent?.binary[address & 0b0001_1111] = byte

@@ -91,7 +91,8 @@ extension MemoryComponent {
 
     class Statement {
 
-        var value: Int
+        var representativeString: String
+        var value: Int!
         var representsCompiled: Instruction?
 
         var renderStatement = false
@@ -121,13 +122,17 @@ extension MemoryComponent {
             }
         }()
 
-        init(represents instruction: Instruction, operand: Int) {
+        init(fromString representativeString: String = "") {
+            self.representativeString = representativeString
+        }
+
+        func transpile(represents instruction: Instruction, operand: Int) {
             self.value = instruction.rawValue | operand
             self.representsCompiled = instruction
             self.renderStatement = true
         }
 
-        init(value: Int, botherCompileInstruction: Bool = true) {
+        func transpile(value: Int, botherCompileInstruction: Bool = true) {
             self.value = value
             self.representsCompiled = botherCompileInstruction ?
                 Instruction.allCases.first { $0.rawValue >> $0.operand == value >> $0.operand } :
