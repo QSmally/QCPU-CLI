@@ -102,7 +102,7 @@ final class StateContext {
                 address: $0.address,
                 privacy: .global) }
 
-        let labels = memoryComponents.flatMap { $0.transpiler.defineByteAddresses() }
+        let labels = memoryComponents.flatMap { $0.representativeStrings.compactMap { label(rawString: $0) } }
         memoryComponents.forEach { $0.transpiler.removeAbstraction(labels: addressables + labels) }
         return self
     }

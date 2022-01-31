@@ -6,8 +6,32 @@
 //
 
 extension Transpiler {
-    func defineByteAddresses() -> [MemoryComponent.Label] {
-        memoryComponent.representativeStrings.compactMap { label(rawString: $0) }
+    func label(rawString line: String) -> MemoryComponent.Label? {
+        if let labelTarget = Expressions.label.match(line, group: 2) {
+            if !Expressions.label.match(line, group: 3)!.isEmpty {
+                let addressTarget = Expressions.label.match(line, group: 4)!
+
+                guard let parsedOrg = Int(addressTarget) else {
+                    CLIStateController.terminate("Parse error: invalid org address '\(addressTarget)'")
+                }
+
+                memoryComponent.binary.pointer = parsedOrg
+            }
+
+            let isPublicLabel = Expressions.label.match(line, group: 1) == "&"
+            let address = MemoryComponent.Address(
+                segment: memoryComponent.address.segment,
+                page: memoryComponent.address.page,
+                line: memoryComponent.binary.pointer)
+            return MemoryComponent.Label(
+                id: labelTarget,
+                address: address,
+                privacy: isPublicLabel ? .segment : .page)
+        } else {
+            let statement = MemoryComponent.Statement(fromString: line)
+            memoryComponent.binary.append(statement)
+            return nil
+        }
     }
 
     func removeAbstraction(labels: [MemoryComponent.Label]) {
@@ -40,34 +64,6 @@ extension Transpiler {
                     with: label.address.parse(mode: addressingMode))
                 memoryComponent.binary.dictionary[index]?.representativeString = addressedStatement
             }
-        }
-    }
-
-    private func label(rawString line: String) -> MemoryComponent.Label? {
-        if let labelTarget = Expressions.label.match(line, group: 2) {
-            if !Expressions.label.match(line, group: 3)!.isEmpty {
-                let addressTarget = Expressions.label.match(line, group: 4)!
-
-                guard let parsedOrg = Int(addressTarget) else {
-                    CLIStateController.terminate("Parse error: invalid org address '\(addressTarget)'")
-                }
-
-                memoryComponent.binary.pointer = parsedOrg
-            }
-
-            let isPublicLabel = Expressions.label.match(line, group: 1) == "&"
-            let address = MemoryComponent.Address(
-                segment: memoryComponent.address.segment,
-                page: memoryComponent.address.page,
-                line: memoryComponent.binary.pointer)
-            return MemoryComponent.Label(
-                id: labelTarget,
-                address: address,
-                privacy: isPublicLabel ? .segment : .page)
-        } else {
-            let statement = MemoryComponent.Statement(fromString: line)
-            memoryComponent.binary.append(statement)
-            return nil
         }
     }
 
