@@ -95,17 +95,15 @@ final class StateContext {
 
     // Labels and addressing
     @discardableResult func references() -> StateContext {
-//        let addressables = memoryComponents
-//            .filter { $0.namespaceCallable != nil }
-//            .map { MemoryComponent.Label(
-//                id: $0.namespaceCallable!,
-//                address: MemoryComponent.Address(
-//                    segment: $0.address.segment,
-//                    page: $0.address.page),
-//                privacy: .global) }
-//
-//        let labels = memoryComponents.flatMap { $0.transpiler.labels() }
-//        memoryComponents.forEach { $0.transpiler.insertAddressTargets(labels: addressables + labels) }
+        let addressables = memoryComponents
+            .filter { $0.namespaceCallable != nil }
+            .map { MemoryComponent.Label(
+                id: $0.namespaceCallable!,
+                address: $0.address,
+                privacy: .global) }
+
+        let labels = memoryComponents.flatMap { $0.transpiler.defineByteAddresses() }
+        memoryComponents.forEach { $0.transpiler.removeAbstraction(labels: addressables + labels) }
         return self
     }
 

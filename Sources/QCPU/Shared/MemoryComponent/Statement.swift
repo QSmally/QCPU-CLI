@@ -126,18 +126,22 @@ extension MemoryComponent {
             self.representativeString = representativeString
         }
 
-        func transpile(represents instruction: Instruction, operand: Int) {
+        @discardableResult func transpile(represents instruction: Instruction, operand: Int) -> Statement {
             self.value = instruction.rawValue | operand
             self.representsCompiled = instruction
             self.renderStatement = true
+
+            return self
         }
 
-        func transpile(value: Int, botherCompileInstruction: Bool = true) {
+        @discardableResult func transpile(value: Int, botherCompileInstruction: Bool = true) -> Statement {
             self.value = value
             self.representsCompiled = botherCompileInstruction ?
                 Instruction.allCases.first { $0.rawValue >> $0.operand == value >> $0.operand } :
                 nil
             self.renderStatement = botherCompileInstruction
+
+            return self
         }
     }
 }

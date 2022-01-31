@@ -23,24 +23,4 @@ struct RandomInsertArray<Element> {
         dictionary[pointer] = element
         pointer += 1
     }
-
-    mutating func append(contentsOf elements: [Element]) {
-        elements.forEach { append($0) }
-    }
-
-    mutating func removeCopyEnumerated() -> Dictionary<Int, Element> {
-        let dictionaryCopy = dictionary
-        dictionary.removeAll()
-        pointer = 0
-
-        return dictionaryCopy
-    }
-
-    mutating func drop(amount: Int) {
-        for (index, element) in removeCopyEnumerated() {
-            if index >= amount {
-                dictionary[index - amount] = element
-            }
-        }
-    }
 }
