@@ -10,8 +10,9 @@ extension EmulatorStateController {
         switch statement.representsCompiled! {
             case .ppi: mmu.parameterStack.append(argument)
             case .ppl: accumulator = mmu.parameterStack.popLast() ?? 0
-            case .cpp: mmu.callStack.append(line + 2)
-            case .cpl: accumulator = mmu.parameterStack.popLast() ?? 0
+            case .cps: mmu.callStack.append(argument)
+            case .cpl: accumulator = mmu.callStack.popLast() ?? 0
+            case .cpa: modifiers.pointer = mmu.callStack.popLast() ?? 0
             case .nta: accumulator = ~accumulator
             case .pcm: modifiers.propagateCarry = true
 

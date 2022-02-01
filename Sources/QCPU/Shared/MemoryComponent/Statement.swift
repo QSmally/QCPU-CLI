@@ -10,9 +10,9 @@ extension MemoryComponent {
         case nop = 0b0_0000_000,
              ppi = 0b0_0000_001,
              ppl = 0b0_0000_010,
-             cpp = 0b0_0000_011,
+             cps = 0b0_0000_011,
              cpl = 0b0_0000_100,
-             /* 0b0_0000_101 empty */
+             cpa = 0b0_0000_101,
              nta = 0b0_0000_110,
              pcm = 0b0_0000_111,
              // General
@@ -58,10 +58,10 @@ extension MemoryComponent {
                 case .ent, .mmu:
                     return 4
                 case .cnd, .imm, .xch, .rst, .ast, .inc,
-                        .dec, .neg, .rsh, .add, .sub, .ior,
-                        .and, .xor, .bsl, .bpl, .bsr, .bpr,
-                        .prf, .pps, .pst, .pld, .jmp, .cal,
-                        .brh, .mst, .mld:
+                     .dec, .neg, .rsh, .add, .sub, .ior,
+                     .and, .xor, .bsl, .bpl, .bsr, .bpr,
+                     .prf, .pps, .pst, .pld, .jmp, .cal,
+                     .brh, .mst, .mld:
                     return 3
                 default:
                     return 0
@@ -85,7 +85,7 @@ extension MemoryComponent {
         }
 
         var hasSecondaryByte: Bool {
-            [.ppi, .imm, .pst, .pld, .jmp, .cal, .brh, .mst, .mld].contains(self)
+            [.ppi, .cps, .imm, .pst, .pld, .jmp, .cal, .brh, .mst, .mld].contains(self)
         }
     }
 
