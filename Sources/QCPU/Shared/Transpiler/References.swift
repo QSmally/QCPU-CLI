@@ -28,8 +28,19 @@ extension Transpiler {
                 address: address,
                 privacy: isPublicLabel ? .segment : .page)
         } else {
-            let statement = MemoryComponent.Statement(fromString: line)
-            memoryComponent.binary.append(statement)
+            if let ascii = Expressions.ascii.match(line, group: 1) {
+                for asciiCharacter in ascii.utf8 {
+                    let asciiStatement = MemoryComponent.Statement(fromString: String(asciiCharacter))
+                        .transpile(
+                            value: Int(asciiCharacter),
+                            botherCompileInstruction: false)
+                    memoryComponent.binary.append(asciiStatement)
+                }
+            } else {
+                let statement = MemoryComponent.Statement(fromString: line)
+                memoryComponent.binary.append(statement)
+            }
+
             return nil
         }
     }

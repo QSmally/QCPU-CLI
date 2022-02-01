@@ -102,14 +102,16 @@ final class StateContext {
                 address: $0.address,
                 privacy: .global) }
 
-        let labels = memoryComponents.flatMap { $0.representativeStrings.compactMap { label(rawString: $0) } }
+        let labels = memoryComponents.flatMap { memoryComponent in
+            memoryComponent.representativeStrings.compactMap { memoryComponent.transpiler.label(rawString: $0) }
+        }
         memoryComponents.forEach { $0.transpiler.removeAbstraction(labels: addressables + labels) }
         return self
     }
 
     // Transpiler to QCPU 2 machine binary
     @discardableResult func transpile() -> StateContext {
-//        memoryComponents.forEach { $0.transpiler.binary() }
+        memoryComponents.forEach { $0.transpiler.transpile() }
         return self
     }
 }
