@@ -116,8 +116,8 @@ extension Transpiler {
                 let argument = name.hasSuffix("...") ?
                     arguments[(index + 1)...].joined(separator: " ") :
                     arguments[index + 1]
-                let macro = replaceSingleMacro(argument, memoryComponents: memoryComponents)
-                headerComponent.transpiler.declare(name, value: macro)
+                let preprocessedStatement = replaceSingleMacro(argument, memoryComponents: memoryComponents)
+                headerComponent.transpiler.declare(name, value: preprocessedStatement)
             }
 
             headerComponent.transpiler.preprocessor(withComponents: memoryComponents)
@@ -125,13 +125,13 @@ extension Transpiler {
         }
 
         // Single macro
-        return [replaceSingleMacro(tag, memoryComponents: memoryComponents)]
+        return [replaceSingleMacro(statement, memoryComponents: memoryComponents)]
     }
 
-    private func replaceSingleMacro(_ definitiveString: String, memoryComponents: [MemoryComponent]) -> String {
-        if let tag = Expressions.marco.match(definitiveString, group: 1) {
+    private func replaceSingleMacro(_ statement: String, memoryComponents: [MemoryComponent]) -> String {
+        if let tag = Expressions.marco.match(statement, group: 1) {
             if let marco = memoryComponent.declarations.first(where: { $0.key == tag }) {
-                return definitiveString.replacingOccurrences(of: "@\(tag)", with: marco.value)
+                return statement.replacingOccurrences(of: "@\(tag)", with: marco.value)
             }
 
             let enumComponents = tag.components(separatedBy: ".")
@@ -140,12 +140,12 @@ extension Transpiler {
                let enumCaseString = enumComponents[optional: 1],
                let enumMemoryComponent = memoryComponents.first(where: { $0.enumeration?.name == namespace }),
                let value = enumMemoryComponent.enumeration!.cases[enumCaseString] {
-                return definitiveString.replacingOccurrences(of: "@\(tag)", with: value)
+                return statement.replacingOccurrences(of: "@\(tag)", with: value)
             }
 
             CLIStateController.terminate("Parse error: unknown header, macro or enum '\(tag)'")
         } else {
-            return definitiveString
+            return statement
         }
     }
 }

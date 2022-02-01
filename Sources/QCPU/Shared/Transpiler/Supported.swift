@@ -75,7 +75,9 @@ extension Transpiler {
 
             case "@ENUM":
                 let layer = IndentationLayer.create(
-                    fromString: "\(tag)\(arguments.map { " \($0)" }))",
+                    fromString: arguments
+                        .inserted(tag, at: 0)
+                        .joined(separator: " "),
                     memoryComponent: memoryComponent)
                 layers.append(layer)
 

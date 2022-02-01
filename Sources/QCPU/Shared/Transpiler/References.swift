@@ -11,7 +11,7 @@ extension Transpiler {
             if !Expressions.label.match(line, group: 3)!.isEmpty {
                 let addressTarget = Expressions.label.match(line, group: 4)!
 
-                guard let parsedOrg = Int(addressTarget) else {
+                guard let parsedOrg = Int.parse(fromString: addressTarget) else {
                     CLIStateController.terminate("Parse error: invalid org address '\(addressTarget)'")
                 }
 
