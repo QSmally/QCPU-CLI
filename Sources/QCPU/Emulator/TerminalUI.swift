@@ -11,6 +11,7 @@ extension EmulatorStateController {
         [
             // Data memory
             (dataComponent?.binary.dictionary
+                .sorted { $0.key < $1.key }
                 .map { " - \(String($0).padding(toLength: 2)): \($1.value ?? -1) (\($1.formatted))" }
                 .map { $0.padding(toLength: 24) } ?? [])
                 // dataCacheValidated 'V'valid 'I'nvalid
@@ -20,6 +21,7 @@ extension EmulatorStateController {
 
             // Instruction memory
             (instructionComponent?.binary.dictionary
+                .sorted { $0.key < $1.key }
                 .map { " \(line == $0 ? ">" : "-") \(String($0).padding(toLength: 2)): \($1.formatted) (\($1.value ?? -1))" }
                 .map { $0.padding(toLength: 24) } ?? [])
                 .inserted("Instruction Memory (\(mmu.instructionCacheValidated ? "V" : "I"))", at: 0)
