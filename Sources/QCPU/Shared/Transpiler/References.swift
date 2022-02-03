@@ -23,10 +23,10 @@ extension Transpiler {
             overflowComponent.purpose = .extended
 
             pagesGenerated.append(overflowComponent)
-            memoryComponent.binary.pointer = -1
+            memoryComponent.binary.pointer = 0
         }
 
-        var referenceComponent = pagesGenerated
+        let referenceComponent = pagesGenerated
             .filter { $0.purpose == .extended }
             .last ?? memoryComponent
 

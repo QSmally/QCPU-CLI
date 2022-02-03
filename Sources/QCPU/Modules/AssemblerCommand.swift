@@ -16,8 +16,10 @@ final class AssemblerCommand: Command {
             .transpile()
 
         stateContext.memoryComponents.forEach {
-            print("\($0.name) (\($0.representativeStrings.count))")
-            print($0.representativeStrings)
+            print("\($0.name) (\($0.binary.dictionary.count))")
+            print($0.binary.dictionary
+                .sorted { $0.key < $1.key }
+                .map { $0.value.representativeString })
         }
 
         let segments = Dictionary(

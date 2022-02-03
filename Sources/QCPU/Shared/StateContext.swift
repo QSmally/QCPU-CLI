@@ -84,10 +84,6 @@ final class StateContext {
             .forEach { $0.transpiler.preprocessor(withComponents: insertableComponents) }
 
         memoryComponents
-            .map { $0.transpiler.pagesGenerated }
-            .forEach { memoryComponents.append(contentsOf: $0) }
-
-        memoryComponents
             .removeAll { !$0.transpiler.isCodeBlock }
 
         return self
@@ -105,13 +101,19 @@ final class StateContext {
         let labels = memoryComponents.flatMap { memoryComponent in
             memoryComponent.representativeStrings.compactMap { memoryComponent.transpiler.label(rawString: $0) }
         }
-        memoryComponents.forEach { $0.transpiler.removeAbstraction(labels: addressables + labels) }
+
+        memoryComponents
+            .map { $0.transpiler.pagesGenerated }
+            .forEach { memoryComponents.append(contentsOf: $0) }
+        memoryComponents
+            .forEach { $0.transpiler.removeAbstraction(labels: addressables + labels) }
         return self
     }
 
     // Transpiler to QCPU 2 machine binary
     @discardableResult func transpile() -> StateContext {
-        memoryComponents.forEach { $0.transpiler.transpile() }
+        memoryComponents
+            .forEach { $0.transpiler.transpile() }
         return self
     }
 }
