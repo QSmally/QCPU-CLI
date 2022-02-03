@@ -133,7 +133,7 @@ extension EmulatorStateController {
             (registers[operand] ?? 0)
     }
 
-    private func instructionCacheController(page address: Int) {
+    internal func instructionCacheController(page address: Int) {
         if instructionComponent.address?.page ?? -1 != address || !mmu.instructionCacheValidated {
             let targetAddress = MemoryComponent.Address(
                 segment: mmu.instructionSegment,
@@ -148,7 +148,7 @@ extension EmulatorStateController {
         }
     }
 
-    private func dataCacheController(page address: Int) {
+    internal func dataCacheController(page address: Int) {
         if dataComponent?.address.page ?? -1 != address || !mmu.dataCacheValidated {
             let targetAddress = MemoryComponent.Address(
                 segment: mmu.kernelDataContext ??

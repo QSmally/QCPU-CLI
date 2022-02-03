@@ -22,9 +22,16 @@ final class MemoryComponent {
         cases: [String: String])?
     var declarations = [String: String]()
 
+    var purpose: Purpose = .application
     var representativeStrings: [String]
     var binary = RandomInsertArray<Statement>()
     lazy var transpiler = Transpiler(self)
+
+    enum Purpose {
+        case application,
+             extended,
+             reserved
+    }
 
     init(_ name: String, fromSource instructions: [String]) {
         self.name = name

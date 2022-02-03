@@ -62,7 +62,11 @@ extension Transpiler {
                 let address = MemoryComponent.Address(
                     segment: upperMemoryAddress,
                     page: lowerMemoryAddress)
-                pagesGenerated.append(MemoryComponent.empty(name, atAddress: address))
+
+                let pageComponent = MemoryComponent.empty(name, atAddress: address)
+                pageComponent.purpose = .reserved
+
+                pagesGenerated.append(pageComponent)
 
             case "@DECLARE":
                 guard let tag = arguments[optional: 0],

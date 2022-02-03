@@ -103,6 +103,12 @@ final class EmulatorStateController {
     func nextCycle(_ line: Int? = nil) {
         self.line = line ?? self.line + 1
         cycles += 1
+
+        if self.line >> 5 != 0 {
+            instructionCacheController(page: instructionComponent.address.page + 1)
+            self.line = 0
+        }
+
         updateUI()
     }
 
