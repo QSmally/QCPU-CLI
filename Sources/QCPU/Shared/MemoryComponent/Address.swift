@@ -12,6 +12,10 @@ extension MemoryComponent {
         let page: Int
         let line: Int
 
+        var bitfield: String {
+             "\(segment)-\(page)"
+        }
+
         enum Mode {
             case segment,
                  page,

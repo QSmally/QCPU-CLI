@@ -105,6 +105,13 @@ final class StateContext {
         memoryComponents
             .map { $0.transpiler.pagesGenerated }
             .forEach { memoryComponents.append(contentsOf: $0) }
+        let grouped = Dictionary(grouping: memoryComponents, by: \.address.bitfield)
+
+        if let duplicateGroup = grouped.first(where: { $0.value.count > 1 }),
+           let address = duplicateGroup.value.first?.address {
+            CLIStateController.terminate("Address error: duplicate address (\(address.segment), \(address.page))")
+        }
+
         memoryComponents
             .forEach { $0.transpiler.removeAbstraction(labels: addressables + labels) }
         return self

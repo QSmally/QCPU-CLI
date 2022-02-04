@@ -9,7 +9,7 @@ extension Transpiler {
     func label(rawString line: String) -> MemoryComponent.Label? {
         if memoryComponent.binary.pointer >> 5 != 0 {
             guard memoryComponent.overflowable else {
-                CLIStateController.terminate("Parse error: page \(memoryComponent.name) ran out of addressing without being marked as '@OVERFLOWABLE'")
+                CLIStateController.terminate("Address error: page \(memoryComponent.name) ran out of addressing without being marked as '@OVERFLOWABLE'")
             }
 
             // TODO: page amount overflows (maximum of 8 pages)
@@ -86,12 +86,12 @@ extension Transpiler {
                 guard label.privacy == .global ||
                       ignoreSegmentPrivacy == "!" ||
                       label.address.equals(toSegment: memoryComponent.address) else {
-                          CLIStateController.terminate("Parse error: label '\(labelId)' is declared out of the segment scope, use '@ADDRESSABLE' or '\(labelId)!\(addressingMode)' instead")
+                          CLIStateController.terminate("Address error: label '\(labelId)' is declared out of the segment scope, use '@ADDRESSABLE' or '\(labelId)!\(addressingMode)' instead")
                 }
 
                 guard label.privacy != .page ||
                       label.address.equals(toPage: memoryComponent.address) else {
-                    CLIStateController.terminate("Parse error: private label '\(labelId)' is used within a different page")
+                    CLIStateController.terminate("Address error: private label '\(labelId)' is used within a different page")
                 }
 
                 let addressedStatement = immutableStatement.representativeString.replacingOccurrences(
