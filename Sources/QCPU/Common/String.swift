@@ -20,7 +20,10 @@ extension String {
     }
 
     func padding(toLength length: Int, withPad pad: String = " ") -> String {
-        padding(toLength: length, withPad: pad, startingAt: 0)
+        padding(
+            toLength: length,
+            withPad: pad,
+            startingAt: 0)
     }
 
     func leftPadding(toLength length: Int, withPad pad: String = " ") -> String {
