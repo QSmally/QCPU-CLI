@@ -8,13 +8,13 @@
 extension MemoryComponent {
     enum Instruction: Int, CaseIterable {
         case nop = 0b0_0000_000,
-             ppi = 0b0_0000_001,
-             ppl = 0b0_0000_010,
-             cps = 0b0_0000_011,
-             cpl = 0b0_0000_100,
-             cpa = 0b0_0000_101,
-             nta = 0b0_0000_110,
-             pcm = 0b0_0000_111,
+             pcm = 0b0_0000_001,
+             ppi = 0b0_0000_010,
+             ppl = 0b0_0000_011,
+             cps = 0b0_0000_100,
+             cpi = 0b0_0000_101,
+             cpl = 0b0_0000_110,
+             cpa = 0b0_0000_111,
              // General
              cnd = 0b0_0001_000,
              imm = 0b0_0010_000,
@@ -85,7 +85,7 @@ extension MemoryComponent {
         }
 
         var hasSecondaryByte: Bool {
-            [.ppi, .cps, .imm, .pst, .pld, .jmp, .cal, .brh, .mst, .mld].contains(self)
+            [.ppi, .cpi, .imm, .pst, .pld, .jmp, .cal, .brh, .mst, .mld].contains(self)
         }
     }
 
