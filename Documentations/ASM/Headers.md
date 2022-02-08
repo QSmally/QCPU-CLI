@@ -32,7 +32,7 @@ In this example, the header already decodes the label with the `.` in front of i
 
 Trailing arguments can be extended to, virtually, infinity. It's identified with the `...` operator at the end of the argument name. It means arguments with a variable word length can be passed into the header initiator, like instructions with an operand. There's currently no test for multiple arguments, explicitly, so using multiple of them is considered to be undefined behaviour.
 
-```arm
+```asm
 @HEADER PUSH_PORT port generator...
 
 @generator...
@@ -43,12 +43,12 @@ Take the example from above to generate an accumulator value to push to some por
 
 ```asm
 @PUSH_PORT 5 AST 1
-// port: 5
-// generator...: AST 1
+; port: 5
+; generator...: AST 1
 
 @PUSH_PORT 24 CPL
-// port: 24
-// generator...: CPL
+; port: 24
+; generator...: CPL
 ```
 
 ### `Embedded labels`

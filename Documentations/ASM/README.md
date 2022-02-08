@@ -42,8 +42,9 @@ Per convention, `//` is mostly used to describe modules like subroutines, execut
 .start_loop:
     AST @base_register
     SUB @compare_register
+    RST @compare_register
 ; loop if the subtraction is positive
     BRH 0, .start_loop
 ; continue
-    // ...
+    ; ...
 ```

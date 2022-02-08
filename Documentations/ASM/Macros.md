@@ -14,10 +14,6 @@ IMM 0, @maximum_value
 SUB @compare_register
 ```
 
-## Known issues
-
-* Overflowed pages lose macro definitions.
-
 ## Topics
 
 ### `Enumerations`
