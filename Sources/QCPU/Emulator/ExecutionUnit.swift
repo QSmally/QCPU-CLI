@@ -108,11 +108,11 @@ extension EmulatorStateController {
     }
 
     func updateConditionFlags(changedTo newAccumulator: Int) {
-        flags[0] = true
-        flags[1] = newAccumulator > 255
-        flags[2] = newAccumulator < 0
-        flags[3] = newAccumulator == 0
-        flags[4] = accumulator & 0x01 == 1
+        flags[0] = newAccumulator > 255
+        flags[1] = newAccumulator < 0
+        flags[2] = newAccumulator == 0
+        flags[3] = accumulator & 0x01 == 1
+        flags[4] = !flags[0]!
         flags[5] = !flags[1]!
         flags[6] = !flags[2]!
         flags[7] = !flags[3]!
