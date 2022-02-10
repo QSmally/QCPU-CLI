@@ -29,7 +29,6 @@ final class EmulatorStateController {
     var dataComponent: MemoryComponent!
 
     // CPU memory
-    var condition = 0
     var accumulator = 0 { willSet { updateConditionFlags(changedTo: newValue) } }
 
     var flags = [Int: Bool]()

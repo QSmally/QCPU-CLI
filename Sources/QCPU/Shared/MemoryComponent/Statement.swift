@@ -8,17 +8,17 @@
 extension MemoryComponent {
     enum Instruction: Int, CaseIterable {
         case nop = 0b0_0000_000,
-             pcm = 0b0_0000_001,
-             ppi = 0b0_0000_010,
-             ppl = 0b0_0000_011,
-             cps = 0b0_0000_100,
-             cpi = 0b0_0000_101,
-             cpl = 0b0_0000_110,
-             cpa = 0b0_0000_111,
+             ppi = 0b0_0000_001,
+             ppl = 0b0_0000_010,
+             cpi = 0b0_0000_011,
+             cpl = 0b0_0000_100,
+             cpa = 0b0_0000_101,
+             pcm = 0b0_0000_110,
+             nta = 0b0_0000_111,
              // General
-             cnd = 0b0_0001_000,
-             imm = 0b0_0010_000,
-             pps = 0b0_0011_000,
+             imm = 0b0_0001_000,
+             pps = 0b0_0010_000,
+             cps = 0b0_0011_000,
              // Register management
              xch = 0b0_0100_000,
              rst = 0b0_0101_000,
@@ -47,9 +47,9 @@ extension MemoryComponent {
              pst = 0b1_1001_000,
              pld = 0b1_1010_000,
              // Memory management
-             jmp = 0b1_1011_000,
-             cal = 0b1_1100_000,
-             brh = 0b1_1101_000,
+             brh = 0b1_1011_000,
+             jmp = 0b1_1100_000,
+             cal = 0b1_1101_000,
              mst = 0b1_1110_000,
              mld = 0b1_1111_000
 
@@ -57,11 +57,11 @@ extension MemoryComponent {
             switch self {
                 case .ent, .mmu:
                     return 4
-                case .cnd, .imm, .xch, .rst, .ast, .inc,
-                     .dec, .neg, .rsh, .add, .sub, .ior,
-                     .and, .xor, .bsl, .bpl, .bsr, .bpr,
-                     .prf, .pps, .pst, .pld, .jmp, .cal,
-                     .brh, .mst, .mld:
+                case .imm, .pps, .cps, .xch, .rst, .ast,
+                     .inc, .dec, .neg, .rsh, .add, .sub,
+                     .ior, .and, .xor, .bsl, .bpl, .bsr,
+                     .bpr, .prf, .pst, .pld, .brh, .jmp,
+                     .cal, .mst, .mld:
                     return 3
                 default:
                     return 0
@@ -85,7 +85,7 @@ extension MemoryComponent {
         }
 
         var hasSecondaryByte: Bool {
-            [.ppi, .cpi, .imm, .pst, .pld, .jmp, .cal, .brh, .mst, .mld].contains(self)
+            [.ppi, .cpi, .imm, .pst, .pld, .brh, .jmp, .cal, .mst, .mld].contains(self)
         }
     }
 

@@ -8,17 +8,17 @@
 extension EmulatorStateController {
     func clockTick(executing statement: MemoryComponent.Statement, argument: Int) {
         switch statement.representsCompiled! {
-            case .pcm: modifiers.propagateCarry = true
             case .ppi: mmu.parameterStack.append(argument)
             case .ppl: accumulator = mmu.parameterStack.popLast() ?? 0
-            case .cps: mmu.callStack.append(accumulator)
             case .cpi: mmu.callStack.append(argument)
             case .cpl: accumulator = mmu.callStack.popLast() ?? 0
             case .cpa: modifiers.pointer = mmu.callStack.popLast() ?? 0
+            case .nta: accumulator = ~accumulator
+            case .pcm: modifiers.propagateCarry = true
 
-            case .cnd: condition = statement.operand
             case .imm: zeroTarget(statement.operand) { _ in argument }
             case .pps: mmu.parameterStack.append(sevenTarget(statement.operand))
+            case .cps: mmu.callStack.append(sevenTarget(statement.operand))
 
             case .xch:
                 let accumulatorCopy = accumulator
@@ -61,6 +61,15 @@ extension EmulatorStateController {
             case .pst: outputStream.append(accumulator)
             case .pld: outputStream.append(argument)
 
+            case .brh:
+                if (flags[statement.operand] ?? false) {
+                    let address = argument | modifiers.pointer
+
+                    instructionCacheController(page: address >> 5)
+                    nextCycle(address & 0b0001_1111)
+                    modifiers.pointer = 0
+                    return
+                }
             case .jmp:
                 let address = sevenTarget(statement.operand) | argument | modifiers.pointer
 
@@ -71,20 +80,11 @@ extension EmulatorStateController {
             case .cal:
                 let address = sevenTarget(statement.operand) | argument | modifiers.pointer
 
-                mmu.callStack.append(instructionComponent.address?.page ?? -1 | line + 1)
+                mmu.callStack.append((instructionComponent.address?.page ?? 0 << 5 | line) + 1)
                 instructionCacheController(page: address >> 5)
                 nextCycle(address & 0b0001_1111)
                 modifiers.pointer = 0
                 return
-            case .brh:
-                if (flags[condition] ?? false) {
-                    let address = sevenTarget(statement.operand) | argument | modifiers.pointer
-
-                    instructionCacheController(page: address >> 5)
-                    nextCycle(address & 0b0001_1111)
-                    modifiers.pointer = 0
-                    return
-                }
             case .mst:
                 let address = sevenTarget(statement.operand) | argument | modifiers.pointer
                 let byte = MemoryComponent.Statement().transpile(value: accumulator)
