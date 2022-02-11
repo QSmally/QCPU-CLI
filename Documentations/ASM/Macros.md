@@ -4,7 +4,7 @@ A macro is an operand shortcut to make a programmer's life easier and more organ
 
 ## Overview
 
-Marcos defined with `@DECLARE` are always bound to the file they're defined in.
+Macros defined with `@DECLARE` are always bound to the file they're defined in.
 
 ```asm
 @DECLARE maximum_value 24
