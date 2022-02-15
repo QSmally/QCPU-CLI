@@ -32,7 +32,7 @@ extension Transpiler {
                 continue
             }
 
-            if let immediate = Int.parse(fromString: firstComponent) {
+            if let immediate = mergeIntParser(fromString: immutableStatement.representativeString) {
                 memoryComponent.binary.dictionary[index]?.transpile(
                     value: immediate,
                     botherCompileInstruction: false)
@@ -41,5 +41,17 @@ extension Transpiler {
 
             CLIStateController.terminate("Parse error: invalid instruction or immediate '\(firstComponent)'")
         }
+    }
+
+    private func mergeIntParser(fromString representativeString: String) -> Int? {
+        let optionalArray = representativeString
+            .components(separatedBy: .whitespaces)
+            .map { Int.parse(fromString: $0) }
+        guard optionalArray.filter({ $0 == nil }).count == 0 else {
+            return nil
+        }
+
+        return optionalArray
+            .reduce(0) { $0 + $1! }
     }
 }
