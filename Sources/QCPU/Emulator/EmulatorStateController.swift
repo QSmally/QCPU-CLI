@@ -18,6 +18,7 @@ final class EmulatorStateController {
     var immediateStatement: MemoryComponent.Statement!
 
     // Clock and UI
+    var defaults: EmulatorDefaults
     var clock: DispatchSourceTimer?
     var renderedStream = String()
 
@@ -45,7 +46,8 @@ final class EmulatorStateController {
         var propagateCarry = false
     }
 
-    init(memoryComponents: [MemoryComponent]) {
+    init(defaults: EmulatorDefaults, memoryComponents: [MemoryComponent]) {
+        self.defaults = defaults
         self.memory = memoryComponents
     }
 

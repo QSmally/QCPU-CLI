@@ -48,6 +48,20 @@ final class StateContext {
         CLIStateController.terminate("Fatal error: missing permissions to read directory")
     }()
 
+    lazy var defaults: EmulatorDefaults = {
+        let defaultsSource = URL(fileURLWithPath: CLIStateController.arguments[2])
+            .appendingPathComponent("defaults.json")
+        guard fileContext.fileExists(atPath: defaultsSource.relativePath) else {
+            return EmulatorDefaults()
+        }
+
+        guard let decoded = try? JSONDecoder().decode(EmulatorDefaults.self, from: Data(contentsOf: defaultsSource)) else {
+            CLIStateController.terminate("Fatal error: could not parse 'defaults.json'")
+        }
+
+        return decoded
+    }()
+
     init(controller: CLIStateController) {
         self.controller = controller
     }

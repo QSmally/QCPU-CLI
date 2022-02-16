@@ -9,7 +9,7 @@ final class RunCommand: Command {
 
     lazy var speed = CLIStateController.arguments.count >= 3 ?
         Double(CLIStateController.arguments[3]) ?? 5 :
-        5
+        stateContext.defaults.speed ?? 5
 
     override func execute() {
         stateContext
@@ -17,7 +17,7 @@ final class RunCommand: Command {
             .references()
             .transpile()
 
-        EmulatorStateController(memoryComponents: stateContext.memoryComponents)
+        EmulatorStateController(defaults: stateContext.defaults, memoryComponents: stateContext.memoryComponents)
             .startClockTimer(withSpeed: speed)
     }
 }
