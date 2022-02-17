@@ -138,8 +138,8 @@ extension Transpiler {
 
             if let namespace = enumComponents.first,
                let enumCaseString = enumComponents[optional: 1],
-               let enumMemoryComponent = memoryComponents.first(where: { $0.enumeration?.name == namespace }),
-               let value = enumMemoryComponent.enumeration!.cases[enumCaseString] {
+               let enumMemoryComponent = memoryComponents.first(where: { $0.enums[namespace] != nil }),
+               let value = enumMemoryComponent.enums[namespace]?[enumCaseString] {
                 return statement.replacingOccurrences(of: "@\(tag)", with: value)
             }
 

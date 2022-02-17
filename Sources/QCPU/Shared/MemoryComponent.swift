@@ -17,9 +17,7 @@ final class MemoryComponent {
     var header: (
         name: String,
         parameters: [String])?
-    var enumeration: (
-        name: String,
-        cases: [String: String])?
+    var enums = [String: [String: String]]()
     var declarations = [String: String]()
 
     var purpose: Purpose = .application
@@ -68,7 +66,6 @@ final class MemoryComponent {
         let clonedMemoryComponent = MemoryComponent(name, fromSource: representativeStrings)
         clonedMemoryComponent.address = address
         clonedMemoryComponent.header = header
-        clonedMemoryComponent.enumeration = enumeration
         clonedMemoryComponent.declarations = declarations
         clonedMemoryComponent.binary = binary
 

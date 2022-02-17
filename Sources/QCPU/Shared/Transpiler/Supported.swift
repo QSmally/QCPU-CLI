@@ -100,8 +100,9 @@ extension Transpiler {
             preprocessedString = parsedStatements.first ?? value
         }
 
-        if layers.last?.instruction == "@ENUM" {
-            memoryComponent.enumeration!.cases[key] = preprocessedString
+        if layers.last?.instruction == "@ENUM",
+           let namespace = layers.last!.arguments.first {
+            memoryComponent.enums[namespace]?[key] = preprocessedString
         } else {
             memoryComponent.declarations[key] = preprocessedString
         }

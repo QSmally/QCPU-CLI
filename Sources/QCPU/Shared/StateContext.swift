@@ -14,7 +14,7 @@ final class StateContext {
     var fileContext = FileManager.default
 
     var insertableComponents: [MemoryComponent] {
-        memoryComponents.filter { $0.header != nil || $0.enumeration != nil }
+        memoryComponents.filter { $0.header != nil || $0.enums.count > 0 }
     }
 
     lazy var memoryComponents: [MemoryComponent] = {

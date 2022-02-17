@@ -53,9 +53,7 @@ class IndentationLayer {
                 }
 
                 Expressions.stylingGuideline(forDeclaration: namespace)
-                memoryComponent.enumeration = (
-                    name: namespace,
-                    cases: [:])
+                memoryComponent.enums[namespace] = [:]
 
             default:
                 break
