@@ -17,8 +17,8 @@ extension EmulatorStateController {
             case .pcm: modifiers.propagateCarry = true
 
             case .imm: zeroTarget(statement.operand) { _ in argument }
-            case .pps: mmu.parameterStack.append(sevenTarget(statement.operand))
-            case .cps: mmu.callStack.append(sevenTarget(statement.operand))
+            case .pps: mmu.parameterStack.append(mappingTarget(statement.operand, accumulator: 0))
+            case .cps: mmu.callStack.append(mappingTarget(statement.operand, accumulator: 0))
 
             case .xch:
                 let accumulatorCopy = accumulator
@@ -71,14 +71,14 @@ extension EmulatorStateController {
                     return
                 }
             case .jmp:
-                let address = sevenTarget(statement.operand) | argument | modifiers.pointer
+                let address = mappingTarget(statement.operand, accumulator: 7) | argument | modifiers.pointer
 
                 instructionCacheController(page: address >> 5)
                 nextCycle(address & 0b0001_1111)
                 modifiers.pointer = 0
                 return
             case .cal:
-                let address = sevenTarget(statement.operand) | argument | modifiers.pointer
+                let address = mappingTarget(statement.operand, accumulator: 7) | argument | modifiers.pointer
 
                 mmu.callStack.append((instructionComponent.address?.page ?? 0 << 5 | line) + 1)
                 instructionCacheController(page: address >> 5)
@@ -86,7 +86,7 @@ extension EmulatorStateController {
                 modifiers.pointer = 0
                 return
             case .mst:
-                let address = sevenTarget(statement.operand) | argument | modifiers.pointer
+                let address = mappingTarget(statement.operand, accumulator: 7) | argument | modifiers.pointer
                 let byte = MemoryComponent.Statement().transpile(value: accumulator)
 
                 dataCacheController(page: address >> 5)
@@ -94,7 +94,7 @@ extension EmulatorStateController {
                 mmu.dataCacheNeedsStore = true
                 modifiers.pointer = 0
             case .mld:
-                let address = sevenTarget(statement.operand) | argument | modifiers.pointer
+                let address = mappingTarget(statement.operand, accumulator: 7) | argument | modifiers.pointer
 
                 dataCacheController(page: address >> 5)
                 accumulator = dataComponent?.binary[address & 0b0001_1111]?.value ?? 0
@@ -127,8 +127,8 @@ extension EmulatorStateController {
         }
     }
 
-    private func sevenTarget(_ operand: Int) -> Int {
-        operand == 7 ?
+    private func mappingTarget(_ operand: Int, accumulator isAccumulatorIndex: Int) -> Int {
+        operand == isAccumulatorIndex ?
             accumulator :
             (registers[operand] ?? 0)
     }
