@@ -80,7 +80,9 @@ extension EmulatorStateController {
             case .cal:
                 let address = mappingTarget(statement.operand, accumulator: 7) | argument | modifiers.pointer
 
-                mmu.callStack.append((instructionComponent.address?.page ?? 0 << 5 | line) + 1)
+                let page = (instructionComponent.address?.page ?? 0) << 5
+                mmu.callStack.append((page | line) + 1)
+
                 instructionCacheController(page: address >> 5)
                 nextCycle(address & 0b0001_1111)
                 modifiers.pointer = 0
