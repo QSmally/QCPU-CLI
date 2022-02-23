@@ -16,7 +16,7 @@ extension EmulatorStateController {
             case .nta: accumulator = ~accumulator
             case .pcm: modifiers.propagateCarry = true
 
-            case .imm: zeroTarget(statement.operand) { _ in argument }
+            case .imm: writeback(statement.operand) { _ in argument }
             case .pps: mmu.parameterStack.append(mappingTarget(statement.operand, accumulator: 0))
             case .cps: mmu.callStack.append(mappingTarget(statement.operand, accumulator: 0))
 
@@ -27,10 +27,10 @@ extension EmulatorStateController {
             case .rst: registers[statement.operand] = accumulator
             case .ast: accumulator = registers[statement.operand] ?? 0
 
-            case .inc: zeroTarget(statement.operand) { $0 + 1 }
-            case .dec: zeroTarget(statement.operand) { $0 - 1 }
-            case .neg: zeroTarget(statement.operand) { ~$0 }
-            case .rsh: zeroTarget(statement.operand) { $0 >> 1 }
+            case .inc: writeback(statement.operand) { $0 + 1 }
+            case .dec: writeback(statement.operand) { $0 - 1 }
+            case .neg: writeback(statement.operand) { ~$0 }
+            case .rsh: writeback(statement.operand) { $0 >> 1 }
             case .add:
                 accumulator = accumulator +
                     (registers[statement.operand] ?? 0) +
@@ -120,7 +120,7 @@ extension EmulatorStateController {
         flags[7] = !flags[3]!
     }
 
-    private func zeroTarget(_ operand: Int, mutation: (Int) -> Int) {
+    private func writeback(_ operand: Int, mutation: (Int) -> Int) {
         if operand == 0 {
             accumulator = mutation(accumulator)
         } else {
