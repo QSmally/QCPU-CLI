@@ -101,7 +101,7 @@ extension Transpiler {
         }
 
         if layers.last?.instruction == "@ENUM",
-           let namespace = layers.last!.arguments.first {
+           let namespace = layers.last?.arguments.first {
             memoryComponent.enums[namespace]?[key] = preprocessedString
         } else {
             memoryComponent.declarations[key] = preprocessedString
