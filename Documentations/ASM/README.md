@@ -37,14 +37,12 @@ Comments can be made using two prefixes:
 Per convention, `//` is mostly used to describe modules like subroutines, execution files and headers. `;` can be used for inline comments and separating blocks of code that don't need a label, such as:
 
 ```asm
-; main
-    CND #cout
 .start_loop:
     AST @base_register
     SUB @compare_register
     RST @compare_register
 ; loop if the subtraction is positive
-    BRH 0, .start_loop
+    BRH #cout, .start_loop
 ; continue
     ; ...
 ```
