@@ -6,6 +6,11 @@
 //
 
 extension Transpiler {
+
+    static var aliases: [String: (instruction: MemoryComponent.Instruction, operand: Int)] = [
+        "nop": (instruction: .add, operand: 0)
+    ]
+
     func transpile() {
         for (index, immutableStatement) in memoryComponent.binary.dictionary {
             var instructionComponents = immutableStatement.representativeString.components(separatedBy: .whitespaces)
@@ -39,7 +44,14 @@ extension Transpiler {
                 continue
             }
 
-            CLIStateController.terminate("Parse error: invalid instruction or immediate '\(firstComponent)'")
+            if let alias = Transpiler.aliases[instructionString] {
+                memoryComponent.binary.dictionary[index]?.transpile(
+                    represents: alias.instruction,
+                    operand: alias.operand)
+                continue
+            }
+
+            CLIStateController.terminate("Parse error: invalid instruction, immediate or alias '\(firstComponent)'")
         }
     }
 
