@@ -30,4 +30,7 @@ struct EmulatorDefaults: Codable {
     var ports_addressSize: Int?
     var ports_generateClass: Bool?
 
+    var kernel_entryCall: [Int]?
+    var kernel_mapping: [Int: [Int]]?
+
 }

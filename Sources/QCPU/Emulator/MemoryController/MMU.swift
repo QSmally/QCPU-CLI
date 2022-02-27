@@ -21,6 +21,27 @@ final class MMU {
 
     unowned var emulator: EmulatorStateController
 
+    lazy var kernelCallEntry: MemoryComponent.Address? = {
+        guard let address = emulator.defaults.kernel_entryCall else {
+            return nil
+        }
+
+        guard address.count == 3 else {
+            CLIStateController.terminate("Runtime error (defaults): kernel entry point must be an array with a size of 3")
+        }
+
+        return .init(
+            segment: address[0],
+            page: address[1],
+            line: address[2])
+    }()
+
+    lazy var kernelCallMapping: [Int: MemoryComponent.Address] = {
+        // TODO: add failsafe if the size of the array isn't equal to 2
+        emulator.defaults.kernel_mapping?
+            .mapValues { .init(segment: $0[0], page: $0[1]) } ?? [:]
+    }()
+
     init(emulator: EmulatorStateController) {
         self.emulator = emulator
     }
@@ -44,7 +65,10 @@ final class MMU {
                 emulator.nextCycle()
 
             case 4: // load kernel instruction page
-                let addressTarget = KernelSegments.kernelCallAddress(fromInstruction: emulator.accumulator)
+                guard let addressTarget = kernelCallMapping[emulator.accumulator] else {
+                    CLIStateController.terminate("Runtime error: invalid or unimplemented kernel call (\(emulator.accumulator))")
+                }
+
                 let loadedComponent = emulator.memory.locate(address: addressTarget)
 
                 instructionSegment = addressTarget.segment
@@ -73,19 +97,22 @@ final class MMU {
     }
 
     func applicationKernelCall(operand: Int) {
+        guard let kernelCallEntry = kernelCallEntry else {
+            CLIStateController.terminate("Runtime error: unable to find kernel handle entry point")
+        }
+
         guard emulator.mode == .application else {
             CLIStateController.terminate("Runtime error: kernel cannot call a nested system routine")
         }
 
-        let skipsSwap = KernelSegments.skipSwap[operand] ?? 0
-        parameterStack.append((operand << 1) | skipsSwap)
+        parameterStack.append(operand)
 
-        let loadedComponent = emulator.memory.locate(address: KernelSegments.entryCall)
-        instructionSegment = KernelSegments.entryCall.segment
+        let loadedComponent = emulator.memory.locate(address: kernelCallEntry)
+        instructionSegment = kernelCallEntry.segment
 
         emulator.mode = .kernel
-        emulator.instructionComponent = loadedComponent ?? MemoryComponent.empty(atAddress: KernelSegments.entryCall)
-        emulator.nextCycle(KernelSegments.entryCall.line)
+        emulator.instructionComponent = loadedComponent ?? MemoryComponent.empty(atAddress: kernelCallEntry)
+        emulator.nextCycle(kernelCallEntry.line)
 
         instructionCacheValidated = true
     }
