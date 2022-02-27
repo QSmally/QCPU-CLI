@@ -10,6 +10,7 @@ extension EmulatorStateController {
         switch statement.representsCompiled! {
             case .ppi: mmu.parameterStack.append(argument)
             case .ppl: accumulator = mmu.parameterStack.popLast() ?? 0
+            case .ppk: accumulator = mmu.parameterStack.last ?? 0
             case .cpi: mmu.callStack.append(argument)
             case .cpl: accumulator = mmu.callStack.popLast() ?? 0
             case .cpa: modifiers.pointer = mmu.callStack.popLast() ?? 0
@@ -101,9 +102,6 @@ extension EmulatorStateController {
                 dataCacheController(page: address >> 5)
                 accumulator = dataComponent?.binary[address & 0b0001_1111]?.value ?? 0
                 modifiers.pointer = 0
-
-            default:
-                break
         }
 
         nextCycle()

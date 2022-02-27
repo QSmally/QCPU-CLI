@@ -7,9 +7,9 @@
 
 extension MemoryComponent {
     enum Instruction: Int, CaseIterable {
-        case nop = 0b0_0000_000,
-             ppi = 0b0_0000_001,
-             ppl = 0b0_0000_010,
+        case ppi = 0b0_0000_000,
+             ppl = 0b0_0000_001,
+             ppk = 0b0_0000_010,
              cpi = 0b0_0000_011,
              cpl = 0b0_0000_100,
              cpa = 0b0_0000_101,
