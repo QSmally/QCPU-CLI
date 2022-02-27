@@ -33,8 +33,9 @@
 
 **Embedded**
 * `.label` - lower byte 
+* `.label-` - page bits
 * `.label+` - segment byte
-* `.label![+]` - ignore scope error
+* `.label![+, -]` - ignore scope error
 
 ## Immediate formats
 * `255` - decimal

@@ -44,7 +44,8 @@ extension MemoryComponent {
 
         func parse(mode: String) -> String {
             switch mode {
-                case "": return String((page << 5) | line)
+                case "":  return String((page << 5) | line)
+                case "-": return String(page)
                 case "+": return String(segment)
                 default:
                     CLIStateController.terminate("Fatal error: unrecognised address mode '\(mode)'")
