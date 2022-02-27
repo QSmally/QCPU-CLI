@@ -13,9 +13,13 @@ The most basic label is a page-private, low-byte insertion label.
 
 ## Topics
 
+### `Page bits`
+
+For instructions such as `PRF` (Prefetch), the upper 3 bit page address of a lable is needed, which is accessible with the `-` symbol: `.some_label-`.
+
 ### `High-byte`
 
-As QCPU 2 has a privileged segment layer, the high byte is accessible with the `+` symbol: `.some_label+`
+As QCPU 2 has a privileged segment layer, the high byte is accessible with the `+` symbol: `.some_label+`.
 
 ### `Change label org`
 
