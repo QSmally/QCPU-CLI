@@ -52,7 +52,7 @@ final class EmulatorStateController {
     }
 
     func startClockTimer(withSpeed speed: Double) {
-        guard let entry = memory.locate(address: MemoryComponent.Address(segment: 0, page: 0)) else {
+        guard let entryComponent = memory.locate(address: MemoryComponent.Address(segment: 0, page: 0)) else {
             CLIStateController.terminate("Fatal error: no program entry (0, 0)")
         }
 
@@ -62,7 +62,7 @@ final class EmulatorStateController {
         }
 
         accumulator = 0
-        instructionComponent = entry
+        instructionComponent = entryComponent
         updateUI()
 
         // Clock
@@ -111,10 +111,5 @@ final class EmulatorStateController {
         }
 
         updateUI()
-    }
-
-    func terminate() {
-        clock?.suspend()
-        CLIStateController.terminate()
     }
 }
