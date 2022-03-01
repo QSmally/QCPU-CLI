@@ -68,6 +68,10 @@ extension MemoryComponent {
             }
         }
 
+        var hasSecondaryByte: Bool {
+            [.ppi, .cpi, .imm, .pst, .pld, .brh, .jmp, .cal, .mst, .mld].contains(self)
+        }
+
         private static var cache = [String: Instruction]()
 
         init?(from representativeString: String) {
@@ -82,10 +86,6 @@ extension MemoryComponent {
             } else {
                 return nil
             }
-        }
-
-        var hasSecondaryByte: Bool {
-            [.ppi, .cpi, .imm, .pst, .pld, .brh, .jmp, .cal, .mst, .mld].contains(self)
         }
     }
 

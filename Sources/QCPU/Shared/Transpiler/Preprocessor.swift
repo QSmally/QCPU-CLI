@@ -27,7 +27,8 @@ extension Transpiler {
                 continue
             }
 
-            CLIStateController.terminate("Parse error: invalid tag '\(firstTagElement)'")
+            tagAmount -= 1
+            break
         }
 
         memoryComponent.representativeStrings.removeFirst(tagAmount)
