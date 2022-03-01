@@ -23,21 +23,21 @@ extension Transpiler {
                 }
 
                 let operand = instructionComponents.count > 0 ?
-                    Int.parse(fromString: instructionComponents.first!) :
+                    parseOperand(fromString: instructionComponents.first!, instruction: instruction) :
                     nil
 
                 memoryComponent.binary.dictionary[index]?.transpile(
                     represents: instruction,
                     operand: operand ?? 0)
 
-                if memoryComponent.binary.dictionary[index]?.representsCompiled?.operand ?? -1 > 0 && operand == nil {
-                    CLIStateController.terminate("Parse error: missing operand for instruction '\(instructionString)'")
+                if instruction.operand > 0 && operand == nil {
+                    CLIStateController.terminate("Parse error: missing or invalid operand for instruction '\(instructionString)'")
                 }
 
                 continue
             }
 
-            if let immediate = mergeIntParser(fromString: immutableStatement.representativeString) {
+            if let immediate = parseIntegerOffset(fromString: immutableStatement.representativeString) {
                 memoryComponent.binary.dictionary[index]?.transpile(
                     value: immediate,
                     botherCompileInstruction: false)
@@ -55,7 +55,37 @@ extension Transpiler {
         }
     }
 
-    private func mergeIntParser(fromString representativeString: String) -> Int? {
+    private func parseOperand(fromString representativeString: String, instruction: MemoryComponent.Instruction) -> Int? {
+        switch representativeString.lowercased() {
+            case "accumulator",
+                 "acc":
+                switch instruction {
+                    case .imm, .pps, .cps, .inc, .dec, .neg,
+                         .rsh:
+                        return 0
+                    case .jmp, .cal, .mst, .mld:
+                        return 7
+                    default:
+                        CLIStateController.terminate("Parse error: instruction '\(instruction)' does not support 'accumulator' mapping")
+                }
+
+            case "zero",
+                 "zer":
+                switch instruction {
+                    case .xch, .rsh, .ast, .add, .sub, .ior,
+                         .and, .xor, .pst, .pld, .jmp, .cal,
+                         .mst, .mld:
+                        return 0
+                    default:
+                        CLIStateController.terminate("Parse error: instruction '\(instruction)' does not support 'zero' mapping")
+                }
+
+            default:
+                return Int.parse(fromString: representativeString)
+        }
+    }
+
+    private func parseIntegerOffset(fromString representativeString: String) -> Int? {
         let optionalArray = representativeString
             .components(separatedBy: .whitespaces)
             .map { Int.parse(fromString: $0) }
