@@ -38,7 +38,8 @@ final class EmulatorStateController {
 
     enum ExecutionContext {
         case application,
-             kernel
+             kernel,
+             halted
     }
 
     class Modifiers {
@@ -77,8 +78,9 @@ final class EmulatorStateController {
 
     func clockTickMask() {
         guard let statement = instructionComponent.binary[line] else {
-            nextCycle()
-            return
+            mode = .halted
+            updateUI()
+            CLIStateController.terminate()
         }
 
         if let immediateStatement = immediateStatement {
