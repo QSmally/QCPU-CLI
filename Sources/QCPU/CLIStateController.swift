@@ -22,7 +22,8 @@ final class CLIStateController {
         "  assemble <path>                 converts extended QCPU assembly into machine language.",
         "  documentate <path> <dest?>      generates markdown documentation from the assembly tags.",
         "  emulate <path> <clock speed?>   executes QCPU machine code.",
-        "  run <path> <clock speed?>       assembles and emulates extended QCPU assembly.\n",
+        "  run <path> <clock speed?>       assembles and emulates extended QCPU assembly.",
+        "  size <path>                     returns the size of the application.\n",
         "ARGUMENTS:",
         "  clock speed   an interval in hertz",
     ].byNewlines()
@@ -34,6 +35,7 @@ final class CLIStateController {
             case "assemble":    return AssemblerCommand(stateContext: stateContext)
             case "documentate": return DocumentationCommand(stateContext: stateContext)
             case "run":         return RunCommand(stateContext: stateContext)
+            case "size":        return SizeCommand(stateContext: stateContext)
             default:
                 return nil
         }

@@ -67,7 +67,9 @@ final class EmulatorStateController {
         updateUI()
 
         // Clock
-        let instructionQueue = DispatchQueue(label: "eu.qbot.qcpu-cli.clock")
+        let instructionQueue = DispatchQueue(
+            label: "eu.qbot.qcpu-cli.clock",
+            qos: .userInitiated)
         clock = DispatchSource.makeTimerSource(queue: instructionQueue)
         clock?.setEventHandler(handler: clockTickMask)
         clock?.schedule(deadline: .now() + 0.25, repeating: 1 / speed)
