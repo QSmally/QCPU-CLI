@@ -55,7 +55,7 @@ final class EmulatorStateController {
         self.memory = memoryComponents
     }
 
-    func startClockTimer(withSpeed speed: Double?, burstSize: Int = 1024) {
+    func startClockTimer(withSpeed speed: Double?, burstSize: Int = 4096) {
         guard let entryComponent = memory.locate(address: MemoryComponent.Address(segment: 0, page: 0)) else {
             CLIStateController.terminate("Fatal error: no program entry (0, 0)")
         }
@@ -81,8 +81,9 @@ final class EmulatorStateController {
             let maximumTime = DispatchTime
                 .now()
                 .uptimeNanoseconds
-            while DispatchTime.now().uptimeNanoseconds - maximumTime < 5_000_000 {
+            while DispatchTime.now().uptimeNanoseconds - maximumTime < 25_000_000 {
                 for _ in 1...burstSize { clockTickMask() }
+                updateUI()
             }
         }
     }
@@ -123,6 +124,8 @@ final class EmulatorStateController {
             self.line = 0
         }
 
-        updateUI()
+        if clock != nil {
+            updateUI()
+        }
     }
 }

@@ -18,6 +18,6 @@ final class RunCommand: Command {
             .transpile()
 
         EmulatorStateController(defaults: stateContext.defaults, memoryComponents: stateContext.memoryComponents)
-            .startClockTimer(withSpeed: speed)
+            .startClockTimer(withSpeed: speed, burstSize: 4096)
     }
 }
