@@ -20,6 +20,9 @@ final class EmulatorStateController {
     // Clock and UI
     var defaults: EmulatorDefaults
     var clock: DispatchSourceTimer?
+    let instructionQueue = DispatchQueue(
+        label: "eu.qbot.qcpu-cli.clock",
+        qos: .userInitiated)
     var renderedStream = String()
 
     // Memory controller
@@ -52,7 +55,7 @@ final class EmulatorStateController {
         self.memory = memoryComponents
     }
 
-    func startClockTimer(withSpeed speed: Double) {
+    func startClockTimer(withSpeed speed: Double?, burstSize: Int = 1024) {
         guard let entryComponent = memory.locate(address: MemoryComponent.Address(segment: 0, page: 0)) else {
             CLIStateController.terminate("Fatal error: no program entry (0, 0)")
         }
@@ -67,15 +70,21 @@ final class EmulatorStateController {
         updateUI()
 
         // Clock
-        let instructionQueue = DispatchQueue(
-            label: "eu.qbot.qcpu-cli.clock",
-            qos: .userInitiated)
-        clock = DispatchSource.makeTimerSource(queue: instructionQueue)
-        clock?.setEventHandler(handler: clockTickMask)
-        clock?.schedule(deadline: .now() + 0.25, repeating: 1 / speed)
+        if let speed = speed {
+            clock = DispatchSource.makeTimerSource(queue: instructionQueue)
+            clock?.setEventHandler(handler: clockTickMask)
+            clock?.schedule(deadline: .now() + 0.25, repeating: 1 / speed)
 
-        clock?.resume()
-        RunLoop.main.run()
+            clock?.resume()
+            RunLoop.main.run()
+        } else {
+            let maximumTime = DispatchTime
+                .now()
+                .uptimeNanoseconds
+            while DispatchTime.now().uptimeNanoseconds - maximumTime < 5_000_000 {
+                for _ in 1...burstSize { clockTickMask() }
+            }
+        }
     }
 
     func clockTickMask() {
