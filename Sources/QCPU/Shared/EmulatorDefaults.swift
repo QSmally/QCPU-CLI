@@ -34,3 +34,8 @@ struct EmulatorDefaults: Codable {
     var kernel_mapping: [Int: [Int]]?
 
 }
+
+protocol Device {
+    func store(instruction: Int)
+    func load(instruction: Int)
+}

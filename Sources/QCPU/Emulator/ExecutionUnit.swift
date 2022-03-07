@@ -58,9 +58,12 @@ extension EmulatorStateController {
                 }
             case .prf: dataCacheController(page: statement.operand)
 
-            // TODO: implement port addressing and devices
-            case .pst: outputStream.append(accumulator)
-            case .pld: outputStream.append(argument)
+            case .pst:
+                let address = argument >> (8 - (defaults.ports_addressSize ?? 8))
+                ports[address]?.store(instruction: accumulator)
+            case .pld:
+                let address = argument >> (8 - (defaults.ports_addressSize ?? 8))
+                ports[address]?.load(instruction: accumulator)
 
             case .brh:
                 if (flags[statement.operand] ?? false) {

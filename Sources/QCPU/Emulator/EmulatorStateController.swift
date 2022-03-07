@@ -37,7 +37,24 @@ final class EmulatorStateController {
 
     var flags = [Int: Bool]()
     var registers = [Int: Int]()
-    var outputStream = [Int]()
+    var outputStream = [String]()
+
+    lazy var ports: [Int: Device] = {
+        (defaults.ports ?? []).reduce(into: [Int: Device]()) { (map, port) in
+            switch port.type {
+                case .inputOutput:
+                    map[port.address] = InputOutputDevice(emulator: self)
+                case .multiplier:
+                    break
+                case .divider:
+                    break
+                case .textScreen:
+                    break
+                case .graphicalScreen:
+                    break
+            }
+        }
+    }()
 
     enum ExecutionContext {
         case application,
