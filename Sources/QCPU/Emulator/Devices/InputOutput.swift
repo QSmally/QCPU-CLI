@@ -15,7 +15,7 @@ struct InputOutputDevice: Device {
 
     func load(instruction: Int) {
         emulator.clock?.suspend()
-        emulator.accumulator = Int(readLine(strippingNewline: true) ?? 0) ?? 0
+        emulator.accumulator = Int(readLine(strippingNewline: true) ?? "0") ?? 0
         emulator.clock?.resume()
     }
 }
