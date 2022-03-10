@@ -3,53 +3,18 @@
 
 > A CLI for compiling Q-code, assembling extended QCPU 2 assembly and emulating machine code.
 
-## Tags
-* `@PAGE <upper> <lower>`
-* `@HEADER <label> <arguments...?>`
-* `@ADDRESSABLE <namespace>.<label>`
-* `@OVERFLOWABLE`
-* `@MAKEPAGE <name> <upper> <lower>`
+## Commands
+`qcpu <command> <arguments>`
 
-**Marcos**
-* `@DECLARE <label> <value>` - private-page marco
-* `@<macro or header> <header arguments...>` - insert marco/header
+**Subcommands**
+* `prebuild <path> - processes macros and outputs assembly with only labels.
+* `assemble <path>` - converts extended QCPU assembly into machine language.
+* `documentate <path> --dest=path` - generates markdown documentation from the assembly tags.
+* `emulate <path> --clock=int --burst=int` - executes QCPU machine code.
+* `run <path> --clock=int --burst=int` - assembles and emulates extended QCPU assembly.
+* `size <path>` - returns the size of the application.
 
-**Indented**
-* `@IF <CLI flag>` - conditional code
-* `@IF !<CLI flag>` - inverse conditional code
-* `@DROPTHROUGH <instruction>` - ignores if-scope
-* `@ELSE` - negates if-scope
-* `@ENUM <namespace>` - public marco-group
-* `@END` - closing indent
-
-## Functions
-* `%random`
-* `%array <size> <repeated ascii value>`
-
-## Addressing
-* `.label:` - page-private label
-* `.&label:` - segment-scoped label
-* `.[&]label(16):` - change address
-
-**Embedded**
-* `.label` - lower byte 
-* `.label-` - page bits
-* `.label+` - segment byte
-* `.label![+, -]` - ignore scope error
-
-## Immediate formats
-* `255` - decimal
-* `0xFF` - hexadecimal
-* `0b11111111` - binary
-* `$Q` - ascii letter
-* `$CPU2` - ascii string
-
-## Conditions
-* `#cout`
-* `#signed`
-* `#zero`
-* `#underflow`
-* `#!cout`
-* `#!signed`
-* `#!zero`
-* `#!underflow`
+**Arguments**
+* dest: a path destination
+* clock: an interval in hertz
+* burst: a burst size of instructions to emulate
