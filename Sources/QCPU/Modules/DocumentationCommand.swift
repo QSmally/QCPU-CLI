@@ -9,9 +9,10 @@ import Foundation
 
 final class DocumentationCommand: Command {
 
-    lazy var documentations = CLIStateController.arguments.count < 3 ?
-        stateContext.directoryCreate(named: "api") :
-        stateContext.directoryCreate(named: CLIStateController.arguments[3])
+    lazy var documentations: URL = {
+        let path = CLIStateController.argument(withId: "dest")
+        return stateContext.directoryCreate(named: path ?? "api")
+    }()
 
     override func execute() {
         let headers = stateContext.directoryCreate(
