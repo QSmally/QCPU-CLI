@@ -25,9 +25,9 @@ final class CLIStateController {
         "  run <path> --clock=int --burst=int       assembles and emulates extended QCPU assembly.",
         "  size <path>                              returns the size of the application.\n",
         "ARGUMENTS:",
-        "  dest:    a destination path",
-        "  clock    an interval in hertz",
-        "  burst    a burst size of instructions to emulate",
+        "  dest     a destination path.",
+        "  clock    an interval in hertz.",
+        "  burst    a burst size of instructions to emulate.",
     ].byNewlines()
 
     var module: Command? {
