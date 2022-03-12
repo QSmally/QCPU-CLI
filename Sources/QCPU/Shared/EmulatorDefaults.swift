@@ -9,19 +9,32 @@ import Foundation
 
 struct EmulatorDefaults: Codable {
 
-    enum DeviceType: Codable {
-        case inputOutput,
-             multiplier,
-             divider,
-             textScreen,
-             graphicalScreen
+    enum DeviceType: String, Codable {
+        case io,
+             multiply,
+             divide,
+             modulo
     }
 
     struct Port: Codable {
+
         var name: String
-        var address: Int
         var type: DeviceType
-        var penalty: Int?
+
+        var address: Int?
+        var loadPenalty: Int?
+        var generateNameClass: Bool?
+
+        func generateClass(emulator: EmulatorStateController, startAddress: Int) -> Device {
+            switch type {
+                case .io: return InputOutputDevice(
+                    emulator: emulator,
+                    profile: self,
+                    startAddress: startAddress)
+                default:
+                    CLIStateController.terminate("Fatal error: unimplemented port '\(type)'")
+            }
+        }
     }
 
     var speed: Double?
@@ -29,7 +42,6 @@ struct EmulatorDefaults: Codable {
     var maxTime: Int?
 
     var ports: [Port]?
-    var ports_addressSize: Int?
     var ports_generateClass: Bool?
 
     var kernel_entryCall: [Int]?
@@ -38,6 +50,13 @@ struct EmulatorDefaults: Codable {
 }
 
 protocol Device {
+
+    var instructionSize: Int { get set }
+
+    var emulator: EmulatorStateController { get }
+    var profile: EmulatorDefaults.Port { get }
+    var startAddress: Int { get }
+
     func store(instruction: Int)
     func load(instruction: Int)
 }

@@ -59,11 +59,16 @@ extension EmulatorStateController {
             case .prf: dataCacheController(page: statement.operand)
 
             case .pst:
-                let address = argument >> (8 - (defaults.ports_addressSize ?? 8))
-                ports[address]?.store(instruction: accumulator)
+                if let port = ports[address: argument] {
+                    let instruction = argument - port.startAddress
+                    port.store(instruction: instruction)
+                }
+
             case .pld:
-                let address = argument >> (8 - (defaults.ports_addressSize ?? 8))
-                ports[address]?.load(instruction: accumulator)
+                if let port = ports[address: argument] {
+                    let instruction = argument - port.startAddress
+                    port.load(instruction: instruction)
+                }
 
             case .brh:
                 if (flags[statement.operand] ?? false) {

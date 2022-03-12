@@ -7,7 +7,11 @@
 
 struct InputOutputDevice: Device {
 
-    unowned var emulator: EmulatorStateController
+    var instructionSize = 1
+
+    unowned let emulator: EmulatorStateController
+    let profile: EmulatorDefaults.Port
+    let startAddress: Int
 
     func store(instruction: Int) {
         emulator.outputStream.append("\(instruction): \(emulator.accumulator)")

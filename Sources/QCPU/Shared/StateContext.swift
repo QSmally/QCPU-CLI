@@ -55,11 +55,14 @@ final class StateContext {
             return EmulatorDefaults()
         }
 
-        guard let decoded = try? JSONDecoder().decode(EmulatorDefaults.self, from: Data(contentsOf: defaultsSource)) else {
+        do {
+            let encoded = try Data(contentsOf: defaultsSource)
+            let decoded = try JSONDecoder().decode(EmulatorDefaults.self, from: encoded)
+            return decoded
+        } catch {
+            print(error)
             CLIStateController.terminate("Fatal error: could not parse 'defaults.json'")
         }
-
-        return decoded
     }()
 
     init(controller: CLIStateController) {

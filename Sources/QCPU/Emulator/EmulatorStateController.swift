@@ -39,20 +39,16 @@ final class EmulatorStateController {
     var registers = [Int: Int]()
     var outputStream = [String]()
 
-    lazy var ports: [Int: Device] = {
-        (defaults.ports ?? []).reduce(into: [Int: Device]()) { (map, port) in
-            switch port.type {
-                case .inputOutput:
-                    map[port.address] = InputOutputDevice(emulator: self)
-                case .multiplier:
-                    break
-                case .divider:
-                    break
-                case .textScreen:
-                    break
-                case .graphicalScreen:
-                    break
-            }
+    lazy var ports: [CountableClosedRange<Int>: Device] = {
+        var startAddress = 0
+
+        return (defaults.ports ?? []).reduce(into: [CountableClosedRange<Int>: Device]()) { (map, port) in
+            let portAddress = port.address ?? startAddress
+            let device = port.generateClass(emulator: self, startAddress: portAddress)
+            let endClosedAddress = portAddress + device.instructionSize - 1
+
+            startAddress = endClosedAddress + 1
+            map[portAddress...endClosedAddress] = device
         }
     }()
 
