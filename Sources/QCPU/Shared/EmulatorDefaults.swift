@@ -13,7 +13,8 @@ struct EmulatorDefaults: Codable {
         case io,
              multiply,
              divide,
-             modulo
+             modulo,
+             textScreen
     }
 
     struct Port: Codable {
@@ -27,10 +28,10 @@ struct EmulatorDefaults: Codable {
 
         func generateClass(emulator: EmulatorStateController, startAddress: Int) -> Device {
             switch type {
-                case .io: return InputOutputDevice(
-                    emulator: emulator,
-                    profile: self,
-                    startAddress: startAddress)
+                case .io:       return InputOutputDevice(emulator: emulator, profile: self, startAddress: startAddress)
+                case .multiply: return MultiplyDevice(emulator: emulator, profile: self, startAddress: startAddress)
+                case .divide:   return DivideDevice(emulator: emulator, profile: self, startAddress: startAddress)
+                case .modulo:   return ModuloDevice(emulator: emulator, profile: self, startAddress: startAddress)
                 default:
                     CLIStateController.terminate("Fatal error: unimplemented port '\(type)'")
             }
@@ -56,6 +57,11 @@ protocol Device {
     var emulator: EmulatorStateController { get }
     var profile: EmulatorDefaults.Port { get }
     var startAddress: Int { get }
+
+    init(
+        emulator: EmulatorStateController,
+        profile: EmulatorDefaults.Port,
+        startAddress: Int)
 
     func store(instruction: Int)
     func load(instruction: Int)
