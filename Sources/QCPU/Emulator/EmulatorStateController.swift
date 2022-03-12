@@ -95,13 +95,20 @@ final class EmulatorStateController {
             clock?.resume()
             RunLoop.main.run()
         } else {
-            let maximumTime = DispatchTime
+            let startTime = DispatchTime
                 .now()
                 .uptimeNanoseconds
-            while DispatchTime.now().uptimeNanoseconds - maximumTime < 25_000_000 {
+            let maximummTimeString = CLIStateController.argument(withId: "time")
+            let maximumTime = maximummTimeString != nil ?
+                (UInt64(maximummTimeString!) ?? UInt64(25)) * 1_000_000 :
+                UInt64(defaults.maxTime ?? 25_000_000)
+
+            while DispatchTime.now().uptimeNanoseconds - startTime < maximumTime {
                 for _ in 1...burstSize { clockTickMask() }
                 updateUI()
             }
+
+            CLIStateController.terminate("Fatal error: ran out of time (modify this behaviour with --time=int)")
         }
     }
 

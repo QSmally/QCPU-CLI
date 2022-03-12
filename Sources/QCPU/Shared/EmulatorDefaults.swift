@@ -26,6 +26,7 @@ struct EmulatorDefaults: Codable {
 
     var speed: Double?
     var burstSize: Int?
+    var maxTime: Int?
 
     var ports: [Port]?
     var ports_addressSize: Int?
