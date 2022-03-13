@@ -26,7 +26,10 @@ class ModuloDevice: Device {
     }
 
     func load(instruction: Int) {
-        firstArgument = firstArgument % emulator.accumulator
+        let result = emulator.accumulator != 0 ?
+            firstArgument % emulator.accumulator :
+            0
+        firstArgument = result
         emulator.accumulator = firstArgument
     }
 }
