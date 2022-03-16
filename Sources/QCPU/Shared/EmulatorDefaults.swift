@@ -11,6 +11,7 @@ struct EmulatorDefaults: Codable {
 
     enum DeviceType: String, Codable {
         case io,
+             ascii,
              multiply,
              divide,
              modulo,
@@ -29,6 +30,7 @@ struct EmulatorDefaults: Codable {
         func generateClass(emulator: EmulatorStateController, startAddress: Int) -> Device {
             switch type {
                 case .io:       return InputOutputDevice(emulator: emulator, profile: self, startAddress: startAddress)
+                case .ascii:    return ASCIIDevice(emulator: emulator, profile: self, startAddress: startAddress)
                 case .multiply: return MultiplyDevice(emulator: emulator, profile: self, startAddress: startAddress)
                 case .divide:   return DivideDevice(emulator: emulator, profile: self, startAddress: startAddress)
                 case .modulo:   return ModuloDevice(emulator: emulator, profile: self, startAddress: startAddress)
