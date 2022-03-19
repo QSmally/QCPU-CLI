@@ -8,7 +8,8 @@
 extension Transpiler {
 
     static var aliases: [String: (instruction: MemoryComponent.Instruction, operand: Int)] = [
-        "nop": (instruction: .add, operand: 0)
+        "nop": (instruction: .add, operand: 0),
+        "clr": (instruction: .xch, operand: 0)
     ]
 
     func transpile() {
