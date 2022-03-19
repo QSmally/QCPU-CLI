@@ -11,5 +11,6 @@ There are also operands which map to other values, because sometimes they differ
 ## Topics
 
 * `NOP` - instruction mapped to `ADD 0`;
+* `CLR` - instruction mapped to `XCH 0`;
 * `accumulator`/`acc` - either `0b000` or `0b111` is mapped to the accumulator;
 * `zero`/`zer` - sometimes `0b000` is mapped to the zero register. 
