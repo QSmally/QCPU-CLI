@@ -7,7 +7,11 @@
 
 extension Transpiler {
     func label(rawString line: String) -> MemoryComponent.Label? {
-        if memoryComponent.binary.pointer >> 5 != 0 {
+        var referenceComponent = pagesGenerated
+            .filter { $0.purpose == .extended }
+            .last ?? memoryComponent
+
+        if referenceComponent.binary.pointer >> 5 != 0 {
             guard memoryComponent.overflowable else {
                 CLIStateController.terminate("Address error: page \(memoryComponent.name) ran out of addressing without being marked as '@OVERFLOWABLE'")
             }
@@ -15,7 +19,7 @@ extension Transpiler {
             // TODO: page amount overflows (maximum of 8 pages)
             let address = MemoryComponent.Address(
                 segment: memoryComponent.address.segment,
-                page: memoryComponent.address.page + 1)
+                page: referenceComponent.address.page + 1)
 
             let overflowComponent = MemoryComponent.empty(memoryComponent.name, atAddress: address)
             overflowComponent.overflowable = memoryComponent.overflowable
@@ -23,12 +27,8 @@ extension Transpiler {
             overflowComponent.purpose = .extended
 
             pagesGenerated.append(overflowComponent)
-            memoryComponent.binary.pointer = 0
+            referenceComponent.binary.pointer = 0
         }
-
-        let referenceComponent = pagesGenerated
-            .filter { $0.purpose == .extended }
-            .last ?? memoryComponent
 
         if let labelTarget = Expressions.label.match(line, group: 2) {
             if !Expressions.label.match(line, group: 3)!.isEmpty {
