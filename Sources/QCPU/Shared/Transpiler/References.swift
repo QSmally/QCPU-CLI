@@ -6,11 +6,14 @@
 //
 
 extension Transpiler {
-    func label(rawString line: String) -> MemoryComponent.Label? {
-        var referenceComponent = pagesGenerated
+
+    var referenceComponent: MemoryComponent {
+        pagesGenerated
             .filter { $0.purpose == .extended }
             .last ?? memoryComponent
+    }
 
+    func label(rawString line: String) -> MemoryComponent.Label? {
         if referenceComponent.binary.pointer >> 5 != 0 {
             guard memoryComponent.overflowable else {
                 CLIStateController.terminate("Address error: page \(memoryComponent.name) ran out of addressing without being marked as '@OVERFLOWABLE'")
