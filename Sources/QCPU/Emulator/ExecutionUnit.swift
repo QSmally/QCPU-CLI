@@ -24,8 +24,13 @@ extension EmulatorStateController {
             case .xch:
                 let accumulatorCopy = accumulator
                 accumulator = registers[statement.operand] ?? 0
-                registers[statement.operand] = accumulatorCopy
-            case .rst: registers[statement.operand] = accumulator
+                if statement.operand != 0 {
+                    registers[statement.operand] = accumulatorCopy
+                }
+            case .rst:
+                if statement.operand != 0 {
+                    registers[statement.operand] = accumulator
+                }
             case .ast: accumulator = registers[statement.operand] ?? 0
 
             case .inc: writeback(statement.operand) { $0 + 1 }
@@ -63,12 +68,14 @@ extension EmulatorStateController {
                     let instruction = argument - port.startAddress
                     port.store(instruction: instruction)
                 }
+                modifiers.pointer = 0
 
             case .pld:
                 if let port = ports[address: argument] {
                     let instruction = argument - port.startAddress
                     port.load(instruction: instruction)
                 }
+                modifiers.pointer = 0
 
             case .brh:
                 if (flags[statement.operand] ?? false) {
@@ -79,6 +86,8 @@ extension EmulatorStateController {
                     modifiers.pointer = 0
                     return
                 }
+                modifiers.pointer = 0
+
             case .jmp:
                 let address = mappingTarget(statement.operand, accumulator: 7) | argument | modifiers.pointer
 
