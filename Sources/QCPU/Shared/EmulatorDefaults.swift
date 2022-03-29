@@ -12,6 +12,7 @@ struct EmulatorDefaults: Codable {
     enum DeviceType: String, Codable {
         case io,
              ascii,
+             iascii,
              multiply,
              divide,
              modulo,
@@ -31,6 +32,7 @@ struct EmulatorDefaults: Codable {
             switch type {
                 case .io:       return InputOutputDevice(emulator: emulator, profile: self, startAddress: startAddress)
                 case .ascii:    return ASCIIDevice(emulator: emulator, profile: self, startAddress: startAddress)
+                case .iascii:   return InlineASCIIDevice(emulator: emulator, profile: self, startAddress: startAddress)
                 case .multiply: return MultiplyDevice(emulator: emulator, profile: self, startAddress: startAddress)
                 case .divide:   return DivideDevice(emulator: emulator, profile: self, startAddress: startAddress)
                 case .modulo:   return ModuloDevice(emulator: emulator, profile: self, startAddress: startAddress)
