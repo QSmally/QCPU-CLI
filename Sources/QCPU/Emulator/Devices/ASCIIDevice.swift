@@ -13,8 +13,6 @@ class ASCIIDevice: Device {
     var profile: EmulatorDefaults.Port
     var startAddress: Int
 
-    var buffer = [Character]()
-
     required init(emulator: EmulatorStateController, profile: EmulatorDefaults.Port, startAddress: Int) {
         self.emulator = emulator
         self.profile = profile
