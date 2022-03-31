@@ -74,6 +74,10 @@ final class CLIStateController {
 
         return firstMatchingArgument
     }
+
+    static func flag(withId prefix: String) -> Bool {
+        arguments.contains("--\(prefix)")
+    }
     
     func handleCommandInput() {
         guard let module = module else {

@@ -113,6 +113,10 @@ extension EmulatorStateController {
                 dataComponent?.binary[address & 0b0001_1111] = byte
                 mmu.dataCacheNeedsStore = true
                 modifiers.pointer = 0
+
+                if CLIStateController.flag(withId: "mwb") {
+                    emulatorSuspendExecution(tag: "memory write")
+                }
             case .mld:
                 let address = mappingTarget(statement.operand, accumulator: 7) | argument | modifiers.pointer
 
@@ -148,6 +152,15 @@ extension EmulatorStateController {
         operand == isAccumulatorIndex ?
             accumulator :
             (registers[operand] ?? 0)
+    }
+
+    private func emulatorSuspendExecution(tag: String) {
+        clock?.suspend()
+        updateUI()
+
+        CLIStateController.newline("Breakpoint (\(tag)); press enter to resume")
+        readLine(strippingNewline: true)
+        clock?.resume()
     }
 
     internal func instructionCacheController(page address: Int) {
