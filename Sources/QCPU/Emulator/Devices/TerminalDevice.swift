@@ -7,7 +7,7 @@
 
 class TerminalDevice: Device {
 
-    var instructionSize = 1
+    var instructionSize = 2
 
     unowned var emulator: EmulatorStateController
     var profile: EmulatorDefaults.Port
@@ -22,8 +22,16 @@ class TerminalDevice: Device {
     }
 
     func store(instruction: Int) {
+        if instruction == 0 {
+            emulator.outputStream.append(String())
+            return
+        }
+
         if let ascii = UnicodeScalar(emulator.accumulator) {
-            emulator.outputStream.append("\(instruction): \(ascii)")
+            let asciiString = String(ascii)
+            emulator.outputStream.count > 0 ?
+                emulator.outputStream[emulator.outputStream.count - 1].append(asciiString) :
+                emulator.outputStream.append(asciiString)
         }
     }
 
