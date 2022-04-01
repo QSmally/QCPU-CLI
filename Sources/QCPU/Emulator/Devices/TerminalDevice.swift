@@ -1,17 +1,19 @@
 //
-//  InlineASCIIDevice.swift
+//  TerminalDevice.swift
 //  QCPU CLI
 //
-//  Created by Joey Smalen on 29/03/2022.
+//  Created by Joey Smalen on 01/04/2022.
 //
 
-class InlineASCIIDevice: Device {
+class TerminalDevice: Device {
 
     var instructionSize = 1
 
     unowned var emulator: EmulatorStateController
     var profile: EmulatorDefaults.Port
     var startAddress: Int
+
+    var characters = [Int]()
 
     required init(emulator: EmulatorStateController, profile: EmulatorDefaults.Port, startAddress: Int) {
         self.emulator = emulator
@@ -21,12 +23,13 @@ class InlineASCIIDevice: Device {
 
     func store(instruction: Int) {
         if let ascii = UnicodeScalar(emulator.accumulator) {
-            if emulator.outputStream.count == 0 { load(instruction: 0) }
-            emulator.outputStream[emulator.outputStream.count - 1] += String(ascii)
+            emulator.outputStream.append("\(instruction): \(ascii)")
         }
     }
 
     func load(instruction: Int) {
-        emulator.outputStream.append(String())
+        emulator.accumulator = characters.count > 0 ?
+            characters.removeFirst() :
+            0
     }
 }

@@ -12,11 +12,11 @@ struct EmulatorDefaults: Codable {
     enum DeviceType: String, Codable {
         case io,
              ascii,
-             iascii,
+             terminal,
              multiply,
              divide,
              modulo,
-             textScreen
+             root
     }
 
     struct Port: Codable {
@@ -30,9 +30,9 @@ struct EmulatorDefaults: Codable {
 
         func generateClass(emulator: EmulatorStateController, startAddress: Int) -> Device {
             switch type {
-                case .io:       return InputOutputDevice(emulator: emulator, profile: self, startAddress: startAddress)
-                case .ascii:    return ASCIIDevice(emulator: emulator, profile: self, startAddress: startAddress)
-                case .iascii:   return InlineASCIIDevice(emulator: emulator, profile: self, startAddress: startAddress)
+                case .io:       return GenericIODevice(emulator: emulator, profile: self, startAddress: startAddress)
+                case .ascii:    return GenericASCIIDevice(emulator: emulator, profile: self, startAddress: startAddress)
+                case .terminal: return TerminalDevice(emulator: emulator, profile: self, startAddress: startAddress)
                 case .multiply: return MultiplyDevice(emulator: emulator, profile: self, startAddress: startAddress)
                 case .divide:   return DivideDevice(emulator: emulator, profile: self, startAddress: startAddress)
                 case .modulo:   return ModuloDevice(emulator: emulator, profile: self, startAddress: startAddress)

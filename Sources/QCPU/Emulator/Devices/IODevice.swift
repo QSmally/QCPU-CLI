@@ -5,7 +5,7 @@
 //  Created by Joey Smalen on 07/03/2022.
 //
 
-class InputOutputDevice: Device {
+class GenericIODevice: Device {
 
     var instructionSize = 1
 

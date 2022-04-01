@@ -5,7 +5,7 @@
 //  Created by Joey Smalen on 16/03/2022.
 //
 
-class ASCIIDevice: Device {
+class GenericASCIIDevice: Device {
 
     var instructionSize = 1
 

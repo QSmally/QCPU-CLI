@@ -89,7 +89,7 @@ final class EmulatorStateController {
             clock?.schedule(deadline: .now() + 0.25, repeating: 1 / speed)
 
             clock?.resume()
-            RunLoop.main.run()
+            initialiseClock()
         } else {
             let startTime = DispatchTime
                 .now()
@@ -132,6 +132,18 @@ final class EmulatorStateController {
             }
 
             clockTick(executing: statement, argument: 0)
+        }
+    }
+
+    func initialiseClock() {
+        if let index = ports.firstIndex(where: { $1.profile.type == .terminal }) {
+            while true {
+                let character = Int(FileHandle.getch())
+                let interruptTerminal = ports[index].value as! TerminalDevice
+                interruptTerminal.characters.append(character)
+            }
+        } else {
+            RunLoop.main.run()
         }
     }
 
