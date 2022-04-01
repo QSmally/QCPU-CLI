@@ -159,7 +159,7 @@ extension EmulatorStateController {
         updateUI()
 
         CLIStateController.newline("Breakpoint (\(tag)); press enter to resume")
-        readLine(strippingNewline: true)
+        let _ = readLine(strippingNewline: true)
         clock?.resume()
     }
 
