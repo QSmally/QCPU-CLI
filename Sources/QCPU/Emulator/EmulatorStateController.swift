@@ -60,6 +60,7 @@ final class EmulatorStateController {
 
     class Modifiers {
         var pointer = 0
+        var forwarder = 0
         var propagateCarry = false
     }
 

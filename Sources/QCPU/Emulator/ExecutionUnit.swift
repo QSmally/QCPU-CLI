@@ -18,8 +18,16 @@ extension EmulatorStateController {
             case .pcm: modifiers.propagateCarry = true
 
             case .imm: writeback(statement.operand) { _ in argument }
-            case .pps: mmu.parameterStack.append(mappingTarget(statement.operand, accumulator: 0))
-            case .cps: mmu.callStack.append(mappingTarget(statement.operand, accumulator: 0))
+            case .pps:
+                let value = statement.operand == 0 ?
+                    accumulator :
+                    (registers[statement.operand] ?? 0)
+                mmu.parameterStack.append(value)
+            case .cps:
+                let value = statement.operand == 0 ?
+                    accumulator :
+                    (registers[statement.operand] ?? 0)
+                mmu.callStack.append(value)
 
             case .xch:
                 let accumulatorCopy = accumulator
@@ -28,7 +36,9 @@ extension EmulatorStateController {
                     registers[statement.operand] = accumulatorCopy
                 }
             case .rst:
-                if statement.operand != 0 {
+                if statement.operand == 0 {
+                    modifiers.forwarder = accumulator
+                } else {
                     registers[statement.operand] = accumulator
                 }
             case .ast: accumulator = registers[statement.operand] ?? 0
@@ -64,65 +74,101 @@ extension EmulatorStateController {
             case .prf: dataCacheController(page: statement.operand)
 
             case .pst:
-                if let port = ports[address: argument] {
+                let address = (registers[statement.operand] ?? 0) |
+                    (statement.operand == 0 ? modifiers.forwarder : 0) |
+                    modifiers.pointer |
+                    argument
+
+                if let port = ports[address: address] {
                     let instruction = argument - port.startAddress
                     port.store(instruction: instruction)
                 }
-                modifiers.pointer = 0
 
+                modifiers.pointer = 0
+                modifiers.forwarder = 0
             case .pld:
-                if let port = ports[address: argument] {
+                let address = (registers[statement.operand] ?? 0) |
+                    (statement.operand == 0 ? modifiers.forwarder : 0) |
+                    modifiers.pointer |
+                    argument
+
+                if let port = ports[address: address] {
                     let instruction = argument - port.startAddress
                     port.load(instruction: instruction)
                 }
+
                 modifiers.pointer = 0
+                modifiers.forwarder = 0
 
             case .brh:
                 if (flags[statement.operand] ?? false) {
                     let address = argument | modifiers.pointer
-
                     instructionCacheController(page: address >> 5)
                     nextCycle(address & 0b0001_1111)
+
                     modifiers.pointer = 0
+                    modifiers.forwarder = 0
                     return
                 }
-                modifiers.pointer = 0
 
+                modifiers.pointer = 0
+                modifiers.forwarder = 0
             case .jmp:
-                let address = mappingTarget(statement.operand, accumulator: 7) | argument | modifiers.pointer
+                let address = (registers[statement.operand] ?? 0) |
+                    (statement.operand == 0 ? modifiers.forwarder : 0) |
+                    modifiers.pointer |
+                    argument
 
                 instructionCacheController(page: address >> 5)
                 nextCycle(address & 0b0001_1111)
+
                 modifiers.pointer = 0
+                modifiers.forwarder = 0
                 return
             case .cal:
-                let address = mappingTarget(statement.operand, accumulator: 7) | argument | modifiers.pointer
+                let address = (registers[statement.operand] ?? 0) |
+                    (statement.operand == 0 ? modifiers.forwarder : 0) |
+                    modifiers.pointer |
+                    argument
 
                 let page = (instructionComponent.address?.page ?? 0) << 5
                 mmu.callStack.append((page | line) + 1)
 
                 instructionCacheController(page: address >> 5)
                 nextCycle(address & 0b0001_1111)
+
                 modifiers.pointer = 0
+                modifiers.forwarder = 0
                 return
             case .mst:
-                let address = mappingTarget(statement.operand, accumulator: 7) | argument | modifiers.pointer
-                let byte = MemoryComponent.Statement().transpile(value: accumulator)
+                let address = (registers[statement.operand] ?? 0) |
+                    (statement.operand == 0 ? modifiers.forwarder : 0) |
+                    modifiers.pointer |
+                    argument
+                let byte = MemoryComponent.Statement()
+                    .transpile(value: accumulator)
 
                 dataCacheController(page: address >> 5)
                 dataComponent?.binary[address & 0b0001_1111] = byte
                 mmu.dataCacheNeedsStore = true
+
                 modifiers.pointer = 0
+                modifiers.forwarder = 0
 
                 if CLIStateController.flag(withId: "mwb") {
                     emulatorSuspendExecution(tag: "memory write")
                 }
             case .mld:
-                let address = mappingTarget(statement.operand, accumulator: 7) | argument | modifiers.pointer
+                let address = (registers[statement.operand] ?? 0) |
+                    (statement.operand == 0 ? modifiers.forwarder : 0) |
+                    modifiers.pointer |
+                    argument
 
                 dataCacheController(page: address >> 5)
                 accumulator = dataComponent?.binary[address & 0b0001_1111]?.value ?? 0
+
                 modifiers.pointer = 0
+                modifiers.forwarder = 0
         }
 
         nextCycle()
@@ -146,12 +192,6 @@ extension EmulatorStateController {
             accumulator = mutation(registers[operand] ?? 0)
             registers[operand] = accumulator
         }
-    }
-
-    private func mappingTarget(_ operand: Int, accumulator isAccumulatorIndex: Int) -> Int {
-        operand == isAccumulatorIndex ?
-            accumulator :
-            (registers[operand] ?? 0)
     }
 
     private func emulatorSuspendExecution(tag: String) {
