@@ -44,5 +44,5 @@ Per convention, `//` is mostly used to describe modules like subroutines, execut
 ; loop if the subtraction is positive
     BRH #cout, .start_loop
 ; continue
-    ; ...
+    // ...
 ```
