@@ -7,9 +7,10 @@
 
 extension Transpiler {
 
-    static var aliases: [String: (instruction: MemoryComponent.Instruction, operand: Int)] = [
-        "nop": (instruction: .add, operand: 0),
-        "clr": (instruction: .xch, operand: 0)
+    static var aliases: [String: MemoryComponent.Instruction] = [
+        "fwd": .rst,
+        "clr": .ast,
+        "nop": .add
     ]
 
     func transpile() {
@@ -24,7 +25,7 @@ extension Transpiler {
                 }
 
                 let operand = instructionComponents.count > 0 ?
-                    parseOperand(fromString: instructionComponents.first!, instruction: instruction) :
+                    instruction.parseOperand(fromString: instructionComponents.first!) :
                     nil
 
                 memoryComponent.binary.dictionary[index]?.transpile(
@@ -47,42 +48,12 @@ extension Transpiler {
 
             if let alias = Transpiler.aliases[instructionString] {
                 memoryComponent.binary.dictionary[index]?.transpile(
-                    represents: alias.instruction,
-                    operand: alias.operand)
+                    represents: alias,
+                    operand: 0)
                 continue
             }
 
             CLIStateController.terminate("Parse error: invalid instruction, immediate or alias '\(firstComponent)'")
-        }
-    }
-
-    private func parseOperand(fromString representativeString: String, instruction: MemoryComponent.Instruction) -> Int? {
-        switch representativeString.lowercased() {
-            case "accumulator",
-                 "acc":
-                switch instruction {
-                    case .imm, .pps, .cps, .inc, .dec, .neg,
-                         .rsh:
-                        return 0
-                    case .jmp, .cal, .mst, .mld:
-                        return 7
-                    default:
-                        CLIStateController.terminate("Parse error: instruction '\(instruction)' does not support 'accumulator' mapping")
-                }
-
-            case "zero",
-                 "zer":
-                switch instruction {
-                    case .xch, .rsh, .ast, .add, .sub, .ior,
-                         .and, .xor, .pst, .pld, .jmp, .cal,
-                         .mst, .mld:
-                        return 0
-                    default:
-                        CLIStateController.terminate("Parse error: instruction '\(instruction)' does not support 'zero' mapping")
-                }
-
-            default:
-                return Int.parse(fromString: representativeString)
         }
     }
 

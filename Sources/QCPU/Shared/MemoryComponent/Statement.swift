@@ -15,14 +15,17 @@ extension MemoryComponent {
              cpa = 0b0_0000_101,
              pcm = 0b0_0000_110,
              nta = 0b0_0000_111,
+
              // General
              imm = 0b0_0001_000,
              pps = 0b0_0010_000,
              cps = 0b0_0011_000,
+
              // Register management
              xch = 0b0_0100_000,
              rst = 0b0_0101_000,
              ast = 0b0_0110_000,
+
              // Arithmetic
              inc = 0b0_0111_000,
              dec = 0b0_1000_000,
@@ -30,22 +33,27 @@ extension MemoryComponent {
              rsh = 0b0_1010_000,
              add = 0b0_1011_000,
              sub = 0b0_1100_000,
+
              // Logic
              ior = 0b0_1101_000,
              and = 0b0_1110_000,
              xor = 0b0_1111_000,
+
              // Barrel shifter
              bsl = 0b1_0000_000,
              bpl = 0b1_0001_000,
              bsr = 0b1_0010_000,
              bpr = 0b1_0011_000,
+
              // Kernel
              ent = 0b1_010_0000,
              mmu = 0b1_011_0000,
              prf = 0b1_1000_000,
+
              // Ports
              pst = 0b1_1001_000,
              pld = 0b1_1010_000,
+
              // Memory management
              brh = 0b1_1011_000,
              jmp = 0b1_1100_000,
@@ -85,6 +93,32 @@ extension MemoryComponent {
                 return
             } else {
                 return nil
+            }
+        }
+
+        func parseOperand(fromString representativeString: String) -> Int? {
+            switch representativeString.lowercased() {
+                case "accumulator", "acc":
+                    if [.imm, .pps, .cps, .inc, .dec, .neg,
+                        .rsh].contains(self) {
+                        return 0
+                    }
+
+                    [.jmp, .cal, .mst, .mld].contains(self) ?
+                        CLIStateController.terminate("Parse error: instruction '\(self)' must use the 'FWD' (RST 0) instruction for 'accumulator' mapping") :
+                        CLIStateController.terminate("Parse error: instruction '\(self)' does not support 'accumulator' mapping")
+
+                case "zero", "zer":
+                    if [.xch, .rsh, .ast, .add, .sub, .ior,
+                        .and, .xor, .pst, .pld, .jmp, .cal,
+                        .mst, .mld].contains(self) {
+                        return 0
+                    }
+
+                    CLIStateController.terminate("Parse error: instruction '\(self)' does not support 'zero' mapping")
+
+                default:
+                    return Int.parse(fromString: representativeString)
             }
         }
     }
