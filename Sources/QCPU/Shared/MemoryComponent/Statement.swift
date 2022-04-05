@@ -117,6 +117,9 @@ extension MemoryComponent {
 
                     CLIStateController.terminate("Parse error: instruction '\(self)' does not support 'zero' mapping")
 
+                case "forwarded", "fwd":
+                    return 0
+
                 default:
                     return Int.parse(fromString: representativeString)
             }
