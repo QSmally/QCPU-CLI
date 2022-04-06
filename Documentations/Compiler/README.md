@@ -12,9 +12,9 @@ Topics are featured in their own file, and general overview of the syntax is dow
 * `let foo: Type = start_value`
 * `mutate foo = foo + bar`
 
-**Allocation and references**
-* `weak var foo: Type = start_value`
-* `refer var bar: Type = foo`
+**Allocation registers and references**
+* `weak var in_reg: Type = start_value`
+* `weak var in_reg_ref: &Type = &foo`
 
 ### Subroutines and embedded code
 
