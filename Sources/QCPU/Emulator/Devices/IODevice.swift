@@ -7,7 +7,7 @@
 
 class GenericIODevice: Device {
 
-    var instructionSize = 1
+    var instructionSize = 2
 
     unowned var emulator: EmulatorStateController
     var profile: EmulatorDefaults.Port
@@ -19,13 +19,18 @@ class GenericIODevice: Device {
         self.startAddress = startAddress
     }
 
-    func store(instruction: Int) {
-        emulator.outputStream.append("\(instruction): \(emulator.accumulator)")
-    }
+    func execute(instruction: Int) {
+        switch instruction {
+            case 0:
+                emulator.outputStream.append("\(instruction): \(emulator.accumulator)")
 
-    func load(instruction: Int) {
-        emulator.clock?.suspend()
-        emulator.accumulator = Int(readLine(strippingNewline: true) ?? "0") ?? 0
-        emulator.clock?.resume()
+            case 1:
+                emulator.clock?.suspend()
+                emulator.accumulator = Int(readLine(strippingNewline: true) ?? "0") ?? 0
+                emulator.clock?.resume()
+
+            default:
+                break
+        }
     }
 }

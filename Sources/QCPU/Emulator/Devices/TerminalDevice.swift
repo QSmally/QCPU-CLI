@@ -7,7 +7,7 @@
 
 class TerminalDevice: Device {
 
-    var instructionSize = 2
+    var instructionSize = 3
 
     unowned var emulator: EmulatorStateController
     var profile: EmulatorDefaults.Port
@@ -21,23 +21,26 @@ class TerminalDevice: Device {
         self.startAddress = startAddress
     }
 
-    func store(instruction: Int) {
-        if instruction == 0 {
-            emulator.outputStream.append(String())
-            return
-        }
+    func execute(instruction: Int) {
+        switch instruction {
+            case 0:
+                emulator.outputStream.append(String())
 
-        if let ascii = UnicodeScalar(emulator.accumulator) {
-            let asciiString = String(ascii)
-            emulator.outputStream.count > 0 ?
-                emulator.outputStream[emulator.outputStream.count - 1].append(asciiString) :
-                emulator.outputStream.append(asciiString)
-        }
-    }
+            case 1:
+                if let ascii = UnicodeScalar(emulator.accumulator) {
+                    let asciiString = String(ascii)
+                    emulator.outputStream.count > 0 ?
+                        emulator.outputStream[emulator.outputStream.count - 1].append(asciiString) :
+                        emulator.outputStream.append(asciiString)
+                }
 
-    func load(instruction: Int) {
-        emulator.accumulator = characters.count > 0 ?
-            characters.removeFirst() :
-            0
+            case 2:
+                emulator.accumulator = characters.count > 0 ?
+                    characters.removeFirst() :
+                    0
+
+            default:
+                break
+        }
     }
 }

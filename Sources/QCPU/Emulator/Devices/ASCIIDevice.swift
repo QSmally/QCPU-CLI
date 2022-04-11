@@ -7,7 +7,7 @@
 
 class GenericASCIIDevice: Device {
 
-    var instructionSize = 1
+    var instructionSize = 2
 
     unowned var emulator: EmulatorStateController
     var profile: EmulatorDefaults.Port
@@ -19,15 +19,20 @@ class GenericASCIIDevice: Device {
         self.startAddress = startAddress
     }
 
-    func store(instruction: Int) {
-        if let ascii = UnicodeScalar(emulator.accumulator) {
-            emulator.outputStream.append("\(instruction): \(ascii)")
-        }
-    }
+    func execute(instruction: Int) {
+        switch instruction {
+            case 0:
+                if let ascii = UnicodeScalar(emulator.accumulator) {
+                    emulator.outputStream.append("\(instruction): \(ascii)")
+                }
 
-    func load(instruction: Int) {
-        emulator.clock?.suspend()
-        emulator.accumulator = Int(readLine(strippingNewline: true) ?? "0") ?? 0
-        emulator.clock?.resume()
+            case 1:
+                emulator.clock?.suspend()
+                emulator.accumulator = Int(readLine(strippingNewline: true) ?? "0") ?? 0
+                emulator.clock?.resume()
+
+            default:
+                break
+        }
     }
 }

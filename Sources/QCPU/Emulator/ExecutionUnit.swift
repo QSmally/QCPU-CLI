@@ -73,7 +73,7 @@ extension EmulatorStateController {
                 }
             case .prf: dataCacheController(page: statement.operand)
 
-            case .pst:
+            case .prt:
                 let address = (registers[statement.operand] ?? 0) |
                     (statement.operand == 0 ? modifiers.forwarder : 0) |
                     modifiers.pointer |
@@ -81,20 +81,7 @@ extension EmulatorStateController {
 
                 if let port = ports[address: address] {
                     let instruction = argument - port.startAddress
-                    port.store(instruction: instruction)
-                }
-
-                modifiers.pointer = 0
-                modifiers.forwarder = 0
-            case .pld:
-                let address = (registers[statement.operand] ?? 0) |
-                    (statement.operand == 0 ? modifiers.forwarder : 0) |
-                    modifiers.pointer |
-                    argument
-
-                if let port = ports[address: address] {
-                    let instruction = argument - port.startAddress
-                    port.load(instruction: instruction)
+                    port.execute(instruction: instruction)
                 }
 
                 modifiers.pointer = 0
@@ -169,6 +156,22 @@ extension EmulatorStateController {
 
                 modifiers.pointer = 0
                 modifiers.forwarder = 0
+            case .mli:
+                let address = (registers[statement.operand] ?? 0) |
+                    (statement.operand == 0 ? modifiers.forwarder : 0) |
+                    modifiers.pointer |
+                    argument
+
+                dataCacheController(page: address >> 5)
+                accumulator = dataComponent?.binary[address & 0b0001_1111]?.value ?? 0
+
+                modifiers.pointer = 0
+                modifiers.forwarder = 0
+
+                if registers[statement.operand] ?? 0 != 0 {
+                    let pointer = registers[statement.operand] ?? 0
+                    registers[statement.operand] = pointer + 1
+                }
         }
 
         nextCycle()

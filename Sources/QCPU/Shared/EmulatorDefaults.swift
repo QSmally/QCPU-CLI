@@ -67,6 +67,5 @@ protocol Device {
         profile: EmulatorDefaults.Port,
         startAddress: Int)
 
-    func store(instruction: Int)
-    func load(instruction: Int)
+    func execute(instruction: Int)
 }

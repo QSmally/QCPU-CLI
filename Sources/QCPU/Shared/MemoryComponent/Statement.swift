@@ -51,15 +51,15 @@ extension MemoryComponent {
              prf = 0b1_1000_000,
 
              // Ports
-             pst = 0b1_1001_000,
-             pld = 0b1_1010_000,
+             prt = 0b1_1001_000,
 
              // Memory management
-             brh = 0b1_1011_000,
-             jmp = 0b1_1100_000,
-             cal = 0b1_1101_000,
-             mst = 0b1_1110_000,
-             mld = 0b1_1111_000
+             brh = 0b1_1010_000,
+             jmp = 0b1_1011_000,
+             cal = 0b1_1100_000,
+             mst = 0b1_1101_000,
+             mld = 0b1_1110_000,
+             mli = 0b1_1111_000
 
         var operand: Int {
             switch self {
@@ -68,8 +68,8 @@ extension MemoryComponent {
                 case .imm, .pps, .cps, .xch, .rst, .ast,
                      .inc, .dec, .neg, .rsh, .add, .sub,
                      .ior, .and, .xor, .bsl, .bpl, .bsr,
-                     .bpr, .prf, .pst, .pld, .brh, .jmp,
-                     .cal, .mst, .mld:
+                     .bpr, .prf, .prt, .brh, .jmp, .cal,
+                     .mst, .mld:
                     return 3
                 default:
                     return 0
@@ -77,7 +77,7 @@ extension MemoryComponent {
         }
 
         var hasSecondaryByte: Bool {
-            [.ppi, .cpi, .imm, .pst, .pld, .brh, .jmp, .cal, .mst, .mld].contains(self)
+            [.ppi, .cpi, .imm, .prt, .brh, .jmp, .cal, .mst, .mld].contains(self)
         }
 
         private static var cache = [String: Instruction]()
@@ -104,14 +104,14 @@ extension MemoryComponent {
                         return 0
                     }
 
-                    [.jmp, .cal, .mst, .mld].contains(self) ?
+                    [.jmp, .cal, .mst, .mld, .mli].contains(self) ?
                         CLIStateController.terminate("Parse error: instruction '\(self)' must use the 'FWD' (RST 0) instruction for 'accumulator' mapping") :
                         CLIStateController.terminate("Parse error: instruction '\(self)' does not support 'accumulator' mapping")
 
                 case "zero", "zer":
                     if [.xch, .rsh, .ast, .add, .sub, .ior,
-                        .and, .xor, .pst, .pld, .jmp, .cal,
-                        .mst, .mld].contains(self) {
+                        .and, .xor, .prt, .jmp, .cal, .mst,
+                        .mld, .mli].contains(self) {
                         return 0
                     }
 

@@ -7,7 +7,7 @@
 
 class DivideDevice: Device {
 
-    var instructionSize = 1
+    var instructionSize = 2
 
     unowned let emulator: EmulatorStateController
     let profile: EmulatorDefaults.Port
@@ -21,15 +21,20 @@ class DivideDevice: Device {
         self.startAddress = startAddress
     }
 
-    func store(instruction: Int) {
-        firstArgument = emulator.accumulator
-    }
+    func execute(instruction: Int) {
+        switch instruction {
+            case 0:
+                firstArgument = emulator.accumulator
 
-    func load(instruction: Int) {
-        let result = emulator.accumulator != 0 ?
-            firstArgument / emulator.accumulator :
-            0
-        firstArgument = result
-        emulator.accumulator = firstArgument
+            case 1:
+                let result = emulator.accumulator != 0 ?
+                    firstArgument / emulator.accumulator :
+                    0
+                firstArgument = result
+                emulator.accumulator = firstArgument
+
+            default:
+                break
+        }
     }
 }
