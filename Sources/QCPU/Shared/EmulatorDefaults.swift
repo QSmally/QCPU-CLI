@@ -10,8 +10,10 @@ import Foundation
 struct EmulatorDefaults: Codable {
 
     enum DeviceType: String, Codable {
-        case io,
-             ascii,
+        case integerInput,
+             integerOutput,
+             asciiInput,
+             asciiOutput,
              terminal,
              multiply,
              divide,
@@ -30,12 +32,14 @@ struct EmulatorDefaults: Codable {
 
         func generateClass(emulator: EmulatorStateController, startAddress: Int) -> Device {
             switch type {
-                case .io:       return GenericIODevice(emulator: emulator, profile: self, startAddress: startAddress)
-                case .ascii:    return GenericASCIIDevice(emulator: emulator, profile: self, startAddress: startAddress)
-                case .terminal: return TerminalDevice(emulator: emulator, profile: self, startAddress: startAddress)
-                case .multiply: return MultiplyDevice(emulator: emulator, profile: self, startAddress: startAddress)
-                case .divide:   return DivideDevice(emulator: emulator, profile: self, startAddress: startAddress)
-                case .modulo:   return ModuloDevice(emulator: emulator, profile: self, startAddress: startAddress)
+                case .integerInput:  return InputIntegerDevice(emulator: emulator, profile: self, startAddress: startAddress)
+                case .integerOutput: return OutputIntegerDevice(emulator: emulator, profile: self, startAddress: startAddress)
+                case .asciiInput:    return InputASCIIDevice(emulator: emulator, profile: self, startAddress: startAddress)
+                case .asciiOutput:   return OutputASCIIDevice(emulator: emulator, profile: self, startAddress: startAddress)
+                case .terminal:      return TerminalDevice(emulator: emulator, profile: self, startAddress: startAddress)
+                case .multiply:      return MultiplyDevice(emulator: emulator, profile: self, startAddress: startAddress)
+                case .divide:        return DivideDevice(emulator: emulator, profile: self, startAddress: startAddress)
+                case .modulo:        return ModuloDevice(emulator: emulator, profile: self, startAddress: startAddress)
                 default:
                     CLIStateController.terminate("Fatal error: unimplemented port '\(type)'")
             }
