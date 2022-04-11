@@ -69,7 +69,7 @@ extension MemoryComponent {
                      .inc, .dec, .neg, .rsh, .add, .sub,
                      .ior, .and, .xor, .bsl, .bpl, .bsr,
                      .bpr, .prf, .prt, .brh, .jmp, .cal,
-                     .mst, .mld:
+                     .mst, .mld, .mli:
                     return 3
                 default:
                     return 0
@@ -77,7 +77,7 @@ extension MemoryComponent {
         }
 
         var hasSecondaryByte: Bool {
-            [.ppi, .cpi, .imm, .prt, .brh, .jmp, .cal, .mst, .mld].contains(self)
+            [.ppi, .cpi, .imm, .prt, .brh, .jmp, .cal, .mst, .mld, .mli].contains(self)
         }
 
         private static var cache = [String: Instruction]()
