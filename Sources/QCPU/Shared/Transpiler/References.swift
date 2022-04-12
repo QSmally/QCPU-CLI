@@ -13,7 +13,7 @@ extension Transpiler {
             .last ?? memoryComponent
     }
 
-    func label(rawString line: String) -> MemoryComponent.Label? {
+    func label(rawString line: String, precompiled: MemoryComponent.Statement? = nil) -> MemoryComponent.Label? {
         if referenceComponent.binary.pointer >> 5 != 0 {
             guard memoryComponent.overflowable else {
                 CLIStateController.terminate("Address error: page \(memoryComponent.name) ran out of addressing without being marked as '@OVERFLOWABLE'")
@@ -29,8 +29,13 @@ extension Transpiler {
             overflowComponent.declarations = memoryComponent.declarations
             overflowComponent.purpose = .extended
 
-            pagesGenerated.append(overflowComponent)
             referenceComponent.binary.pointer = 0
+            pagesGenerated.append(overflowComponent)
+        }
+
+        if let precompiledStatement = precompiled {
+            referenceComponent.binary.append(precompiledStatement)
+            return nil
         }
 
         if let labelTarget = Expressions.label.match(line, group: 2) {
@@ -55,13 +60,12 @@ extension Transpiler {
                 privacy: isPublicLabel ? .segment : .page)
         } else {
             if let ascii = Expressions.ascii.match(line, group: 1) {
-                // TODO: fix incorrect placement of characters when on the edge of page overflow
                 for asciiCharacter in ascii.utf8 {
                     let asciiStatement = MemoryComponent.Statement(fromString: String(asciiCharacter))
-                        .transpile(
-                            value: Int(asciiCharacter),
-                            botherCompileInstruction: false)
-                    referenceComponent.binary.append(asciiStatement)
+                        .transpile(value: Int(asciiCharacter), botherCompileInstruction: false)
+                    let _ = label(
+                        rawString: String(asciiCharacter),
+                        precompiled: asciiStatement)
                 }
             } else {
                 let statement = MemoryComponent.Statement(fromString: line)
