@@ -1,5 +1,5 @@
 //
-//  Supported.swift
+//  Tags.swift
 //  QCPU CLI
 //
 //  Created by Joey Smalen on 25/01/2022.
