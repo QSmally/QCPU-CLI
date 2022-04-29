@@ -53,6 +53,11 @@ extension Transpiler {
                 continue
             }
 
+            if instructionString.uppercased() == "EMPTY" {
+                memoryComponent.binary.dictionary.removeValue(forKey: index)
+                continue
+            }
+
             CLIStateController.terminate("Parse error: invalid instruction, immediate or alias '\(firstComponent)'")
         }
     }
