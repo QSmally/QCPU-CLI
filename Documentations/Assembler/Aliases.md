@@ -13,6 +13,7 @@ There are also operands which map to other values, because sometimes they differ
 * `FWD` - instruction mapped to `RST 0`;
 * `CLR` - instruction mapped to `AST 0`;
 * `NOP` - instruction mapped to `ADD 0`;
+* `EMPTY` - an empty location in memory;
 * `accumulator`/`acc` - sometimes `0b000` is mapped to the accumulator;
 * `zero`/`zer` - sometimes `0b000` is mapped to the zero register;
 * `forwarded`/`fwd` - in context when the `FWD` and `zero` aliases are used.

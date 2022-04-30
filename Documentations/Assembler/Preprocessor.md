@@ -44,10 +44,10 @@ Take the case above, it will only process the block when `--unsafe-block` is pre
 Always ignores the if-scope.
 
 ```asm
+AST 1
 @IF debug
     PST 0, 0
-    @DROPTHROUGH CND #zero
-    BRH 2, 0x00
+    @DROPTHROUGH BRH #zero, .loop
+    JMP 0, .breakpoint
 @END
-BRH 1, 0x00
 ```
