@@ -53,7 +53,7 @@ extension Transpiler {
                 continue
             }
 
-            if instructionString.uppercased() == "EMPTY" {
+            if instructionString == "empty" {
                 memoryComponent.binary.dictionary.removeValue(forKey: index)
                 continue
             }
