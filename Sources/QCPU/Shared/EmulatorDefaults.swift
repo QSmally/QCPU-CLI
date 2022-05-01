@@ -15,6 +15,7 @@ struct EmulatorDefaults: Codable {
              asciiInput,
              asciiOutput,
              terminal,
+             timer,
              multiply,
              divide,
              modulo,
@@ -37,6 +38,7 @@ struct EmulatorDefaults: Codable {
                 case .asciiInput:    return InputASCIIDevice(emulator: emulator, profile: self, startAddress: startAddress)
                 case .asciiOutput:   return OutputASCIIDevice(emulator: emulator, profile: self, startAddress: startAddress)
                 case .terminal:      return TerminalDevice(emulator: emulator, profile: self, startAddress: startAddress)
+                case .timer:         return TimerDevice(emulator: emulator, profile: self, startAddress: startAddress)
                 case .multiply:      return MultiplyDevice(emulator: emulator, profile: self, startAddress: startAddress)
                 case .divide:        return DivideDevice(emulator: emulator, profile: self, startAddress: startAddress)
                 case .modulo:        return ModuloDevice(emulator: emulator, profile: self, startAddress: startAddress)
