@@ -14,20 +14,22 @@ Topics are featured in their own file, and general overview of the syntax is dow
 
 **Allocation registers and references**
 * `weak var in_reg: Type = start_value`
-* `weak var in_reg_ref: &Type = &foo`
+* `weak var dyn_ref: &Type = &foo`
+* TODO: generic pointer types and operations (UInt, Byte)
 
 ### Subroutines and embedded code
 
 * `func foo() -> Type { }`
-* `func foo(copyable bar: UInt) -> Type { }`
-* `func foo(mutable bar: UInt) -> Type { }`
+* `func foo(copyable bar: Type) -> Type { }`
+* `func foo(mutable bar: Type) -> Type { }`
 
 **Embedded code and custom blocks**
 * `clos foo() -> Type { }`
 * `clos foo() [element: Element]: Bool -> Array<Element> { }`
 
 **Operators and assembly API**
-* `oper +(lhs: Int, rhs: Int) -> Int { }`
+* `oper inc(rhs: Int) -> Int { }`
+* `oper mod(lhs: Int, rhs: Int) -> Int { }`
 * `asm oper -(lhs: Int, rsh: Int) -> Int { }`
 
 ### Complex data types
@@ -40,8 +42,8 @@ Topics are featured in their own file, and general overview of the syntax is dow
 * `struct Something: SomeProtocol { }`
     - `computed var`
     - `lazy var`
-    - preprocessed #size constant
-    - preprocessed #address start pointer constant
+    - preprocessed `size` constant
+    - preprocessed `address` start pointer constant
 
 **Protocols**
 * `protocol Something { }`
