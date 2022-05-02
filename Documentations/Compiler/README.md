@@ -11,6 +11,7 @@ Topics are featured in their own file, and general overview of the syntax is dow
 * `var foo: Type = start_value`
 * `let foo: Type = start_value`
 * `mutate foo = foo + bar`
+* TODO: configure syntax literals for arrays, strings (char arrays), numerics, etc
 
 **Allocation registers and references**
 * `weak var in_reg: Type = start_value`
