@@ -26,25 +26,29 @@ struct EmulatorDefaults: Codable {
 
         var name: String
         var type: DeviceType
-
         var address: Int?
-        var loadPenalty: Int?
-        var generateNameClass: Bool?
 
-        func generateClass(emulator: EmulatorStateController, startAddress: Int) -> Device {
+        var Class: Device.Type {
             switch type {
-                case .integerInput:  return InputIntegerDevice(emulator: emulator, profile: self, startAddress: startAddress)
-                case .integerOutput: return OutputIntegerDevice(emulator: emulator, profile: self, startAddress: startAddress)
-                case .asciiInput:    return InputASCIIDevice(emulator: emulator, profile: self, startAddress: startAddress)
-                case .asciiOutput:   return OutputASCIIDevice(emulator: emulator, profile: self, startAddress: startAddress)
-                case .terminal:      return TerminalDevice(emulator: emulator, profile: self, startAddress: startAddress)
-                case .timer:         return TimerDevice(emulator: emulator, profile: self, startAddress: startAddress)
-                case .multiply:      return MultiplyDevice(emulator: emulator, profile: self, startAddress: startAddress)
-                case .divide:        return DivideDevice(emulator: emulator, profile: self, startAddress: startAddress)
-                case .modulo:        return ModuloDevice(emulator: emulator, profile: self, startAddress: startAddress)
+                case .integerInput:  return InputIntegerDevice.self
+                case .integerOutput: return OutputIntegerDevice.self
+                case .asciiInput:    return InputASCIIDevice.self
+                case .asciiOutput:   return OutputASCIIDevice.self
+                case .terminal:      return TerminalDevice.self
+                case .timer:         return TimerDevice.self
+                case .multiply:      return MultiplyDevice.self
+                case .divide:        return DivideDevice.self
+                case .modulo:        return ModuloDevice.self
                 default:
                     CLIStateController.terminate("Fatal error: unimplemented port '\(type)'")
             }
+        }
+
+        func generateClass(emulator: EmulatorStateController, startAddress: Int) -> Device {
+            Class.init(
+                emulator: emulator,
+                profile: self,
+                startAddress: startAddress)
         }
     }
 
