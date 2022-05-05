@@ -8,12 +8,16 @@ let package = Package(
     platforms: [
         .macOS(.v11)
     ],
-    dependencies: [
-        /* .package(url: /* package url */, from: "1.0.0"), */
+    products: [
+        .executable(name: "QCPU", targets: ["QCPU"]),
+        .executable(name: "QCPUC", targets: ["QCPUC"])
     ],
     targets: [
         .target(
             name: "QCPU",
             dependencies: []),
+        .target(
+            name: "QCPUC",
+            dependencies: [.target(name: "QCPU")])
     ]
 )
