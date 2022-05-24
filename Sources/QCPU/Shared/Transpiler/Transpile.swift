@@ -63,14 +63,49 @@ extension Transpiler {
     }
 
     private func parseIntegerOffset(fromString representativeString: String) -> Int? {
-        let optionalArray = representativeString
+        var results = representativeString
             .components(separatedBy: .whitespaces)
-            .map { Int.parse(fromString: $0) }
-        guard optionalArray.filter({ $0 == nil }).count == 0 else {
-            return nil
+            .filter { !$0.isEmpty }
+        guard results.count & 0x01 == 1 else {
+            CLIStateController.terminate("Parse error: invalid amount of items in integer evaluation")
         }
 
-        return optionalArray
-            .reduce(0) { $0 + $1! }
+        while results.count != 1 {
+            let lhsString = results[0]
+            let instructionString = results[1]
+            let rhsString = results[2]
+
+            results.removeFirst(3)
+
+            guard let lhs = Int.parse(fromString: lhsString),
+                  let rhs = Int.parse(fromString: rhsString) else {
+                CLIStateController.terminate("Parse error: invalid integer-like '\(lhsString)' or '\(rhsString)'")
+            }
+
+            guard let instruction = parseInstruction(fromString: instructionString) else {
+                CLIStateController.terminate("Parse error: invalid operator '\(instructionString)'")
+            }
+
+            let result = instruction(lhs, rhs)
+            results.append(String(result))
+        }
+
+        guard let integerConstant = Int.parse(fromString: results.first!) else {
+            CLIStateController.terminate("Parse error: invalid constant '\(results.first!))'")
+        }
+
+        return integerConstant
+    }
+
+    private func parseInstruction(fromString instruction: String) -> ((Int, Int) -> Int)? {
+        switch instruction.lowercased() {
+            case "add", "+": return { lhs, rhs in lhs + rhs }
+            case "sub", "-": return { lhs, rhs in lhs - rhs }
+            case "ior", "|": return { lhs, rhs in lhs | rhs }
+            case "and", "&": return { lhs, rhs in lhs & rhs }
+            case "xor", "*": return { lhs, rhs in lhs * rhs }
+            default:
+                return nil
+        }
     }
 }
