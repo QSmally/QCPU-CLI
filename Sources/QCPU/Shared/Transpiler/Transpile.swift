@@ -105,7 +105,7 @@ extension Transpiler {
             case "and", "&": return { lhs, rhs in lhs & rhs }
             case "xor", "^": return { lhs, rhs in lhs ^ rhs }
             case "lsh":      return { lhs, rhs in lhs << rhs }
-            case "rhs":      return { lhs, rhs in lhs >> rhs }
+            case "rsh":      return { lhs, rhs in lhs >> rhs }
             case "mul":      return { lhs, rhs in lhs * rhs }
             case "div":      return { lhs, rhs in lhs / rhs }
             case "mod":      return { lhs, rhs in lhs % rhs }
