@@ -39,13 +39,6 @@ extension Transpiler {
                 continue
             }
 
-            if let immediate = parseIntegerOffset(fromString: immutableStatement.representativeString) {
-                memoryComponent.binary.dictionary[index]?.transpile(
-                    value: immediate,
-                    botherCompileInstruction: false)
-                continue
-            }
-
             if let alias = Transpiler.aliases[instructionString] {
                 memoryComponent.binary.dictionary[index]?.transpile(
                     represents: alias,
@@ -58,7 +51,14 @@ extension Transpiler {
                 continue
             }
 
-            CLIStateController.terminate("Parse error: invalid instruction, immediate or alias '\(firstComponent)'")
+            if let immediate = parseIntegerOffset(fromString: immutableStatement.representativeString) {
+                memoryComponent.binary.dictionary[index]?.transpile(
+                    value: immediate,
+                    botherCompileInstruction: false)
+                continue
+            }
+
+            CLIStateController.terminate("Parse error: invalid instruction, constant or alias '\(firstComponent)'")
         }
     }
 
@@ -91,7 +91,7 @@ extension Transpiler {
         }
 
         guard let integerConstant = Int.parse(fromString: results.first!) else {
-            CLIStateController.terminate("Parse error: invalid constant '\(results.first!))'")
+            return nil
         }
 
         return integerConstant
