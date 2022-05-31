@@ -172,6 +172,9 @@ extension EmulatorStateController {
                     let pointer = registers[statement.operand] ?? 0
                     registers[statement.operand] = pointer + 1
                 }
+
+            case .breakpoint:
+                emulatorSuspendExecution(tag: "breakpoint")
         }
 
         nextCycle()

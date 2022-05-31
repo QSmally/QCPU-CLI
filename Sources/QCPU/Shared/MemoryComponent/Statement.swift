@@ -59,7 +59,9 @@ extension MemoryComponent {
              cal = 0b1_1100_000,
              mst = 0b1_1101_000,
              mld = 0b1_1110_000,
-             mli = 0b1_1111_000
+             mli = 0b1_1111_000,
+
+            breakpoint = 0x100
 
         var operand: Int {
             switch self {
