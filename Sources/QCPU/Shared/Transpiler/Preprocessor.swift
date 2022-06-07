@@ -130,9 +130,9 @@ extension Transpiler {
     }
 
     private func replaceSingleMacro(_ statement: String, memoryComponents: [MemoryComponent]) -> String {
-        if let tag = Expressions.marco.match(statement, group: 1) {
-            if let marco = memoryComponent.declarations.first(where: { $0.key == tag }) {
-                return statement.replacingOccurrences(of: "@\(tag)", with: marco.value)
+        if let tag = Expressions.macro.match(statement, group: 1) {
+            if let macro = memoryComponent.declarations.first(where: { $0.key == tag }) {
+                return statement.replacingOccurrences(of: "@\(tag)", with: macro.value)
             }
 
             let enumComponents = tag.components(separatedBy: ".")
