@@ -70,8 +70,8 @@ extension Transpiler {
                 continue
             }
 
-            if let tag = Expressions.marco.match(lineString, group: 1) {
-                let instructions = parsePreprocessorMarcos(
+            if let tag = Expressions.macro.match(lineString, group: 1) {
+                let instructions = parsePreprocessorMacros(
                     tag,
                     statement: lineString,
                     memoryComponents: memoryComponents)
@@ -98,7 +98,7 @@ extension Transpiler {
         }
     }
 
-    private func parsePreprocessorMarcos(_ tag: String, statement: String, memoryComponents: [MemoryComponent]) -> [String] {
+    private func parsePreprocessorMacros(_ tag: String, statement: String, memoryComponents: [MemoryComponent]) -> [String] {
         // Header
         let headerComponent = memoryComponents
             .first { $0.header?.name == tag }?
@@ -130,9 +130,9 @@ extension Transpiler {
     }
 
     private func replaceSingleMacro(_ statement: String, memoryComponents: [MemoryComponent]) -> String {
-        if let tag = Expressions.marco.match(statement, group: 1) {
-            if let marco = memoryComponent.declarations.first(where: { $0.key == tag }) {
-                return statement.replacingOccurrences(of: "@\(tag)", with: marco.value)
+        if let tag = Expressions.macro.match(statement, group: 1) {
+            if let macro = memoryComponent.declarations.first(where: { $0.key == tag }) {
+                return statement.replacingOccurrences(of: "@\(tag)", with: macro.value)
             }
 
             let enumComponents = tag.components(separatedBy: ".")
