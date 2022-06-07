@@ -70,8 +70,8 @@ extension Transpiler {
                 continue
             }
 
-            if let tag = Expressions.marco.match(lineString, group: 1) {
-                let instructions = parsePreprocessorMarcos(
+            if let tag = Expressions.macro.match(lineString, group: 1) {
+                let instructions = parsePreprocessorMacros(
                     tag,
                     statement: lineString,
                     memoryComponents: memoryComponents)
@@ -98,7 +98,7 @@ extension Transpiler {
         }
     }
 
-    private func parsePreprocessorMarcos(_ tag: String, statement: String, memoryComponents: [MemoryComponent]) -> [String] {
+    private func parsePreprocessorMacros(_ tag: String, statement: String, memoryComponents: [MemoryComponent]) -> [String] {
         // Header
         let headerComponent = memoryComponents
             .first { $0.header?.name == tag }?
