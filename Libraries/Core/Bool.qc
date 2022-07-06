@@ -4,11 +4,16 @@ struct Bool: Byte {
     var container: Byte
 
     asm closure toggle() -> Bool {
-        XOR self.container
+        @PREPARE accumulator self.container
+        NTA
+        @WRITEBACK self.container
+        @RETURNS self.container
     }
 
     asm operator not(target: Bool) -> Bool {
-        @ACCUMULATOR target
+        @PREPARE accumulator target
         NTA
+        @WRITEBACK target
+        @RETURNS target
     }
 }

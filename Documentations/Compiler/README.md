@@ -19,7 +19,7 @@ Topics are featured in their own file, and general overview of the syntax is dow
 * TODO: configure syntax literals for arrays, strings (char arrays), numerics, etc
 
 **Allocation registers and references**
-* `weak var in_reg: Type = start_value`
+* `weak var in_reg: ByteOrReference = start_value`
 * `weak var dyn_ref: Reference<Type> = &foo`
 * `weak var dyn_ref_sugar: &Type = &foo`
 * TODO: generic pointer types and operations (UInt, Byte)
@@ -34,10 +34,16 @@ Topics are featured in their own file, and general overview of the syntax is dow
 * `clos foo() -> Type { }`
 * `clos foo() [element: Element]: Bool -> Array<Element> { }`
 
-**Operators and assembly API**
+**Operators and constant parameters**
 * `oper inc(rhs: Int) -> Int { }`
 * `oper mod(lhs: Int, rhs: Int) -> Int { }`
+* `oper mod(lhs: Int, rhs: @Int) -> Int { }`
+
+**Assembly API**
 * `asm oper -(lhs: Int, rsh: Int) -> Int { }`
+    - `@PREPARE <target> <variable>` with target `accumulator`, `registers`, or both (`local`)
+    - `@WRITEBACK <variable>`
+    - `@RETURNS <variable>`
 
 ### Complex data types
 
