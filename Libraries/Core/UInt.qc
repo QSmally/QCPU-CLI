@@ -1,4 +1,5 @@
 
+@Literal<integer>
 struct UInt: Byte {
 
     var container: Byte

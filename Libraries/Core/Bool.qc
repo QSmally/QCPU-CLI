@@ -1,4 +1,5 @@
 
+@Literal<boolean>
 struct Bool: Byte {
 
     var container: Byte

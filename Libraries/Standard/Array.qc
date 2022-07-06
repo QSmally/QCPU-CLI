@@ -1,4 +1,5 @@
 
+@Literal<array<any>>
 struct Array<Element: Byte>#size: Object {
 
     weak var pointer: Byte = 0

@@ -11,6 +11,9 @@ Topics are featured in their own file, and general overview of the syntax is dow
 * `Object#size` (≥1 byte object of size `size`)
 * `Reference<Type>` (pointer to `Type`, syntax sugar to `&Type`)
 
+**Compiler messaging**
+* `@Literal<LiteralType> struct` with LiteralType `integer`, `boolean`, `array<LiteralType>`, or all (`any`)
+
 ### Variable management
 
 * `var foo: Type = start_value`
