@@ -6,7 +6,7 @@ struct Array<Element: Byte>#size: Object {
     var container: Object#size
 
     asm closure append(_ element: Element) {
-        @PREPARE accumulator element
+        @PREPARE:ACCUMULATOR element
         MST self.pointer, 0x00
         INC self.pointer
     }

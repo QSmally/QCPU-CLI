@@ -44,7 +44,7 @@ Topics are featured in their own file, and general overview of the syntax is dow
 
 **Assembly API**
 * `asm oper -(lhs: Int, rsh: Int) -> Int { }`
-    - `@PREPARE <target> <variable>` with target `accumulator`, `registers`, or both (`local`)
+    - `@PREPARE:<target> <variable>` with target `ACCUMULATOR`, `REGISTERS`, or either (`LOCAL`)
     - `@WRITEBACK <variable>`
     - `@RETURNS <variable>`
 
