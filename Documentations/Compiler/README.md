@@ -9,7 +9,7 @@ Topics are featured in their own file, and general overview of the syntax is dow
 **Built-ins (all both types and protocols)**
 * `Byte` (singularly addressed data, alias to `Object#1`)
 * `Object#size` (≥1 byte object of size `size`)
-* `Reference<Type>` (pointer to `Type`, syntax sugar to `&Type`)
+* `Reference<Type>` (pointer to `Type`, is a `Byte`, syntax sugar to `&Type`)
 
 **Compiler messaging**
 * `@Literal<LiteralType> struct` with LiteralType `integer`, `boolean`, `array<LiteralType>`, or all (`any`)
@@ -44,7 +44,10 @@ Topics are featured in their own file, and general overview of the syntax is dow
 
 **Assembly API**
 * `asm oper -(lhs: Int, rsh: Int) -> Int { }`
-    - `@PREPARE:<target> <variable>` with target `ACCUMULATOR`, `REGISTERS`, or either (`LOCAL`)
+* `asm clos foo() -> Foo { }`
+    - `@PREPARE:ACCUMULATOR <variable>`
+    - `@PREPARE:REGISTERS <variable>`
+    - `@PREPARE:LOCAL <variable>`
     - `@WRITEBACK <variable>`
     - `@RETURNS <variable>`
 
@@ -56,12 +59,14 @@ Topics are featured in their own file, and general overview of the syntax is dow
 
 **Structures**
 * `struct Something: SomeProtocol { }`
+    - preprocessed `address` start pointer constant
+    - value type init `shared clos create(...) -> Something { }`
+    - dynamic init `shared clos create(...) -> &Something { }`
+* `extension Something { }`
     - `computed var`
     - `lazy var`
     - `shared func` or `shared clos`
     - `shared var` or `shared let`
-    - preprocessed `size` constant
-    - preprocessed `address` start pointer constant
 
 **Protocols**
 * `protocol Something { }`
