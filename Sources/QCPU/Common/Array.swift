@@ -30,3 +30,21 @@ extension Array where Element == String {
         joined(separator: "\n")
     }
 }
+
+extension Array where Element == MemoryComponent {
+    func locate(address: MemoryComponent.Address) -> MemoryComponent? {
+        first { $0.address.equals(toPage: address) }
+    }
+
+    func index(ofAddress address: MemoryComponent.Address) -> Int? {
+        firstIndex { $0.address.equals(toPage: address) }
+    }
+
+    mutating func insert(memoryComponent: MemoryComponent) {
+        if let index = index(ofAddress: memoryComponent.address) {
+            self[index] = memoryComponent
+        } else {
+            append(memoryComponent)
+        }
+    }
+}

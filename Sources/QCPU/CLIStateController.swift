@@ -45,12 +45,6 @@ final class CLIStateController {
         }
     }
 
-    init() {
-        CLIStateController.arguments.count > 0 ?
-            handleCommandInput() :
-            CLIStateController.newline(CLIStateController.help)
-    }
-
     static func output(_ text: String) {
         let encodedText = text.data(using: .utf8)!
         try! FileHandle.standardOutput.write(contentsOf: encodedText)
@@ -79,14 +73,5 @@ final class CLIStateController {
 
     static func flag(withId prefix: String) -> Bool {
         arguments.contains("--\(prefix)")
-    }
-    
-    func handleCommandInput() {
-        guard let module = module else {
-            let inputCommand = CLIStateController.arguments.first!
-            CLIStateController.terminate("Error: invalid command '\(inputCommand)'")
-        }
-
-        module.execute()
     }
 }

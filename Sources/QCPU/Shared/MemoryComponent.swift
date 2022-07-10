@@ -22,13 +22,33 @@ final class MemoryComponent {
 
     var purpose: Purpose = .application
     var representativeStrings: [String]
-    var binary = RandomInsertArray<Statement>()
+    var binary = MemoryObject<Statement>()
     lazy var transpiler = Transpiler(self)
 
     enum Purpose {
         case application,
              extended,
              reserved
+    }
+
+    struct MemoryObject<Element> {
+        
+        var pointer = 0
+        var dictionary = [Int: Element]()
+        
+        var size: Int {
+            dictionary.count
+        }
+        
+        subscript(_ pointer: Int) -> Element? {
+            get { dictionary[pointer] }
+            set(value) { dictionary[pointer] = value }
+        }
+        
+        mutating func append(_ element: Element) {
+            dictionary[pointer] = element
+            pointer += 1
+        }
     }
 
     init(_ name: String, fromSource instructions: [String]) {
@@ -70,23 +90,5 @@ final class MemoryComponent {
         clonedMemoryComponent.binary = binary
 
         return clonedMemoryComponent
-    }
-}
-
-extension Array where Element == MemoryComponent {
-    func locate(address: MemoryComponent.Address) -> MemoryComponent? {
-        first { $0.address.equals(toPage: address) }
-    }
-
-    func index(ofAddress address: MemoryComponent.Address) -> Int? {
-        firstIndex { $0.address.equals(toPage: address) }
-    }
-
-    mutating func insert(memoryComponent: MemoryComponent) {
-        if let index = index(ofAddress: memoryComponent.address) {
-            self[index] = memoryComponent
-        } else {
-            append(memoryComponent)
-        }
     }
 }
