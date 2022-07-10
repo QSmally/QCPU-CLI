@@ -1,6 +1,6 @@
 
-@Literal<boolean>
-struct Bool: Byte {
+@Parsing(boolean)
+struct Bool {
 
     var container: Byte
 

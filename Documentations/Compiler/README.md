@@ -12,20 +12,24 @@ Topics are featured in their own file, and general overview of the syntax is dow
 * `Reference<Type>` (pointer to `Type`, is a `Byte`, syntax sugar to `&Type`)
 
 **Compiler messaging**
-* `@Literal<LiteralType> struct` with LiteralType `integer`, `boolean`, `array<LiteralType>`, or all (`any`)
+* `@Parsing(LiteralType) struct`
+    - LiteralType `integer`, `boolean`, `array` or `any`
+    - Passes literal context to compiler
+* `@ReferenceType struct`
+    - Attaching implementation to pointer type `&Type`
+* `@ApplicationMain struct`
+    - A struct to initialise when starting the application
 
 ### Variable management
 
 * `var foo: Type = start_value`
 * `let foo: Type = start_value`
 * `mutate foo = foo operator bar`
-* TODO: configure syntax literals for arrays, strings (char arrays), numerics, etc
 
 **Allocation registers and references**
 * `weak var in_reg: ByteOrReference = start_value`
 * `weak var dyn_ref: Reference<Type> = &foo`
 * `weak var dyn_ref_sugar: &Type = &foo`
-* TODO: generic pointer types and operations (UInt, Byte)
 
 ### Subroutines and embedded code
 
@@ -62,11 +66,12 @@ Topics are featured in their own file, and general overview of the syntax is dow
     - preprocessed `address` start pointer constant
     - value type init `shared clos create(...) -> Something { }`
     - dynamic init `shared clos create(...) -> &Something { }`
-* `extension Something { }`
-    - `computed var`
-    - `lazy var`
-    - `shared func` or `shared clos`
-    - `shared var` or `shared let`
+* `struct Something<GenericSomething: SomeProtocol>: SomeProtocol { }`
+    - associated `GenericSomething` type
+* `computed var`
+* `lazy var`
+* `shared func` or `shared clos`
+* `shared var` or `shared let`
 
 **Protocols**
 * `protocol Something { }`

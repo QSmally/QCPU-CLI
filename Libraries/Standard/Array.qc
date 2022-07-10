@@ -1,8 +1,8 @@
 
-@Literal<array<any>>
-struct Array<Element: Byte>#size: Object {
+@Parsing(array)
+struct Array<Element: Byte>#size {
 
-    weak var pointer: Byte = 0
+    weak var pointer: UInt = 0
     var container: Object#size
 
     asm closure append(_ element: Element) {
