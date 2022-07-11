@@ -27,15 +27,16 @@ Topics are featured in their own file, and general overview of the syntax is dow
 * `mutate foo = foo operator bar`
 
 **Allocation registers and references**
-* `weak var in_reg: ByteOrReference = start_value`
-* `weak var dyn_ref: Reference<Type> = &foo`
-* `weak var dyn_ref_sugar: &Type = &foo`
+* `nonmemory var in_reg: ByteOrReference = start_value`
+* `nonmemory var dyn_ref: Reference<Type> = &foo`
+* `nonmemory var dyn_ref_sugar: &Type = &foo`
 
 ### Subroutines and embedded code
 
 * `func foo() -> Type { }`
 * `func foo(copyable bar: Type) -> Type { }`
 * `func foo(mutable bar: Type) -> Type { }`
+    - `returns some_typed_var`
 
 **Embedded code and custom blocks**
 * `clos foo() -> Type { }`
@@ -53,7 +54,7 @@ Topics are featured in their own file, and general overview of the syntax is dow
     - `@PREPARE:REGISTERS <variable>`
     - `@PREPARE:LOCAL <variable>`
     - `@WRITEBACK <variable>`
-    - `@RETURNS <variable>`
+    - `@RETURNS <variable>` or `@RETURNS` for accumulator
 
 ### Complex data types
 
@@ -66,7 +67,7 @@ Topics are featured in their own file, and general overview of the syntax is dow
     - preprocessed `address` start pointer constant
     - value type init `shared clos create(...) -> Something { }`
     - dynamic init `shared clos create(...) -> &Something { }`
-* `struct Something<GenericSomething: SomeProtocol>: SomeProtocol { }`
+* `struct Something<GenericSomething: SomeProtocol>: OtherProtocol { }`
     - associated `GenericSomething` type
 * `computed var`
 * `lazy var`

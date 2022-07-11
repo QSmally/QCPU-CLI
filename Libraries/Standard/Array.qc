@@ -2,8 +2,9 @@
 @Parsing(array)
 struct Array<Element: Byte>#size {
 
-    weak var pointer: UInt = 0
     var container: Object#size
+
+    nonmemory lazy var pointer: &Object = &self.container
 
     asm closure append(_ element: Element) {
         @PREPARE:ACCUMULATOR element
@@ -15,6 +16,6 @@ struct Array<Element: Byte>#size {
         DEC self.pointer
         FWD
         MLD forwarded, 0x00
-        @RETURNS accumulator
+        @RETURNS
     }
 }

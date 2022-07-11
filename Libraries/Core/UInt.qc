@@ -9,12 +9,14 @@ struct UInt {
     asm operator inc(target: UInt) -> UInt {
         @PREPARE:LOCAL target
         INC target
+        @RETURNS target
     }
 
     // Decrement
     asm operator dec(target: UInt) -> UInt {
         @PREPARE:LOCAL target
         DEC target
+        @RETURNS target
     }
 
     // Addition
