@@ -168,7 +168,7 @@ extension EmulatorStateController {
                 modifiers.pointer = 0
                 modifiers.forwarder = 0
 
-                if registers[statement.operand] ?? 0 != 0 {
+                if statement.operand != 0 {
                     let pointer = registers[statement.operand] ?? 0
                     registers[statement.operand] = pointer + 1
                 }
