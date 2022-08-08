@@ -20,6 +20,7 @@ enum Expressions {
 
     static private let headerStyle      = try! NSRegularExpression(pattern: #"^[A-Z0-9]+$"#)
     static private let declarationStyle = try! NSRegularExpression(pattern: #"^[a-z0-9_\.]+(?:\.{3})?$"#)
+    static private let referenceStyle   = try! NSRegularExpression(pattern: #"^[a-z0-9_\.]+$"#)
 
     static func stylingGuideline(forHeader input: String) {
         if headerStyle.match(input) == nil {
@@ -30,6 +31,15 @@ enum Expressions {
     static func stylingGuideline(forDeclaration input: String) {
         if declarationStyle.match(input) == nil {
             CLIStateController.newline("Style warning \(input): declarations should be snake_cased and only have lowercase characters")
+        }
+    }
+
+    static func stylingGuideline(forReference input: String) {
+        let components = input
+            .components(separatedBy: ".")
+            .count
+        if referenceStyle.match(input) == nil || components > 2 {
+            CLIStateController.newline("Style warning \(input): references should be snake_cased, have lowercase characters and a maximum of two components")
         }
     }
 }

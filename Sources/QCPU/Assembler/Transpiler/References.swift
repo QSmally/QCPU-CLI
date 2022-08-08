@@ -49,6 +49,8 @@ extension Transpiler {
                 referenceComponent.binary.pointer = parsedOrg
             }
 
+            Expressions.stylingGuideline(forReference: labelTarget)
+
             let isPublicLabel = Expressions.label.match(line, group: 1) == "&"
             let address = MemoryComponent.Address(
                 segment: referenceComponent.address.segment,
