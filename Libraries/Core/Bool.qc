@@ -4,7 +4,11 @@ struct Bool {
 
     var container: Byte
 
-    asm closure toggle() -> Bool {
+    asm inline func conditional() flags(notzero) {
+        @PREPARE:ACCUMULATOR self.container
+    }
+
+    asm inline func toggle() -> Bool {
         @PREPARE:ACCUMULATOR self.container
         NTA
         @WRITEBACK self.container
