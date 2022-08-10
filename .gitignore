@@ -1,11 +1,13 @@
 
+# Project
+.swiftpm/
+.build/
+
 # Environment
 .DS_Store
-/.build
 /*.xcodeproj
 xcuserdata/
 DerivedData/
-.swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
 
 # Dependencies
 /Packages
