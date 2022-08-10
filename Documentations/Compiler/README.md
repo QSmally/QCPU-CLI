@@ -39,22 +39,24 @@ Topics are featured in their own file, and general overview of the syntax is dow
     - `returns some_typed_var`
 
 **Embedded code and custom blocks**
-* `clos foo() -> Type { }`
-* `clos foo() [element: Element]: Bool -> Array<Element> { }`
+* `inline func foo() -> Type { }`
+* `inline func foo() [element: Element]: Bool -> Array<Element> { }`
+    - `let ... = closure(element: ...)`
 
 **Operators and constant parameters**
-* `oper inc(rhs: Int) -> Int { }`
+* `oper inc(target: Int) -> Int { }`
 * `oper mod(lhs: Int, rhs: Int) -> Int { }`
 * `oper mod(lhs: Int, rhs: @Int) -> Int { }`
 
 **Assembly API**
 * `asm oper -(lhs: Int, rsh: Int) -> Int { }`
-* `asm clos foo() -> Foo { }`
+* `asm inline func foo() -> Foo { }`
     - `@PREPARE:ACCUMULATOR <variable>`
     - `@PREPARE:REGISTERS <variable>`
     - `@PREPARE:LOCAL <variable>`
     - `@WRITEBACK <variable>`
     - `@RETURNS <variable>` or `@RETURNS` for accumulator
+* `asm inline func conditional() flags(notzero) { }`
 
 ### Complex data types
 
@@ -64,24 +66,24 @@ Topics are featured in their own file, and general overview of the syntax is dow
 
 **Structures**
 * `struct Something: SomeProtocol { }`
-    - preprocessed `address` start pointer constant
+    - preprocessed `address` start pointer from compiler or kernel
     - value type init `shared clos create(...) -> Something { }`
     - dynamic init `shared clos create(...) -> &Something { }`
 * `struct Something<GenericSomething: SomeProtocol>: OtherProtocol { }`
     - associated `GenericSomething` type
 * `computed var`
 * `lazy var`
-* `shared func` or `shared clos`
+* `shared func` or `shared inline func`
 * `shared var` or `shared let`
 
 **Protocols**
 * `protocol Something { }`
-    - `optional var`
-    - `internal var`
+    - `optional var` or `optional func`
+    - `internal var` or `internal func`
 
 **Modifiers and hosters**
 * `modifier Something { }`
-    - `func initialise` or `clos initialise`
-    - `func willSet` or `clos initialise`
-    - `func retrieve` or `clos retrieve`
+    - `func initialise`
+    - `func willSet`
+    - `func retrieve`
     - `@Something var`
