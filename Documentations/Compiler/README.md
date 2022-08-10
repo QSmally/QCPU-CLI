@@ -38,10 +38,11 @@ Topics are featured in their own file, and general overview of the syntax is dow
 * `func foo(mutable bar: Type) -> Type { }`
     - `returns some_typed_var`
 
-**Embedded code and custom blocks**
+**Embedded code, custom blocks and flags**
 * `inline func foo() -> Type { }`
 * `inline func foo() [element: Element]: Bool -> Array<Element> { }`
     - `let ... = closure(element: ...)`
+* `inline func foo() flags(notzero) { }`
 
 **Operators and constant parameters**
 * `oper inc(target: Int) -> Int { }`
