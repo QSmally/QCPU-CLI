@@ -73,7 +73,6 @@ Topics are featured in their own file, and general overview of the syntax is dow
 * `struct Something<GenericSomething: SomeProtocol>: OtherProtocol { }`
     - associated `GenericSomething` type
 * `computed var`
-* `lazy var`
 * `shared func` or `shared inline func`
 * `shared var` or `shared let`
 

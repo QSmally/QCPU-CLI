@@ -4,7 +4,7 @@ struct Array<Element: Byte>#size {
 
     var container: Object#size
 
-    nonmemory lazy var pointer: &Object = &self.container
+    nonmemory var pointer: &Object = &self.container
 
     asm inline func append(_ element: Element) {
         @PREPARE:ACCUMULATOR element
