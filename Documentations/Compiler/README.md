@@ -44,12 +44,12 @@ Topics are featured in their own file, and general overview of the syntax is dow
     - `let ... = closure(element: ...)`
 
 **Operators and constant parameters**
-* `oper inc(target: Int) -> Int { }`
-* `oper mod(lhs: Int, rhs: Int) -> Int { }`
-* `oper mod(lhs: Int, rhs: @Int) -> Int { }`
+* `oper inc(target: UInt) -> UInt { }`
+* `oper mod(lhs: UInt, rhs: UInt) -> UInt { }`
+* `oper mod(lhs: UInt, rhs: @UInt) -> UInt { }`
 
 **Assembly API**
-* `asm oper -(lhs: Int, rsh: Int) -> Int { }`
+* `asm oper -(lhs: UInt, rsh: UInt) -> UInt { }`
 * `asm inline func foo() -> Foo { }`
     - `@PREPARE:ACCUMULATOR <variable>`
     - `@PREPARE:REGISTERS <variable>`
