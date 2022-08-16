@@ -38,11 +38,10 @@ Topics are featured in their own file, and general overview of the syntax is dow
 * `func foo(mutable bar: Type) -> Type { }`
     - `returns some_typed_var`
 
-**Embedded code, custom blocks and flags**
+**Embedded code and custom blocks**
 * `inline func foo() -> Type { }`
 * `inline func foo() [element: Element]: Bool -> Array<Element> { }`
     - `let ... = closure(element: ...)`
-* `inline func foo() flags(notzero) { }`
 
 **Operators and constant parameters**
 * `oper inc(target: Int) -> Int { }`
@@ -56,8 +55,8 @@ Topics are featured in their own file, and general overview of the syntax is dow
     - `@PREPARE:REGISTERS <variable>`
     - `@PREPARE:LOCAL <variable>`
     - `@WRITEBACK <variable>`
+    - `@FLAG <flag>` with `(!)cout`, `(!)signed`, `(!)zero` or `(!)underflow`
     - `@RETURNS <variable>` or `@RETURNS` for accumulator
-* `asm inline func conditional() flags(notzero) { }`
 
 ### Complex data types
 

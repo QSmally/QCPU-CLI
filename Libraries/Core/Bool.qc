@@ -4,8 +4,9 @@ struct Bool {
 
     var container: Byte
 
-    asm inline func conditional() flags(notzero) {
+    asm inline func conditional() {
         @PREPARE:ACCUMULATOR self.container
+        @FLAG !zero
     }
 
     asm inline func toggle() -> Bool {
