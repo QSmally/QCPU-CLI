@@ -71,6 +71,7 @@ Topics are featured in their own file, and general overview of the syntax is dow
     - dynamic init `shared clos create(...) -> &Something { }`
 * `struct Something<GenericSomething: SomeProtocol>: OtherProtocol { }`
     - associated `GenericSomething` type
+* `extension Something { }`
 * `computed var`
 * `shared func` or `shared inline func`
 * `shared var` or `shared let`
