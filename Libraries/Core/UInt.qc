@@ -1,6 +1,5 @@
 
 @Parsing(integer)
-@ReferenceType
 struct UInt {
 
     var container: Byte
