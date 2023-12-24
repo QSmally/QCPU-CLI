@@ -1,21 +1,24 @@
 
 # QCPU CLI
 
-> A CLI for compiling Q-code, assembling extended QCPU 2 assembly and emulating machine code.
+A hardware description of the QCPU 2 architecture
 
-## Commands
-`qcpu <subcommand> <arguments>`
+Tracks the [QCPU 2 specification](https://github.com/QSmally/QCPU). For older
+versions written in Swift, see the [repository tags](https://github.com/QSmally/QCPU-CLI/tree/2CI).
 
-**Subcommands**
-* `prebuild <path>` - processes macros and outputs assembly with only labels.
-* `assemble <path>` - converts extended QCPU assembly into machine language.
-* `documentate <path> --dest=path` - generates markdown documentation from the assembly tags.
-* `run <path> --clock=int --burst=int --time=int --mwb` - assembles and emulates extended QCPU assembly.
-* `size <path>` - returns the size of the application.
+## Installation
 
-**Arguments**
-* `path` / `dest` - a path destination.
-* `clock` - an interval in hertz.
-* `burst` - a burst size of instructions to emulate.
-* `time` - milliseconds to spend on emulating before terminating.
-* `mwb` - memory write breakpoint, halts clock at memory stores.
+A compiled version of the CLI can be created through the Zig build system (Zig
+`0.11.0`).
+
+```bash
+$ zig build
+```
+
+## Tests
+
+QCPU CLI comes with use cases written as tests.
+
+```bash
+$ zig build test
+```

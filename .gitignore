@@ -1,14 +1,13 @@
 
-# Project
-.swiftpm/
-.build/
+.git
 
-# Environment
+# System
 .DS_Store
-/*.xcodeproj
-xcuserdata/
-DerivedData/
 
-# Dependencies
-/Packages
+# File editor
+Session.vim
+*.swp
 
+# Zig
+zig-out
+zig-cache
