@@ -1,4 +1,4 @@
 
 test {
-    // _ = @import();
+    _ = @import("mem/mem.zig");
 }
