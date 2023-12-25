@@ -5,6 +5,10 @@ pub const Page = union(enum) {
 
     store: @import("pages/store.zig"),
 
+    pub fn pages(_: *Self) usize {
+        return 1;
+    }
+
     pub fn read(self: *Self, address: u8) u8 {
         switch (self.*) {
             inline else => |*case| return case.read(address)
