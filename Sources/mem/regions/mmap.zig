@@ -15,6 +15,10 @@ pub fn MappedRegion(
         offset: usize,      // Offset, in pages in the mmap region, where the mmap is located
         mmap: Interface,    // Region where the mmap is located
 
+        // TODO: drivers for format and permissions
+        //  interrupt interface
+        //  cachable, readonly, copy_on_write, executable
+
         const regionTable = Interface.VTable {
             .pages = get_pages,
             .read = read,
