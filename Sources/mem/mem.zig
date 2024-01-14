@@ -1,6 +1,4 @@
 
-const std = @import("std");
-
 /// A generic memory interface to route pages based on their layout address.
 /// Sector must implement 'read', 'write' and 'pages'. Address is an integer
 /// type, of which @sizeOf(Address) equals the total memory size in bytes.
@@ -28,7 +26,7 @@ pub fn Memory(comptime Sector_: type) type {
                     return section_;
             }
 
-            // TODO: verify in init, have size() be a comptime constant
+            // TODO: verify in init
             unreachable;
         }
 
@@ -55,36 +53,20 @@ pub fn Memory(comptime Sector_: type) type {
 
 // Mark: test
 
-const PageTest = struct {
-
-    const Self = @This();
-
-    pub const Address = u16;
-    pub const Result = i8;
-
-    ret: Result,
-
-    pub fn size(self: *Self) usize {
-        _ = self;
-        return 256;
-    }
-
-    pub fn read(self: *Self, address: Address) Result {
-        // hack to verify page division and address modulation
-        return @as(Result, @intCast(address)) + self.ret;
-    }
-};
+const PageTest = @import("test/page.zig");
+const std = @import("std");
 
 test "address alignment" {
     var storage = [_]PageTest {
-        .{ .ret = 5 },
-        .{ .ret = 10 } };
+        .{ .value = 0 },
+        .{ .value = 10 } };
     const MemoryTest = Memory(PageTest);
     var memory = MemoryTest.init(&storage);
 
     try std.testing.expectEqual(@as(usize, 512), memory.size());
-    try std.testing.expectEqual(@as(MemoryTest.Result, 5), memory.read(0));
-    try std.testing.expectEqual(@as(MemoryTest.Result, 6), memory.read(1));
+    try std.testing.expectEqual(@as(MemoryTest.Result, 0), memory.read(0));
+    try std.testing.expectEqual(@as(MemoryTest.Result, 1), memory.read(1));
+    try std.testing.expectEqual(@as(MemoryTest.Result, 255), memory.read(255));
     try std.testing.expectEqual(@as(MemoryTest.Result, 10), memory.read(256));
     try std.testing.expectEqual(@as(MemoryTest.Result, 11), memory.read(257));
 }
