@@ -1,23 +1,26 @@
 
-pub const Page = union(enum) {
+// TODO: make union for more page types
+/// A regfile.
+pub fn Page(comptime Address_: type, comptime Result_: type) type {
+    return struct {
 
-    const Self = @This();
+        const Self = @This();
 
-    store: @import("pages/store.zig"),
+        pub const Address = Address_;
+        pub const Result = Result_;
 
-    pub fn pages(_: *Self) usize {
-        return 1;
-    }
+        container: []Result,
 
-    pub fn read(self: *Self, address: u8) u8 {
-        switch (self.*) {
-            inline else => |*case| return case.read(address)
+        pub fn size(self: *Self) usize {
+            return @sizeOf(self.container);
         }
-    }
 
-    pub fn write(self: *Self, address: u8, value: u8) void {
-        switch (self.*) {
-            inline else => |*case| case.write(address, value)
+        pub fn read(self: *Self, address: Address) Result {
+            return self.container[address];
         }
-    }
-};
+
+        pub fn write(self: *Self, address: Address, value: Result) void {
+            self.container[address] = value;
+        }
+    };
+}

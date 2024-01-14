@@ -1,132 +1,90 @@
 
 const std = @import("std");
 
-pub fn Memory(
-    comptime SectorType: type,
-    comptime AddressType: type
-) type {
+/// A generic memory interface to route pages based on their layout address.
+/// Sector must implement 'read', 'write' and 'pages'. Address is an integer
+/// type, of which @sizeOf(Address) equals the total memory size in bytes.
+pub fn Memory(comptime Sector_: type) type {
     return struct {
 
         const Self = @This();
 
-        pub const Address = AddressType;
+        pub const Sector = Sector_;
+        pub const Address = Sector.Address;
+        pub const Result = Sector.Result;
 
-        layout: []SectorType,
+        layout: []Sector,
 
-        pub fn init(layout: []SectorType) Self {
-            const address_size = @bitSizeOf(Address);
-            var page_total: usize = 0;
-
-            for (layout) |*section_|
-                page_total += section_.pages();
-
-            // TODO: make comptime
-            if (page_total != std.math.pow(usize, 2, address_size))
-                @panic("address size and page amount don't match");
+        pub fn init(layout: []Sector) Self {
             return .{ .layout = layout };
         }
 
-        pub fn section(self: *Self, address: Address) *SectorType {
-            var page_total: usize = 0;
+        pub fn section(self: *Self, address: Address) *Sector {
+            var size_bytes: usize = 0;
 
             for (self.layout) |*section_| {
-                page_total += section_.pages();
-                if (address < page_total)
+                size_bytes += section_.size();
+                if (address < size_bytes)
                     return section_;
             }
 
-            @panic("is verified by init");
+            // TODO: verify in init, have size() be a comptime constant
+            unreachable;
         }
 
-        pub fn read(self: *Self, address: Address, offset: u8) u8 {
-            const section_ = self.section(address);
-            return section_.read(offset);
+        pub fn size(self: *Self) usize {
+            var size_bytes: usize = 0;
+            for (self.layout) |*section_|
+                size_bytes += section_.size();
+            return size_bytes;
         }
 
-        pub fn write(self: *Self, address: Address, offset: u8, value: u8) void {
+        pub fn read(self: *Self, address: Address) Result {
             const section_ = self.section(address);
-            section_.write(offset, value);
+            const size_ = section_.size();
+            return section_.read(@intCast(@mod(address, size_)));
+        }
+
+        pub fn write(self: *Self, address: Address, value: Result) void {
+            const section_ = self.section(address);
+            const size_ = section_.size();
+            section_.write(@intCast(@mod(address, size_)), value);
         }
     };
 }
 
 // Mark: test
 
-const Page = @import("page.zig").Page;
-const StorePage = @import("pages/store.zig");
+const PageTest = struct {
+
+    const Self = @This();
+
+    pub const Address = u16;
+    pub const Result = i8;
+
+    ret: Result,
+
+    pub fn size(self: *Self) usize {
+        _ = self;
+        return 256;
+    }
+
+    pub fn read(self: *Self, address: Address) Result {
+        // hack to verify page division and address modulation
+        return @as(Result, @intCast(address)) + self.ret;
+    }
+};
 
 test "address alignment" {
-    const MemoryType = Memory(Page, u8);
-    var store = [_]Page {
-        @unionInit(Page, "store", .{ .container = .{ 0, 1, 2, 3 } ** (256/4) }),
-        @unionInit(Page, "store", .{ .container = .{ 4, 5, 6, 7 } ** (256/4) }) } ** (256/2);
-    var physmem = MemoryType.init(&store);
+    var storage = [_]PageTest {
+        .{ .ret = 5 },
+        .{ .ret = 10 } };
+    const MemoryTest = Memory(PageTest);
+    var memory = MemoryTest.init(&storage);
 
-    try std.testing.expectEqual(physmem.read(0, 0), 0);
-    try std.testing.expectEqual(physmem.read(0, 1), 1);
-    try std.testing.expectEqual(physmem.read(0, 2), 2);
-    try std.testing.expectEqual(physmem.read(0, 3), 3);
-    try std.testing.expectEqual(physmem.read(0, 4), 0);
-    try std.testing.expectEqual(physmem.read(1, 0), 4);
-
-    physmem.write(0, 0, 24);
-    try std.testing.expectEqual(physmem.read(0, 0), 24);
-}
-
-const Region = @import("region.zig").Region;
-const LinearRegion = @import("regions/linear.zig").LinearRegion;
-const MappedRegion = @import("regions/mmap.zig").MappedRegion;
-
-test "region chain" {
-    const PhysicalMemoryType = Memory(Page, u8);
-    var physmem = blk: {
-        var store = [_]Page {
-            @unionInit(Page, "store", .{ .container = .{ 0, 1, 2, 3 } ** (256/4) }),
-            @unionInit(Page, "store", .{ .container = .{ 4, 5, 6, 7 } ** (256/4) }) } ** (256/2);
-        break :blk PhysicalMemoryType.init(&store);
-    };
-
-    var kfixed = LinearRegion(PhysicalMemoryType) {
-        .truth = &physmem,
-        .pages = 192,
-        .offset = 0 };
-    var kvariable = MappedRegion(PhysicalMemoryType) {
-        .truth = &physmem,
-        .pages = 48,
-        .offset = 0,
-        .mmap = kfixed.region() };
-    var userland = MappedRegion(PhysicalMemoryType) {
-        .truth = &physmem,
-        .pages = 16,
-        .offset = 0,
-        .mmap = kvariable.region() };
-
-    const RegionType = Region(u8);
-    const VirtualMemoryType = Memory(RegionType, u8);
-    var virtmem = blk: {
-        var store = [_]RegionType {
-            userland.region(),
-            kfixed.region(),
-            kvariable.region() };
-        break :blk VirtualMemoryType.init(&store);
-    };
-
-    // TODO: Offset type declaration
-    _ = virtmem;
-    try std.testing.expectEqual(physmem.read(2, 1), 1);
-    // try std.testing.expectEqual(virtmem.read(2, 1), 1);
-    try std.testing.expectEqual(physmem.read(3, 1), 5);
-    // try std.testing.expectEqual(physmem.read(3, 1), 5);
-
-//     physmem.write(2, 1, 24);
-//     try std.testing.expectEqual(physmem.read(2, 1), 1);
-//     try std.testing.expectEqual(virtmem.read(2, 1), 24);
-//     try std.testing.expectEqual(physmem.read(3, 1), 5);
-//     try std.testing.expectEqual(physmem.read(3, 1), 24);
-
-//     virtmem.write(3, 1, 64);
-//     try std.testing.expectEqual(physmem.read(2, 1), 64);
-//     try std.testing.expectEqual(virtmem.read(2, 1), 24);
-//     try std.testing.expectEqual(physmem.read(3, 1), 64);
-//     try std.testing.expectEqual(physmem.read(3, 1), 24);
+    try std.testing.expectEqual(@as(usize, 512), memory.size());
+    try std.testing.expectEqual(@as(MemoryTest.Result, 5), memory.read(0));
+    try std.testing.expectEqual(@as(MemoryTest.Result, 6), memory.read(1));
+    try std.testing.expectEqual(@as(MemoryTest.Result, 10), memory.read(256));
+    try std.testing.expectEqual(@as(MemoryTest.Result, 11), memory.read(257));
 }

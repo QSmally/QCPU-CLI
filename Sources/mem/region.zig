@@ -1,31 +1,34 @@
 
-pub fn Region(
-    comptime AddressType: type
-) type {
+/// An upper-level virtual table of the memory region types, which define
+/// unique behaviour and propagation of data.
+pub fn Region(comptime Sector_: type) type {
     return struct {
 
         const Self = @This();
-        const Address = AddressType;
+
+        pub const Sector = Sector_;
+        pub const Address = Sector.Address;
+        pub const Result = Sector.Result;
+
+        pub const VTable = struct {
+            size: *const fn (*anyopaque) usize,
+            read: *const fn (*anyopaque, Address) Result,
+            write: *const fn (*anyopaque, Address, Result) void
+        };
 
         context: *anyopaque,
         vtable: VTable,
 
-        pub const VTable = struct {
-            pages: *const fn (*anyopaque) usize,
-            read: *const fn (*anyopaque, Address, u8) u8,
-            write: *const fn (*anyopaque, Address, u8, u8) void
-        };
-
-        pub fn pages(self: *Self) usize {
-            return self.vtable.pages(self.context);
+        pub fn size(self: *Self) usize {
+            return self.vtable.size(self.context);
         }
 
-        pub fn read(self: *Self, address: Address, offset: u8) u8 {
-            return self.vtable.read(address, offset);
+        pub fn read(self: *Self, address: Address) Result {
+            return self.vtable.read(self.context, address);
         }
 
-        pub fn write(self: *Self, address: Address, offset: u8, value: u8) void {
-            return self.vtable.write(address, offset, value);
+        pub fn write(self: *Self, address: Address, value: Result) void {
+            return self.vtable.write(self.context, address, value);
         }
     };
 }

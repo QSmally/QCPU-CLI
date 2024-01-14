@@ -1,45 +1,45 @@
 
-const Region = @import("../region.zig").Region;
+const Region = @import("../region.zig");
 
-pub fn LinearRegion(
-    comptime MemoryType: type
-) type {
+/// ...
+pub fn LinearRegion(comptime Memory_: type) type {
     return struct {
 
         const Self = @This();
-        const Address = MemoryType.Address;
-        const Interface = Region(Address);
 
-        truth: *MemoryType, // Source of truth, providing memory
-        pages: usize,       // Size of this region in pages
-        offset: usize,      // Offset, in pages in the truth, where this region starts
+        pub const Memory = Memory_;
+        pub const Sector = Memory.Sector;
+        pub const Address = Sector.Address;
+        pub const Result = Sector.Result;
+        pub const Interface = Region(Sector);
+
+        source: *Memory,
 
         const regionTable = Interface.VTable {
-            .pages = get_pages,
+            .size = size,
             .read = read,
             .write = write };
         pub fn region(self: *Self) Interface {
             return .{ .context = self, .vtable = regionTable };
         }
 
-        pub fn get_pages(context: *anyopaque) usize {
+        pub fn size(context: *anyopaque) usize {
             const self: *Self = @alignCast(@ptrCast(context));
-            return self.pages;
+            _ = self;
+            return 256;
         }
 
-        pub fn read(context: *anyopaque, address: Address, offset: u8) u8 {
+        pub fn read(context: *anyopaque, address: Address) Result {
             const self: *Self = @alignCast(@ptrCast(context));
             _ = self;
             _ = address;
-            _ = offset;
             return 0;
         }
 
-        pub fn write(context: *anyopaque, address: Address, offset: u8, value: u8) void {
+        pub fn write(context: *anyopaque, address: Address, value: Result) void {
             const self: *Self = @alignCast(@ptrCast(context));
             _ = self;
             _ = address;
-            _ = offset;
             _ = value;
         }
     };
