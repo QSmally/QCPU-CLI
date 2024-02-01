@@ -1,5 +1,5 @@
 
-const Region = @import("../region.zig");
+const Region = @import("region.zig").Region;
 
 /// Memory's 'sector' type must have a comptime-known 'size_bytes' constant,
 /// and it must therefore be a fixed-size layout. A sector is here known as a
@@ -22,6 +22,8 @@ pub fn LinearRegion(comptime Memory_: type) type {
         pub fn physical_offset(self: *Self, address: Address) Address {
             return address + @as(Address, @intCast(self.offset_pages * page_size_bytes));
         }
+
+        // Region(Sector)
 
         const regionTable = Region(Sector).VTable {
             .size = size,
@@ -60,15 +62,15 @@ const MemoryTest = @import("test/mem.zig");
 const std = @import("std");
 
 test "address alignment" {
-    const RegionTest = LinearRegion(MemoryTest);
+    const LinearRegion_ = LinearRegion(MemoryTest);
     var memory = MemoryTest {};
-    var region = RegionTest {
+    var region = LinearRegion_ {
         .source = &memory,
         .size_pages = 4,
         .offset_pages = 2 };
 
-    try std.testing.expectEqual(@as(MemoryTest.Result, 2), RegionTest.read(&region, 0));
-    try std.testing.expectEqual(@as(MemoryTest.Result, 2), RegionTest.read(&region, 1));
-    try std.testing.expectEqual(@as(MemoryTest.Result, 2), RegionTest.read(&region, 255));
-    try std.testing.expectEqual(@as(MemoryTest.Result, 3), RegionTest.read(&region, 256));
+    try std.testing.expectEqual(@as(MemoryTest.Result, 2), LinearRegion_.read(&region, 0));
+    try std.testing.expectEqual(@as(MemoryTest.Result, 2), LinearRegion_.read(&region, 1));
+    try std.testing.expectEqual(@as(MemoryTest.Result, 2), LinearRegion_.read(&region, 255));
+    try std.testing.expectEqual(@as(MemoryTest.Result, 3), LinearRegion_.read(&region, 256));
 }

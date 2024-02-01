@@ -32,9 +32,3 @@ pub fn Region(comptime Sector_: type) type {
         }
     };
 }
-
-// Mark: test
-
-test {
-    _ = @import("regions/linear.zig");
-}

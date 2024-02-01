@@ -12,3 +12,9 @@ pub fn read(self: *Self, address: Address) Result {
     // hack to return the current physical page
     return @as(Result, @intCast(@divFloor(address, 256)));
 }
+
+pub fn write(self: *Self, address: Address, value: Result) void {
+    _ = self;
+    _ = address;
+    _ = value;
+}
