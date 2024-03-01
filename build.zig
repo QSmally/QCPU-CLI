@@ -5,12 +5,12 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // const exec = b.addExecutable(.{
-    //     .name = "qcpu",
-    //     .root_source_file = .{ .path = "Sources/qcpu.zig" },
-    //     .target = target,
-    //     .optimize = optimize });
-    // b.installArtifact(exec);
+    const exec = b.addExecutable(.{
+        .name = "qcpuv",
+        .root_source_file = .{ .path = "Sources/sys.zig" },
+        .target = target,
+        .optimize = optimize });
+    b.installArtifact(exec);
 
     const unit_tests = b.addTest(.{
         .root_source_file = .{ .path = "Sources/test.zig" },

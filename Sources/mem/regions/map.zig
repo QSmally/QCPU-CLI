@@ -8,7 +8,6 @@ pub fn MapRegion(comptime Memory_: type, comptime Controller_: type) type {
     return struct {
 
         const Self = @This();
-        const stride = 2;
         const permissionsOffset = 1;
         const physicalPageOffset = 0;
 
@@ -18,6 +17,8 @@ pub fn MapRegion(comptime Memory_: type, comptime Controller_: type) type {
         pub const Result = Sector.Result;
         pub const page_size_bytes = Sector.size_bytes;
         pub const Controller = Controller_;
+
+        pub const stride = 2;
 
         comptime {
             if (@bitSizeOf(Address) != @bitSizeOf(u16))
@@ -46,7 +47,7 @@ pub fn MapRegion(comptime Memory_: type, comptime Controller_: type) type {
         bridge: *Controller,        // Reference to push interrupts to
 
         pub fn virtual_page(address: Address) Address {
-            return @divFloor(address, page_size_bytes);
+            return @divFloor(address, @as(Address, @truncate(page_size_bytes)));
         }
 
         pub fn physical_address(page: Address, address: Address) Address {
