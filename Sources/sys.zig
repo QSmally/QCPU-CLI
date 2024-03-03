@@ -1,4 +1,5 @@
 
+const Interrupts = @import("ints.zig");
 const Memory = @import("mem/mem.zig").Memory;
 const Page_ = @import("mem/pages/page.zig").Page;
 const Region_ = @import("mem/regions/region.zig").Region;
@@ -15,6 +16,12 @@ pub const registers = 7;
 
 pub const Page = Page_(Address, Result, page_bytes);
 pub const Region = Region_(Page);
+pub const Bridge = Interrupts.Bridge;
+
+pub const ExecutionMode = enum {
+    direct,
+    exec
+};
 
 comptime {
     std.debug.assert(pages * page_bytes == std.math.pow(usize, 2, @bitSizeOf(Address)));
@@ -22,15 +29,18 @@ comptime {
 
 accumulator: Result = 0,
 registers: [registers]Result = .{ 0 } ** registers,
-memory: Memory(Page),
-vmemory: Memory(Region), // TODO: wrap in interrupts to mark off kernel section from user mode
+kmode: bool = true,
 
+memory: *Memory(Page),
+vmemory: *Memory(Region),
+interrupts: *Interrupts,
 ireference: Address,
 
-pub fn init(memory_: Memory(Page), vmemory_: Memory(Region), entrypoint: Address) Self {
+pub fn init(memory_: *Memory(Page), vmemory_: *Memory(Region), interrupt_: *Interrupts, entrypoint: Address) Self {
     return .{
         .memory = memory_,
         .vmemory = vmemory_,
+        .interrupts = interrupt_,
         .ireference = entrypoint };
 }
 
@@ -41,24 +51,42 @@ pub fn main() !void {
     var global = std.heap.ArenaAllocator.init(source.allocator());
     defer _ = global.deinit();
 
-    var memory_ = Memory(Page).init(try physical_memory(global.allocator()));
-    var vmemory_ = Memory(Region).init(try virtual_memory(global.allocator(), &memory_));
-    const entrypoint = (userland_size * page_bytes) + (kfixed_size * MapRegion.stride);
-    var system = Self.init(memory_, vmemory_, entrypoint);
+    // TODO: CLI options
+    const exec_mode: ExecutionMode = .exec;
+    const endianness: std.builtin.Endian = .Little;
+
+    var interrupts_ = Interrupts {};
+    var memory_ = Memory(Page).init(try physical_memory(global.allocator(), &interrupts_));
+    var vmemory_ = Memory(Region).init(try virtual_memory(global.allocator(), &memory_, &interrupts_));
+
+    // TODO: initialise boot sector memory
+    // TODO: initialise dmac storage
+    // TODO: flag to load dmac storage into physical memory address, or have it be an instance setting
+
+    const entrypoint = if (exec_mode == .direct) 
+        memory_.dread(0x0000, endianness) else
+        memory_.dread(0xC000, endianness);
+    var system = Self.init(&memory_, &vmemory_, &interrupts_, entrypoint);
 
     while (true) {
-        const instruction = system.vmemory.read(system.ireference);
-        std.debug.print("{} : {}\n", .{ system.ireference, instruction });
-        // run, branch, check interrupts
-        system.ireference += 1;
+        const byte = system.vmemory.read(system.ireference);
+        std.debug.print("{} : {}\n", .{ system.ireference, byte });
+
+        system.step(&system.ireference);
+        // TODO: check interrupts here
+        // TODO: update terminal here
     }
 }
 
 const StorePage = @import("mem/pages/store.zig").StorePage(Page);
 
-fn physical_memory(allocator: std.mem.Allocator) ![]Page {
+fn physical_memory(allocator: std.mem.Allocator, context: anytype) ![]Page {
     var source = try allocator.alloc(Page, pages);
-    for (source) |*page| page.* = try empty_page(allocator);
+    source[0] = try empty_page(allocator); _ = context.bridge(0); // boot
+    source[1] = try empty_page(allocator); // dmac
+
+    for (2..256) |page_address|
+        source[page_address] = try empty_page(allocator);
     return source;
 }
 
@@ -69,16 +97,15 @@ fn empty_page(allocator: std.mem.Allocator) !Page {
 }
 
 const LinearRegion = @import("mem/regions/linear.zig").LinearRegion(Memory(Page));
-const MapRegion = @import("mem/regions/map.zig").MapRegion(Memory(Page), BridgeTest);
-const BridgeTest = @import("mem/test/bridge.zig");
+const MapRegion = @import("mem/regions/map.zig").MapRegion(Memory(Page), Bridge);
 
 const kfixed_size = 48;
 const kvariable_size = 16;
 const userland_size = 192;
 
-fn virtual_memory(allocator: std.mem.Allocator, source: *Memory(Page)) ![]Region {
-    // TODO: interrupt system
-    const bridge = try allocator.create(BridgeTest);
+fn virtual_memory(allocator: std.mem.Allocator, source: *Memory(Page), context: anytype) ![]Region {
+    const bridge = try allocator.create(Bridge);
+    bridge.* = context.bridge(1); // 1 = dmac page
 
     const kfixed = try allocator.create(LinearRegion);
     kfixed.* = LinearRegion {
@@ -105,4 +132,66 @@ fn virtual_memory(allocator: std.mem.Allocator, source: *Memory(Page)) ![]Region
     interfaces[1] = kfixed.region();
     interfaces[2] = kvariable.region();
     return interfaces;
+}
+
+fn is_kmode(self: *const Self) bool {
+    return self.ireference >= (userland_size * page_bytes);
+}
+
+const Instruction = enum(u8) {
+
+    mldw   = 0b1_1111_000,
+    mld    = 0b1_1110_000,
+    mstw   = 0b1_1101_000,
+    mst    = 0b1_1100_000,
+    jmpl   = 0b1_1011_000,
+    jmp    = 0b1_1010_000,
+    brh    = 0b1_1001_000,
+
+    push   = 0b1_1000_000,
+    sysc   = 0b1_01_00000,
+
+    bsrd   = 0b1_0011_000,
+    bsr    = 0b1_0010_000,
+    bsld   = 0b1_0001_000,
+    bsl    = 0b1_0000_000,
+
+    xor    = 0b0_1111_000,
+    @"and" = 0b0_1110_000,
+    ior    = 0b0_1101_000,
+    sub    = 0b0_1100_000,
+    add    = 0b0_1011_000,
+    rsh    = 0b0_1010_000,
+    neg    = 0b0_1001_000,
+    dec    = 0b0_1000_000,
+    inc    = 0b0_0111_000,
+
+    rst    = 0b0_0110_000,
+    ast    = 0b0_0101_000,
+    xch    = 0b0_0100_000,
+    msp    = 0b0_001_0000,
+    imm    = 0b0_0001_000,
+
+    // ... 3
+    bti    = 0b0_0000_100,
+    dfr    = 0b0_0000_011,
+    pcm    = 0b0_0000_010,
+    nta    = 0b0_0000_001,
+    ret    = 0b0_0000_000,
+
+    pub fn decode(binary: u8) Instruction {
+        inline for (@typeInfo(Instruction).Enum.fields) |instruction| {
+            if (binary >= instruction.value)
+                return std.meta.stringToEnum(Instruction, instruction.name).?;
+        }
+    }
+};
+
+fn step(self: *Self, address: *Address) void {
+    const byte = self.vmemory.read(address.*);
+    const instruction = Instruction.decode(byte);
+    _ = instruction;
+
+    // run, branch
+    address.* += 1;
 }

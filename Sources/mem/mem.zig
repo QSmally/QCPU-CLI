@@ -1,4 +1,6 @@
 
+const std = @import("std");
+
 /// A generic memory interface to route pages based on their layout address.
 /// Sector must implement 'read', 'write' and 'pages'. Address is an integer
 /// type, of which @sizeOf(Address) equals the total memory size in bytes.
@@ -48,13 +50,20 @@ pub fn Memory(comptime Sector_: type) type {
             const size_ = section_.size();
             section_.write(@intCast(@mod(address, size_)), value);
         }
+
+        pub fn dread(self: *Self, address: Address, mode: std.builtin.Endian) Address {
+            const byte_one: Address = @intCast(self.read(address));
+            const byte_two: Address = @intCast(self.read(address + 1));
+            return if (mode == .Little)
+                (byte_one) | (byte_two << 8) else
+                (byte_one << 8) | (byte_two);
+        }
     };
 }
 
 // Mark: test
 
 const PageTest = @import("test/page.zig");
-const std = @import("std");
 
 test "address alignment" {
     var storage = [_]PageTest {
