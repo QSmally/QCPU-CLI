@@ -5,12 +5,17 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const exec = b.addExecutable(.{
+    const clap = b.dependency("clap", .{
+        .target = target,
+        .optimize = optimize });
+
+    const qcpuv = b.addExecutable(.{
         .name = "qcpuv",
         .root_source_file = .{ .path = "Sources/qcpuv.zig" },
         .target = target,
         .optimize = optimize });
-    b.installArtifact(exec);
+    qcpuv.addModule("clap", clap.module("clap"));
+    b.installArtifact(qcpuv);
 
     const unit_tests = b.addTest(.{
         .root_source_file = .{ .path = "Sources/test.zig" },
