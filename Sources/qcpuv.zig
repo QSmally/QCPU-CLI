@@ -121,7 +121,7 @@ pub fn main() !void {
         const stderr = std.io
             .getStdErr()
             .writer();
-        system.step(options, stderr);
+        system.step(stderr);
         // TODO: check interrupts here
         // TODO: update terminal here
     }
@@ -270,6 +270,51 @@ const Instruction = enum(u8) {
                 return std.meta.stringToEnum(Instruction, instruction.name).?;
         }
     }
+
+    pub fn exec(self: Instruction, system: *Self, binary: u8) ?Address {
+        const operand: u3 = @intCast(binary & 0b111);
+        switch (self) {
+            // ret
+            .nta => system.accumulator = ~system.accumulator,
+            // pcm
+            // dfr
+            // bti
+            // imm
+            // msp
+            .xch => {
+                const accumulator = system.accumulator;
+                system.accumulator = system.zrread(operand);
+                system.zrwrite(operand, accumulator);
+            },
+            .ast => system.accumulator = system.zrread(operand),
+            .rst => system.zrwrite(operand, system.accumulator),
+            .inc => system.dwrite(operand, system.dread(operand) + 1),
+            .dec => system.dwrite(operand, system.dread(operand) - 1),
+            .neg => system.dwrite(operand, (~system.dread(operand)) + 1),
+            .rsh => system.dwrite(operand, system.dread(operand) >> 1),
+            .add => system.accumulator += system.zrread(operand),
+            .sub => system.accumulator -= system.zrread(operand),
+            .ior => system.accumulator |= system.zrread(operand),
+            .@"and" => system.accumulator &= system.zrread(operand),
+            .xor => system.accumulator ^= system.zrread(operand),
+            .bsl => system.accumulator <<= operand,
+            .bsld => system.accumulator <<= @intCast(system.zrread(operand) & 0b111),
+            .bsr => system.accumulator >>= operand,
+            .bsrd => system.accumulator >>= @intCast(system.zrread(operand) & 0b111),
+            // sysc
+            // push
+            // brh
+            // jmp
+            // jmpl
+            // mst
+            // mstw
+            // mld
+            // mldw
+            else => return null
+        }
+
+        return null;
+    }
 };
 
 const Interrupts = struct {
@@ -299,13 +344,29 @@ const Bridge = struct {
     }
 };
 
-fn step(self: *Self, options: anytype, log: anytype) void {
+fn step(self: *Self, log: anytype) void {
     const byte = self.vmemory.read(self.ireference);
     const instruction = Instruction.decode(byte);
     log.print("{} : {s} ({b})\n", .{ self.ireference, @tagName(instruction), byte }) catch {};
 
-    _ = options;
+    const goto = instruction.exec(self, byte) orelse self.ireference + 1;
+    if (!is_kmode(self.ireference) and is_kmode(goto))
+        self.interrupts.vector |= 1 << 4; // TODO: better interrupt system
+    self.ireference = goto;
+}
 
-    // run, branch
-    self.ireference += 1;
+fn dwrite(self: *Self, register: anytype, byte: Result) void {
+    if (register == 0) self.accumulator = byte else self.registers[register] = byte;
+}
+
+fn dread(self: *Self, register: anytype) Result {
+    return if (register == 0) self.accumulator else self.registers[register];
+}
+
+fn zrwrite(self: *Self, register: anytype, byte: Result) void {
+    if (register > 0) self.registers[register] = byte;
+}
+
+fn zrread(self: *Self, register: anytype) Result {
+    return if (register == 0) 0 else self.registers[register];
 }
