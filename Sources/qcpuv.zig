@@ -1,5 +1,4 @@
 
-const Interrupts = @import("ints.zig");
 const Memory = @import("mem/mem.zig").Memory;
 const Page_ = @import("mem/pages/page.zig").Page;
 const Region_ = @import("mem/regions/region.zig").Region;
@@ -16,11 +15,37 @@ pub const registers = 7;
 
 pub const Page = Page_(Address, Result, page_bytes);
 pub const Region = Region_(Page);
-pub const Bridge = Interrupts.Bridge;
 
 pub const ExecutionMode = enum {
     direct,
     exec
+};
+
+pub const Interrupts = struct {
+
+    pub const stride = 2;
+
+    vector: Bridge.Type = 0,
+
+    pub fn bridge(self: *Interrupts, page: usize) Bridge {
+        return .{ .context = self, .page = page };
+    }
+};
+
+pub const Bridge = struct {
+
+    pub const Type = u96; // 24 * 4
+    pub const SandboxAddress = u2;
+    pub const interrupts = std.math.pow(usize, 2, @bitSizeOf(SandboxAddress));
+
+    context: *Interrupts,
+    page: usize,
+
+    pub fn interrupt(self: *Bridge, flag: SandboxAddress) void {
+        const index = self.page * interrupts + flag;
+        std.debug.assert(@bitSizeOf(Type) > index);
+        self.context.vector |= @as(Type, 1) << @intCast(index);
+    }
 };
 
 comptime {

@@ -7,7 +7,7 @@ pub fn build(b: *std.Build) void {
 
     const exec = b.addExecutable(.{
         .name = "qcpuv",
-        .root_source_file = .{ .path = "Sources/sys.zig" },
+        .root_source_file = .{ .path = "Sources/qcpuv.zig" },
         .target = target,
         .optimize = optimize });
     b.installArtifact(exec);
