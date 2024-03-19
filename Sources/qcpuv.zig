@@ -284,58 +284,55 @@ const Instruction = enum(u8) {
 
         switch (self) {
             // ret
-            .nta => system.set_accumulator(~system.accumulator),
+            .nta => system.set_accumulator(~system.accumulator, .{}),
             // pcm
             // dfr
             // bti
             .imm => {
                 const immediate = system.vmemory.read(system.ireference);
-                system.dwrite(operand, immediate);
+                system.write(operand, immediate, .{});
                 system.ireference += 1;
             },
             // msp
             .xch => {
-                const accumulator = system.accumulator;
-                system.set_accumulator(system.zrread(operand));
-                system.zrwrite(operand, accumulator);
+                const register = system.zrread(operand);
+                system.write(operand, system.accumulator, .{});
+                system.set_accumulator(register, .{});
             },
-            .ast => system.set_accumulator(system.zrread(operand)),
-            .rst => system.zrwrite(operand, system.accumulator),
+            .ast => system.set_accumulator(system.zrread(operand), .{}),
+            .rst => system.write(operand, system.accumulator, .{}),
             .inc => {
                 const increment = @addWithOverflow(system.dread(operand), 1);
-                system.dwrite(operand, increment[0]);
+                system.write(operand, increment[0], .{ .carry = increment[1] > 0 });
             },
             .dec => {
                 const decrement = @subWithOverflow(system.dread(operand), 1);
-                system.dwrite(operand, decrement[0]);
+                system.write(operand, decrement[0], .{ .carry = decrement[1] > 0 });
             },
             .neg => {
                 const inversion = ~system.dread(operand);
                 const negation = @addWithOverflow(inversion, 1);
-                system.dwrite(operand, negation[0]);
+                system.write(operand, negation[0], .{ .carry = negation[1] > 0 });
             },
             .rsh => {
                 const value = system.dread(operand);
-                system.dwrite(operand, value >> 1);
-                system.flags.underflow = (value & 0x1) > 0;
+                system.write(operand, value >> 1, .{ .underflow = (value & 0x1) > 0 });
             },
             .add => {
                 const addition = @addWithOverflow(system.accumulator, system.zrread(operand));
-                system.set_accumulator(addition[0]);
-                system.flags.carry = addition[1] > 0;
+                system.set_accumulator(addition[0], .{ .carry = addition[1] > 0 });
             },
             .sub => {
                 const subtraction = @subWithOverflow(system.accumulator, system.zrread(operand));
-                system.set_accumulator(subtraction[0]);
-                system.flags.carry = subtraction[1] > 0;
+                system.set_accumulator(subtraction[0], .{ .carry = subtraction[1] > 0 });
             },
-            .ior => system.set_accumulator(system.accumulator | system.zrread(operand)),
-            .@"and" => system.set_accumulator(system.accumulator & system.zrread(operand)),
-            .xor => system.set_accumulator(system.accumulator ^ system.zrread(operand)),
-            .bsl => system.set_accumulator(system.accumulator << operand),
-            .bsld => system.set_accumulator(system.accumulator << @intCast(system.zrread(operand) & 0b111)),
-            .bsr => system.set_accumulator(system.accumulator >> operand),
-            .bsrd => system.set_accumulator(system.accumulator >> @intCast(system.zrread(operand) & 0b111)),
+            .ior => system.set_accumulator(system.accumulator | system.zrread(operand), .{}),
+            .@"and" => system.set_accumulator(system.accumulator & system.zrread(operand), .{}),
+            .xor => system.set_accumulator(system.accumulator ^ system.zrread(operand), .{}),
+            .bsl => system.set_accumulator(system.accumulator << operand, .{}),
+            .bsld => system.set_accumulator(system.accumulator << @intCast(system.zrread(operand) & 0b111), .{}),
+            .bsr => system.set_accumulator(system.accumulator >> operand, .{}),
+            .bsrd => system.set_accumulator(system.accumulator >> @intCast(system.zrread(operand) & 0b111), .{}),
             // sysc
             // push
             // brh
@@ -390,33 +387,28 @@ fn step(self: *Self, log: anytype) void {
     self.ireference = goto;
 }
 
-fn set_accumulator(self: *Self, byte: Result) void {
+fn set_accumulator(self: *Self, byte: Result, flags: Flags) void {
     self.accumulator = byte;
     self.flags.zero = byte == 0;
     self.flags.sign = (byte & 0x80) > 0;
-    self.flags.carry = false;
-    self.flags.underflow = false;
+    self.flags.carry = flags.carry;
+    self.flags.underflow = flags.underflow;
 }
 
-fn dwrite(self: *Self, register: anytype, byte: Result) void {
-    if (register == 0)
-        self.set_accumulator(byte) else
-        self.registers[register] = byte;
+fn write(self: *Self, register: anytype, byte: Result, flags: Flags) void {
+    self.set_accumulator(byte, flags);
+    if (register > 0)
+        self.registers[register - 1] = byte;
 }
 
 fn dread(self: *Self, register: anytype) Result {
     return if (register == 0)
         self.accumulator else
-        self.registers[register];
-}
-
-fn zrwrite(self: *Self, register: anytype, byte: Result) void {
-    if (register > 0)
-        self.registers[register] = byte;
+        self.registers[register - 1];
 }
 
 fn zrread(self: *Self, register: anytype) Result {
     return if (register == 0)
         0 else
-        self.registers[register];
+        self.registers[register - 1];
 }
