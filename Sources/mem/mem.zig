@@ -1,5 +1,6 @@
 
 const std = @import("std");
+const Reader = @import("./reader.zig").Reader;
 
 /// A generic memory interface to route pages based on their layout address.
 /// Sector must implement 'read', 'write' and 'pages'. Address is an integer
@@ -51,12 +52,13 @@ pub fn Memory(comptime Sector_: type) type {
             section_.write(@intCast(@mod(address, size_)), value);
         }
 
-        pub fn dread(self: *Self, address: Address, mode: std.builtin.Endian) Address {
-            const byte_one: Address = @intCast(self.read(address));
-            const byte_two: Address = @intCast(self.read(address + 1));
-            return if (mode == .Little)
-                (byte_one) | (byte_two << 8) else
-                (byte_one << 8) | (byte_two);
+        pub fn single(self: *Self, comptime T: type, address: Address, mode: std.builtin.Endian) T {
+            var reader_ = self.reader(address, mode);
+            return reader_.read(T);
+        }
+
+        pub fn reader(self: *Self, offset: Address, mode: std.builtin.Endian) Reader(*Self) {
+            return Reader(*Self).init(self, mode, offset);
         }
     };
 }
@@ -65,11 +67,12 @@ pub fn Memory(comptime Sector_: type) type {
 
 const PageTest = @import("test/page.zig");
 
+const MemoryTest = Memory(PageTest);
+
 test "address alignment" {
     var storage = [_]PageTest {
         .{ .value = 0 },
         .{ .value = 10 } };
-    const MemoryTest = Memory(PageTest);
     var memory = MemoryTest.init(&storage);
 
     try std.testing.expectEqual(@as(usize, 512), memory.size());
@@ -78,4 +81,13 @@ test "address alignment" {
     try std.testing.expectEqual(@as(MemoryTest.Result, 255), memory.read(255));
     try std.testing.expectEqual(@as(MemoryTest.Result, 10), memory.read(256));
     try std.testing.expectEqual(@as(MemoryTest.Result, 11), memory.read(257));
+}
+
+test "word" {
+    var storage = [_]PageTest { .{ .value = 0 } };
+    var memory = MemoryTest.init(&storage);
+
+    try std.testing.expectEqual(@as(MemoryTest.Address, 513), memory.single(MemoryTest.Address, 1, .Little)); // (1 << 0) + (2 << 8)
+    try std.testing.expectEqual(@as(MemoryTest.Address, 770), memory.single(MemoryTest.Address, 2, .Little)); // (2 << 0) + (3 << 8)
+    try std.testing.expectEqual(@as(MemoryTest.Address, 258), memory.single(MemoryTest.Address, 1, .Big)); // (1 << 8) + (2 << 0)
 }

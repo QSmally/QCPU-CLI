@@ -20,6 +20,10 @@ pub const userland_bytes = userland_size * page_bytes;
 pub const Page = Page_(Address, Result, page_bytes);
 pub const Region = Region_(Page);
 
+pub const Instance = struct {
+    entrypoint: u16
+};
+
 pub const Flags = packed struct {
     zero: bool = false,
     sign: bool = false,
@@ -30,6 +34,11 @@ pub const Flags = packed struct {
 pub const ExecutionMode = enum {
     direct,
     exec
+};
+
+pub const Options = struct {
+    exec_mode: ExecutionMode,
+    endianness: std.builtin.Endian
 };
 
 comptime {
@@ -44,19 +53,21 @@ memory: *Memory(Page),
 vmemory: *Memory(Region),
 interrupts: *Interrupts,
 ireference: Address,
+options: Options,
 
-pub fn init(memory_: *Memory(Page), vmemory_: *Memory(Region), interrupt_: *Interrupts, entrypoint: Address) Self {
+pub fn init(memory_: *Memory(Page), vmemory_: *Memory(Region), interrupt_: *Interrupts, entrypoint: Address, options: Options) Self {
     return .{
         .memory = memory_,
         .vmemory = vmemory_,
         .interrupts = interrupt_,
-        .ireference = entrypoint };
+        .ireference = entrypoint,
+        .options = options };
 }
 
 const parameters = clap.parseParamsComptime(
     \\--mode <mode>             execution mode, defaults to exec
     \\--endianness <endian>     endianness, defaults to Little
-    \\--boot <file>             boot instance page
+    \\--instance <file>         boot instance page
     \\<file>
     \\
 );
@@ -86,7 +97,7 @@ pub fn main() !void {
 
     defer result.deinit();
 
-    const options = .{
+    const options: Options = .{
         .exec_mode = result.args.mode orelse .exec,
         .endianness = result.args.endianness orelse .Little };
     var interrupts_ = Interrupts {};
@@ -110,7 +121,7 @@ pub fn main() !void {
     source.allocator().free(kernel);
 
     // Mark: init boot-instance
-    if (result.args.boot) |boot_instance_file| {
+    if (result.args.instance) |boot_instance_file| {
         const boot_instance = try std.fs
             .cwd()
             .readFileAlloc(source.allocator(), boot_instance_file, page_bytes);
@@ -120,10 +131,8 @@ pub fn main() !void {
     }
 
     // Mark: runloop
-    const entrypoint = if (options.exec_mode == .direct) 
-        memory_.dread(0, options.endianness) else
-        memory_.dread(userland_bytes, options.endianness);
-    var system = Self.init(&memory_, &vmemory_, &interrupts_, entrypoint);
+    const instance = memory_.single(Instance, 0, options.endianness);
+    var system = Self.init(&memory_, &vmemory_, &interrupts_, instance.entrypoint, options);
 
     while (true) {
         const stderr = std.io
@@ -385,6 +394,11 @@ fn step(self: *Self, log: anytype) void {
     if (!is_kmode(self.ireference) and is_kmode(goto))
         self.interrupts.vector |= 1 << 4; // TODO: better interrupt system
     self.ireference = goto;
+}
+
+fn instance_page(self: *Self) Instance {
+    const address = if (is_kmode(self.ireference)) userland_bytes else 0;
+    return self.vmemory.single(Instance, address, self.options.endianness);
 }
 
 fn set_accumulator(self: *Self, byte: Result, flags: Flags) void {
