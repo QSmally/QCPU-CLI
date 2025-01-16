@@ -10,4 +10,4 @@ Session.vim
 
 # Zig
 zig-out
-zig-cache
+.zig-cache
