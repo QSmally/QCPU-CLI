@@ -1,36 +1,10 @@
 
 const std = @import("std");
-const Token = @import("Token.zig");
 const AsmTokeniser = @import("AsmTokeniser.zig");
+const Source = @import("Source.zig");
+const Token = @import("Token.zig");
 
 const AsmAst = @This();
-
-const Source = struct {
-
-    allocator: std.mem.Allocator,
-    buffer: [:0]const u8,
-    tokens: []const Token,
-
-    pub fn init(allocator: std.mem.Allocator, tokeniser: *AsmTokeniser) !Source {
-        var tokens = std.ArrayList(Token).init(allocator);
-
-        while (true) {
-            const token = tokeniser.next();
-            try tokens.append(token);
-            if (token.tag == .eof)
-                break;
-        }
-
-        return .{
-            .allocator = allocator,
-            .buffer = tokeniser.buffer,
-            .tokens = try tokens.toOwnedSlice() };
-    }
-
-    pub fn deinit(self: Source) void {
-        self.allocator.free(self.tokens);
-    }
-};
 
 // Tokens are copied anyway, and a TokenLocation for a specifically known tag
 // is half of the memory of a Token due to padding.
@@ -85,8 +59,9 @@ const Node = union(enum) {
 };
 
 const Error = struct {
+    err: AstGen.AstGenError,
     message: []const u8,
-    line: u32
+    line: usize
 };
 
 const TokenList = std.ArrayList(Token);
@@ -229,7 +204,7 @@ const AstGen = struct {
     stack: *LinkedNodeList,
     cursor: usize = 0,
     // fixme: convert to options struct?
-    first_error: bool = false,
+    abort_error: bool = false,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -268,6 +243,65 @@ const AstGen = struct {
         self.label_bucket.deinit();
     }
 
+    const AstGenError = error {
+        UnexpectedEof,
+        UnexpectedPrediction,
+        Unexpected,
+        TopLevelInstructions,
+        UnsupportedArgument,
+        UnsupportedOffsetArgument
+    };
+
+    const ParseError = error {
+        Abort
+    } || std.mem.Allocator.Error;
+
+    fn error_message(err: AstGenError) []const u8 {
+        return switch (err) {
+            AstGenError.UnexpectedEof => "unexpected eof",
+            AstGenError.UnexpectedPrediction => "expected {s}, found {s}",
+            AstGenError.Unexpected => "unexpectedly got {s} '{s}'",
+            AstGenError.TopLevelInstructions => "instructions cannot be defined at the top level",
+            AstGenError.UnsupportedArgument => "unsupported argument {s}",
+            AstGenError.UnsupportedOffsetArgument => "invalid offset argument {s}"
+        };
+    }
+
+    fn token_line(buffer: [:0]const u8, token: Token) usize {
+        var line: usize = 1;
+        var from_index: usize = 0;
+
+        while (std.mem.indexOfScalarPos(u8, buffer, from_index, '\n')) |index| {
+            if (index >= token.start_byte)
+                break;
+            line += 1;
+            from_index = index + 1;
+        }
+
+        return line;
+    }
+
+    fn expected(self: *AstGen, tag: Token.Tag) ParseError!void {
+        @branchHint(.cold);
+        try self.fault(AstGenError.UnexpectedPrediction, .{
+            @tagName(tag),
+            @tagName(self.current()) });
+    }
+
+    fn fault(self: *AstGen, comptime err: AstGenError, arguments: anytype) ParseError!void {
+        @branchHint(.cold);
+        const format = try std.fmt.allocPrint(
+            self.allocator,
+            error_message(err),
+            arguments);
+        try self.errors.append(.{
+            .err = err,
+            .message = format,
+            .line = token_line(self.source.buffer, self.current_token()) });
+        if (self.abort_error)
+            return ParseError.Abort;
+    }
+
     const State = enum {
         start,
         flush,
@@ -284,12 +318,12 @@ const AstGen = struct {
         offset_argument
     };
 
-    pub fn parse(self: *AstGen) !void {
+    pub fn parse(self: *AstGen) ParseError!void {
         parse_loop: while (self.cursor < self.source.tokens.len) {
             state: switch (State.start) {
                 .start => switch (self.current()) {
                     .unexpected_eof => {
-                        try self.fault("unexpected eof", .{});
+                        try self.fault(AstGenError.UnexpectedEof, .{});
                         break :parse_loop;
                     },
 
@@ -332,7 +366,7 @@ const AstGen = struct {
                 .unexpected_token => {
                     const tag = @tagName(self.current());
                     const input = self.buffer_token(self.current_token());
-                    try self.fault("unexpectedly got {s} '{s}'", .{ tag, input });
+                    try self.fault(AstGenError.Unexpected, .{ tag, input });
                     self.advance();
                 },
 
@@ -381,7 +415,7 @@ const AstGen = struct {
                 // Any instruction.
                 .instruction => {
                     if (self.stack_size() == 0) {
-                        try self.fault("instructions cannot be defined at the top level", .{});
+                        try self.fault(AstGenError.TopLevelInstructions, .{});
                         continue :state .flush;
                     }
 
@@ -450,7 +484,7 @@ const AstGen = struct {
                     },
                     else => {
                         self.stack_pop();
-                        try self.fault("unsupported argument {s}", .{ @tagName(self.current()) });
+                        try self.fault(AstGenError.UnsupportedArgument, .{ @tagName(self.current()) });
                     }
                 },
 
@@ -491,7 +525,7 @@ const AstGen = struct {
                         continue :state .numeric_argument;
                     },
                     else => {
-                        try self.fault("invalid offset argument {s}", .{ @tagName(self.current()) });
+                        try self.fault(AstGenError.UnsupportedOffsetArgument, .{ @tagName(self.current()) });
                         self.stack_pop();
                         continue :state .argument;
                     }
@@ -586,40 +620,26 @@ const AstGen = struct {
 
         return size;
     }
-
-    fn expected(self: *AstGen, tag: Token.Tag) !void {
-        @branchHint(.cold);
-        try self.fault("expected {s}, found {s}", .{
-            @tagName(tag),
-            @tagName(self.current()) });
-    }
-
-    fn fault(self: *AstGen, comptime message: []const u8, arguments: anytype) !void {
-        @branchHint(.cold);
-        const format = try std.fmt.allocPrint(self.allocator, message, arguments);
-        try self.errors.append(.{
-            .message = format,
-            // fixme: cursor to line
-            .line = 0 });
-        if (self.first_error)
-            return error.Abort;
-    }
 };
 
 // Tests
 
-fn testAstGen(input: [:0]const u8) !void {
+fn testAst(input: [:0]const u8) !AsmAst {
     var tokeniser = AsmTokeniser.init(input);
     const source = try Source.init(std.testing.allocator, &tokeniser);
     defer source.deinit();
 
-    var ast = try AsmAst.init(std.testing.allocator, source);
+    return try AsmAst.init(std.testing.allocator, source);
+}
+
+fn testAstGen(input: [:0]const u8) !void {
+    var ast = try testAst(input);
     defer ast.deinit();
 
     // begin dump
     std.debug.print("\n", .{});
-    for (source.tokens) |token|
-        std.debug.print("{s}\n", .{ @tagName(token.tag) });
+    // for (source.tokens) |token|
+    //     std.debug.print("{s}\n", .{ @tagName(token.tag) });
     try ast.dump(std.io.getStdOut().writer());
     // end dump
 
@@ -628,7 +648,72 @@ fn testAstGen(input: [:0]const u8) !void {
     try std.testing.expect(ast.errors.len == 0);
 }
 
-test "sections" {
+fn testAstGenErr(input: [:0]const u8, errors: []const AstGen.AstGenError) !void {
+    var ast = try testAst(input);
+    defer ast.deinit();
+
+    try std.testing.expectEqual(errors.len, ast.errors.len);
+
+    for (errors, ast.errors) |expected_error, error_|
+        try std.testing.expectEqual(expected_error, error_.err);
+}
+
+const ErrLine = struct { AstGen.AstGenError, usize };
+
+fn testAstGenErrLine(input: [:0]const u8, errors: []const ErrLine) !void {
+    var ast = try testAst(input);
+    defer ast.deinit();
+
+    try std.testing.expectEqual(errors.len, ast.errors.len);
+
+    for (errors, ast.errors) |expected_error, error_| {
+        try std.testing.expectEqual(expected_error[0], error_.err);
+        try std.testing.expectEqual(expected_error[1], error_.line);
+    }
+}
+
+test "format errors" {
+    try testAstGenErr("/", &.{ AstGen.AstGenError.UnexpectedEof });
+}
+
+test "protect section ids" {
+    try testAstGenErr("@section", &.{ AstGen.AstGenError.UnexpectedPrediction });
+}
+
+test "forbid instructions at top level" {
+    try testAstGenErr("ast", &.{ AstGen.AstGenError.TopLevelInstructions });
+    try testAstGenErr("@section foo\nast", &.{});
+}
+
+test "error line number" {
+    try testAstGenErrLine(
+        \\
+        \\
+        \\ast
+    , &.{
+        .{ AstGen.AstGenError.TopLevelInstructions, 3 }
+    });
+
+    try testAstGenErrLine(
+        \\
+        \\ascii "foo"
+        \\
+        \\@section
+        \\@section test
+        \\
+        \\            ast 0xZZ ; hmmmm
+        \\
+        \\            0x00
+    , &.{
+        .{ AstGen.AstGenError.TopLevelInstructions, 2 },
+        .{ AstGen.AstGenError.UnexpectedPrediction, 4 },
+        .{ AstGen.AstGenError.UnsupportedArgument, 7 },
+        .{ AstGen.AstGenError.Unexpected, 7 },
+        .{ AstGen.AstGenError.Unexpected, 9 }
+    });
+}
+
+test "full fledge" {
     try testAstGen(
         \\@section bar
         \\
