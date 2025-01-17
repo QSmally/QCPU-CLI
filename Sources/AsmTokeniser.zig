@@ -3,18 +3,6 @@ const Token = @import("Token.zig");
 
 const AsmTokeniser = @This();
 
-const State = enum {
-    start,
-    invalid,
-    identifier,
-    label,
-    slash,
-    comment,
-    numeric_literal,
-    string_literal,
-    modifier
-};
-
 const Helper = struct {
 
     tokeniser: *AsmTokeniser,
@@ -57,17 +45,27 @@ const Helper = struct {
 };
 
 buffer: [:0]const u8,
-cursor: usize,
+cursor: usize = 0,
 
 pub fn init(buffer_: [:0]const u8) AsmTokeniser {
-    return .{
-        .buffer = buffer_,
-        .cursor = 0 };
+    return .{ .buffer = buffer_ };
 }
 
-fn is_eof(self: *const AsmTokeniser) bool {
+fn is_eof(self: *AsmTokeniser) bool {
     return self.cursor == self.buffer.len;
 }
+
+const State = enum {
+    start,
+    invalid,
+    identifier,
+    label,
+    slash,
+    comment,
+    numeric_literal,
+    string_literal,
+    modifier
+};
 
 pub fn next(self: *AsmTokeniser) Token {
     var result: Token = .{
@@ -133,7 +131,7 @@ pub fn next(self: *AsmTokeniser) Token {
         .label => switch (helper.next()) {
             'a'...'z', 'A'...'Z', '0'...'9', '_', '.' => continue :state .label,
             ':' => helper.tag_next(.private_label),
-            0, '\n', ' ' => helper.tag_lookahead(.reference_label),
+            0, '\n', ' ', '\'' => helper.tag_lookahead(.reference_label),
             else => continue :state .invalid
         },
 
@@ -223,10 +221,12 @@ test "eof" {
 test "identifiers" {
     try testTokenise("x", &.{ .identifier, .eof });
     try testTokenise("  x", &.{ .identifier, .eof });
-    try testTokenise("ascii", &.{ .psinstr_ascii, .eof });
-    try testTokenise("ast, ascii", &.{ .instr_ast, .comma, .psinstr_ascii, .eof });
+    try testTokenise("ascii", &.{ .pseudo_instruction, .eof });
+    try testTokenise("ast, ascii", &.{ .instruction, .comma, .pseudo_instruction, .eof });
 
     try testTokenise("@symbols", &.{ .builtin_symbols, .eof });
+    try testTokenise("@section", &.{ .builtin_section, .eof });
+    try testTokenise("@section foo", &.{ .builtin_section, .identifier, .eof });
     try testTokenise("@symbols*", &.{ .builtin_symbols, .invalid, .eof });
     try testTokenise("@nevergonnagiveyouup", &.{ .identifier, .eof });
 
@@ -238,7 +238,7 @@ test "labels" {
     try testTokenise("public_label", &.{ .identifier, .eof });
     try testTokenise("public_label:", &.{ .label, .eof });
     try testTokenise(".public_label:", &.{ .private_label, .eof });
-    try testTokenise(".public_label: ast", &.{ .private_label, .instr_ast, .eof });
+    try testTokenise(".public_label: ast", &.{ .private_label, .instruction, .eof });
     try testTokenise(".reference_label", &.{ .reference_label, .eof });
     try testTokenise("bar .reference_label // foo", &.{ .identifier, .reference_label, .eof });
     try testTokenise(".bar.reference_label", &.{ .reference_label, .eof });
@@ -252,6 +252,8 @@ test "labels" {
 
 test "comments" {
     try testTokenise("/", &.{ .unexpected_eof, .eof });
+    try testTokenise("/\n", &.{ .invalid, .eof });
+    try testTokenise("/ ", &.{ .invalid, .eof });
     try testTokenise("/f", &.{ .invalid, .eof });
     try testTokenise("//", &.{ .eof });
     try testTokenise("////", &.{ .eof });
@@ -294,6 +296,8 @@ test "modifiers" {
     try testTokenise("'u   ", &.{ .modifier, .eof });
     try testTokenise("'upper", &.{ .modifier, .eof });
     try testTokenise("'u foo", &.{ .modifier, .identifier, .eof });
+    try testTokenise("foo'u foo", &.{ .identifier, .modifier, .identifier, .eof });
+    try testTokenise(".foo'u foo", &.{ .reference_label, .modifier, .identifier, .eof });
 
     // validated at a later stage
     try testTokenise("'", &.{ .modifier, .eof });
@@ -317,15 +321,15 @@ test "full fledge" {
         .{ .identifier, "not_implemented_yet" },
         .{ .newline, "" },
         .{ .newline, "" },
-        .{ .psinstr_ascii, "ascii" },
+        .{ .pseudo_instruction, "ascii" },
         .{ .string_literal, "\"foo bar roo\"" },
         .{ .numeric_literal, "0x00" },
         .{ .newline, "" },
         .{ .newline, "" },
         .{ .private_label, ".label:" },
-        .{ .instr_ast, "ast" },
+        .{ .instruction, "ast" },
         .{ .newline, "" },
-        .{ .instr_ast, "ast" },
+        .{ .instruction, "ast" },
         .{ .identifier, "@callable" },
         .{ .l_paran, "(" },
         .{ .identifier, "a" },
@@ -334,11 +338,11 @@ test "full fledge" {
         .{ .r_paran, ")" },
         .{ .newline, "" },
         .{ .label, "label:" },
-        .{ .instr_ast, "ast" },
+        .{ .instruction, "ast" },
         .{ .reference_label, ".ref" },
         .{ .newline, "" },
         .{ .invalid, "0xZZ" },
-        .{ .instr_ast, "ast" },
+        .{ .instruction, "ast" },
         .{ .eof, "\x00" }
     });
 }

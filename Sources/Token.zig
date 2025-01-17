@@ -26,22 +26,13 @@ pub const Tag = enum {
     string_literal,
     modifier,
 
-    // Instructions, pseudoinstructions and builtins are already decoded in the
-    // tokeniser because their argument reguirements are validated in AstGen
-    instr_ast,
-
-    psinstr_u8,
-    psinstr_u16,
-    psinstr_u24,
-    psinstr_i8,
-    psinstr_i16,
-    psinstr_i24,
-    psinstr_ascii,
+    instruction,
+    pseudo_instruction,
 
     builtin_symbols,
     builtin_define,
-    builtin_if,
     builtin_align,
+    builtin_if,
     builtin_end,
     builtin_section
 };
@@ -50,32 +41,18 @@ pub fn slice(self: *const Token, from_buffer: [:0]const u8) []const u8 {
     return from_buffer[self.start_byte..(self.end_byte + 1)];
 }
 
-pub fn is_barrier(self: *const Token) bool {
-    return self.tag == .eof or
-        self.tag == .newline or
-        self.tag == .comma;
-}
-
-pub fn is_any_fault(self: *const Token) bool {
-    return self.tag == .invalid or
-        self.tag == .unexpected_eof or
-        self.tag == .invalid_mod;
-}
-
-const TagMap = std.StaticStringMap(Tag);
-
-const keywords = TagMap.initComptime(.{
-    .{ "ast", .instr_ast },
-    .{ "u8", .psinstr_u8 },
-    .{ "u16", .psinstr_u16 },
-    .{ "u24", .psinstr_u24 },
-    .{ "i8", .psinstr_i8 },
-    .{ "i16", .psinstr_i16 },
-    .{ "i24", .psinstr_i24 },
-    .{ "ascii", .psinstr_ascii },
+const keywords = std.StaticStringMap(Tag).initComptime(.{
+    .{ "ast", .instruction },
+    .{ "u8", .pseudo_instruction },
+    .{ "u16", .pseudo_instruction },
+    .{ "u24", .pseudo_instruction },
+    .{ "i8", .pseudo_instruction },
+    .{ "i16", .pseudo_instruction },
+    .{ "i24", .pseudo_instruction },
+    .{ "ascii", .pseudo_instruction },
+    .{ "reserve", .pseudo_instruction },
     .{ "@symbols", .builtin_symbols },
     .{ "@define", .builtin_define },
-    .{ "@if", .builtin_if },
     .{ "@align", .builtin_align },
     .{ "@end", .builtin_end },
     .{ "@section", .builtin_section }

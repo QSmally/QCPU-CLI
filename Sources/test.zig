@@ -1,6 +1,7 @@
 
 test {
     _ = @import("AsmTokeniser.zig");
+    _ = @import("AsmAst.zig");
 
     // _ = @import("mem/mem.zig");
 
