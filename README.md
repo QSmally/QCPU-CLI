@@ -22,3 +22,9 @@ QCPU CLI comes with use cases written as tests.
 ```bash
 $ zig build test
 ```
+
+An inspection dump can be done with `-Ddump`.
+
+```bash
+$ zig build test -Ddump
+```

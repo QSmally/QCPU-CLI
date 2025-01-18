@@ -31,14 +31,38 @@ pub const Tag = enum {
 
     builtin_symbols,
     builtin_define,
+    builtin_header,
     builtin_align,
-    builtin_if,
     builtin_end,
     builtin_section
 };
 
-pub fn slice(self: *const Token, from_buffer: [:0]const u8) []const u8 {
+pub fn slice(self: Token, from_buffer: [:0]const u8) []const u8 {
     return from_buffer[self.start_byte..(self.end_byte + 1)];
+}
+
+pub fn builtin_has_indentation(self: Token) bool {
+    return switch (self.tag) {
+        .builtin_symbols,
+        .builtin_define,
+        .builtin_end,
+        .builtin_section => false,
+        .builtin_header,
+        .builtin_align => true,
+        else => unreachable
+    };
+}
+
+pub fn builtin_rootonly(self: Token) bool {
+    return switch (self.tag) {
+        .builtin_symbols,
+        .builtin_define,
+        .builtin_header => true,
+        .builtin_align,
+        .builtin_end,
+        .builtin_section => false,
+        else => unreachable
+    };
 }
 
 const keywords = std.StaticStringMap(Tag).initComptime(.{
@@ -53,6 +77,7 @@ const keywords = std.StaticStringMap(Tag).initComptime(.{
     .{ "reserve", .pseudo_instruction },
     .{ "@symbols", .builtin_symbols },
     .{ "@define", .builtin_define },
+    .{ "@header", .builtin_header },
     .{ "@align", .builtin_align },
     .{ "@end", .builtin_end },
     .{ "@section", .builtin_section }

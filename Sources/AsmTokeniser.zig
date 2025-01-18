@@ -189,6 +189,11 @@ pub fn next(self: *AsmTokeniser) Token {
 // Tests
 
 const std = @import("std");
+const options = @import("options");
+
+const stderr = std.io
+    .getStdErr()
+    .writer();
 
 fn testTokenise(input: [:0]const u8, expected_tokens: []const Token.Tag) !void {
     var tokeniser = AsmTokeniser.init(input);
@@ -202,6 +207,8 @@ fn testTokeniseSlices(input: [:0]const u8, expected_slices: []const SlicedToken)
     var tokeniser = AsmTokeniser.init(input);
     for (expected_slices) |expected_slice| {
         const token = tokeniser.next();
+        if (options.dump)
+            try stderr.print("{s} {s}\n", .{ @tagName(token.tag), token.slice(input) });
         try std.testing.expectEqual(expected_slice[0], token.tag);
 
         // see tag:newline-comment
@@ -256,14 +263,17 @@ test "comments" {
     try testTokenise("/ ", &.{ .invalid, .eof });
     try testTokenise("/f", &.{ .invalid, .eof });
     try testTokenise("//", &.{ .eof });
+    try testTokenise(";", &.{ .eof });
     try testTokenise("////", &.{ .eof });
     try testTokenise("// foo bar", &.{ .eof });
+    try testTokenise("; foo bar", &.{ .eof });
     try testTokenise("foo // bar doo", &.{ .identifier, .eof });
     try testTokenise("foo, // bar doo", &.{ .identifier, .comma, .eof });
-    try testTokenise(
-        \\foo, // roo doo
-        \\bar,
-    , &.{ .identifier, .comma, .newline, .identifier, .comma, .eof });
+    try testTokenise("foo, // roo doo\nbar,", &.{ .identifier, .comma, .newline, .identifier, .comma, .eof });
+    try testTokenise("foo ; bar doo", &.{ .identifier, .eof });
+    try testTokenise("foo; bar doo", &.{ .identifier, .eof });
+    try testTokenise("foo, ; bar doo", &.{ .identifier, .comma, .eof });
+    try testTokenise("foo, ; roo doo\nbar,", &.{ .identifier, .comma, .newline, .identifier, .comma, .eof });
 }
 
 test "numeric literals" {
