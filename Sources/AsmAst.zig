@@ -59,9 +59,27 @@ const Node = union(enum) {
 };
 
 const Error = struct {
+
+    const id = "^\n";
+
     err: AstGen.AstGenError,
+    token: Token,
     message: []const u8,
-    line: usize
+    line: usize,
+    line_cursor: usize,
+    end_cursor: usize,
+
+    pub fn write(self: *const Error, file: []const u8, buffer: [:0]const u8, writer: anytype) !void {
+        try writer.print("{s}:{}:{}: error: {s}\n{s}\n", .{
+            file,
+            self.line,
+            self.token.start_byte - self.line_cursor + 1,
+            self.message,
+            buffer[self.line_cursor..self.end_cursor] });
+        try std.fmt.formatText(id, "s", .{
+            .width = @intCast(self.token.start_byte - self.line_cursor + id.len)
+        }, writer);
+    }
 };
 
 const TokenList = std.ArrayList(Token);
@@ -267,20 +285,6 @@ const AstGen = struct {
         };
     }
 
-    fn token_line(buffer: [:0]const u8, token: Token) usize {
-        var line: usize = 1;
-        var from_index: usize = 0;
-
-        while (std.mem.indexOfScalarPos(u8, buffer, from_index, '\n')) |index| {
-            if (index >= token.start_byte)
-                break;
-            line += 1;
-            from_index = index + 1;
-        }
-
-        return line;
-    }
-
     fn expected(self: *AstGen, tag: Token.Tag) ParseError!void {
         @branchHint(.cold);
         try self.fault(AstGenError.UnexpectedPrediction, .{
@@ -290,14 +294,16 @@ const AstGen = struct {
 
     fn fault(self: *AstGen, comptime err: AstGenError, arguments: anytype) ParseError!void {
         @branchHint(.cold);
-        const format = try std.fmt.allocPrint(
-            self.allocator,
-            error_message(err),
-            arguments);
+        const format = try std.fmt.allocPrint(self.allocator, error_message(err), arguments);
+        const token_location = self.source.location_of(self.current_token());
+
         try self.errors.append(.{
             .err = err,
+            .token = self.current_token(),
             .message = format,
-            .line = token_line(self.source.buffer, self.current_token()) });
+            .line = token_location.line,
+            .line_cursor = token_location.line_cursor,
+            .end_cursor = token_location.end_cursor });
         if (self.abort_error)
             return ParseError.Abort;
     }
@@ -483,8 +489,9 @@ const AstGen = struct {
                         self.advance();
                     },
                     else => {
-                        self.stack_pop();
                         try self.fault(AstGenError.UnsupportedArgument, .{ @tagName(self.current()) });
+                        self.stack_pop();
+                        self.advance();
                     }
                 },
 
@@ -510,6 +517,7 @@ const AstGen = struct {
                         continue :state .offset_argument;
                     },
                     else => {
+                        // nothing to chain, it may be another argument
                         self.stack_pop();
                         continue :state .argument;
                     }
@@ -558,10 +566,6 @@ const AstGen = struct {
     inline fn next_token(self: *AstGen) Token.Tag {
         self.advance();
         return self.current();
-    }
-
-    inline fn is_top_level(self: *AstGen) bool {
-        return self.stack.previous == null;
     }
 
     fn sections(self: *AstGen) *NodeList {
@@ -624,6 +628,12 @@ const AstGen = struct {
 
 // Tests
 
+const options = @import("options");
+
+const stderr = std.io
+    .getStdErr()
+    .writer();
+
 fn testAst(input: [:0]const u8) !AsmAst {
     var tokeniser = AsmTokeniser.init(input);
     const source = try Source.init(std.testing.allocator, &tokeniser);
@@ -636,12 +646,8 @@ fn testAstGen(input: [:0]const u8) !void {
     var ast = try testAst(input);
     defer ast.deinit();
 
-    // begin dump
-    std.debug.print("\n", .{});
-    // for (source.tokens) |token|
-    //     std.debug.print("{s}\n", .{ @tagName(token.tag) });
-    try ast.dump(std.io.getStdOut().writer());
-    // end dump
+    if (options.dump)
+        try ast.dump(stderr);
 
     for (ast.errors) |error_|
         std.debug.print("{s}\n", .{ error_.message });
@@ -669,6 +675,9 @@ fn testAstGenErrLine(input: [:0]const u8, errors: []const ErrLine) !void {
     for (errors, ast.errors) |expected_error, error_| {
         try std.testing.expectEqual(expected_error[0], error_.err);
         try std.testing.expectEqual(expected_error[1], error_.line);
+
+        if (options.dump)
+            try error_.write("test.s", input, stderr);
     }
 }
 
@@ -708,7 +717,6 @@ test "error line number" {
         .{ AstGen.AstGenError.TopLevelInstructions, 2 },
         .{ AstGen.AstGenError.UnexpectedPrediction, 4 },
         .{ AstGen.AstGenError.UnsupportedArgument, 7 },
-        .{ AstGen.AstGenError.Unexpected, 7 },
         .{ AstGen.AstGenError.Unexpected, 9 }
     });
 }
