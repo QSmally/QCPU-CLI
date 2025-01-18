@@ -529,7 +529,8 @@ const AstGen = struct {
                     .reference_label,
                     .numeric_literal,
                     .string_literal,
-                    .pseudo_instruction => {
+                    .pseudo_instruction,
+                    .reserved_argument => {
                         const argument_ = try self.allocator.create(Node);
                         argument_.* = .{ .argument = .{
                             .tokens = TokenList.init(self.allocator) }};
@@ -546,7 +547,8 @@ const AstGen = struct {
                             .identifier,
                             .numeric_literal => continue :state .numeric_argument,
                             .string_literal,
-                            .pseudo_instruction => {
+                            .pseudo_instruction,
+                            .reserved_argument => {
                                 self.stack_pop();
                                 self.advance();
                                 continue :state .argument;
@@ -785,11 +787,13 @@ test "error line number" {
         \\            ast 0xZZ ; hmmmm
         \\
         \\            0x00
+        \\            ra
     , &.{
         .{ AstGen.AstGenError.RootLevelInstruction, 2 },
         .{ AstGen.AstGenError.UnexpectedPrediction, 4 },
         .{ AstGen.AstGenError.UnsupportedArgument, 7 },
-        .{ AstGen.AstGenError.Unexpected, 9 }
+        .{ AstGen.AstGenError.Unexpected, 9 },
+        .{ AstGen.AstGenError.Unexpected, 10 }
     });
 }
 
@@ -811,8 +815,8 @@ test "full fledge" {
         \\@end
         \\
         \\.another:
-        \\.label:     ast
-        \\foo:        ast
+        \\.label:     ast ra rb
+        \\foo:        ast rb + 5
         \\
         \\@section bar
         \\

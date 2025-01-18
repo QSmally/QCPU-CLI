@@ -28,6 +28,7 @@ pub const Tag = enum {
 
     instruction,
     pseudo_instruction,
+    reserved_argument,
 
     builtin_symbols,
     builtin_define,
@@ -75,6 +76,13 @@ const keywords = std.StaticStringMap(Tag).initComptime(.{
     .{ "i24", .pseudo_instruction },
     .{ "ascii", .pseudo_instruction },
     .{ "reserve", .pseudo_instruction },
+    .{ "ra", .reserved_argument },
+    .{ "rb", .reserved_argument },
+    .{ "rc", .reserved_argument },
+    .{ "rd", .reserved_argument },
+    .{ "rx", .reserved_argument },
+    .{ "ry", .reserved_argument },
+    .{ "rz", .reserved_argument },
     .{ "@symbols", .builtin_symbols },
     .{ "@define", .builtin_define },
     .{ "@header", .builtin_header },
