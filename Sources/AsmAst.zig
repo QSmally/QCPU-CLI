@@ -23,12 +23,12 @@ const TokenLocation = struct {
 
 const Node = union(enum) {
 
-    pub const Container = struct {
+    const Container = struct {
         section: []const u8,
         nodes: NodeList
     };
 
-    pub const Instruction = struct {
+    const Instruction = struct {
         labels: []const TokenLocation,
         instruction_token: Token,
         is_alternate: bool,
@@ -47,13 +47,8 @@ const Node = union(enum) {
 
     container: Container,
     instruction: Instruction,
-    // Arguments can only appear in an instruction's argument list, but it's
-    // still represented as a Node due to the stack.
-    //  instr. 0x00 + 666 666 .reference'u + 2
-    //         ^--------^ ^-^ ^--------------^
     argument: Argument,
     builtin: Builtin
-    // header: Header
 };
 
 const TokenList = std.ArrayList(Token);
@@ -338,7 +333,6 @@ const AstGen = struct {
         full_flush,
         expect_flush,
         expect_full_flush,
-        unexpected_token,
         builtin,
         end_scope,
         new_section,
@@ -375,10 +369,16 @@ const AstGen = struct {
                     .builtin_end => continue :state .end_scope,
                     .builtin_section => continue :state .new_section,
 
+                    .identifier,
                     .instruction,
                     .pseudo_instruction => continue :state .instruction,
 
-                    else => continue :state .unexpected_token
+                    else => {
+                        const tag = @tagName(self.current());
+                        const input = self.buffer_token(self.current_token());
+                        try self.fault(AstGenError.Unexpected, .{ tag, input });
+                        self.advance();
+                    },
                 },
 
                 .flush => switch (self.next_token()) {
@@ -399,13 +399,6 @@ const AstGen = struct {
                 .expect_full_flush => switch (self.next_token()) {
                     .eof, .newline => self.advance(),
                     else => try self.expected(.newline)
-                },
-
-                .unexpected_token => {
-                    const tag = @tagName(self.current());
-                    const input = self.buffer_token(self.current_token());
-                    try self.fault(AstGenError.Unexpected, .{ tag, input });
-                    self.advance();
                 },
 
                 // A builtin except @section or @end. There are builtins which
@@ -482,7 +475,9 @@ const AstGen = struct {
                     else => try self.expected(.identifier)
                 },
 
-                // Any instruction.
+                // Any instruction, including @callable arg arg.
+                // fixme: do we want @callable() to have parans, or treat
+                // headers like instructions with space arguments?
                 .instruction => {
                     if (self.stack.container_type == .root) {
                         try self.fault(AstGenError.RootLevelInstruction, .{});
@@ -493,7 +488,6 @@ const AstGen = struct {
                         self.stack.container_type == .generic);
 
                     // move the label bucket into the new hoisting instruction
-                    // fixme: also move for @headercalls()
                     const instruction_ = try self.allocator.create(Node);
                     instruction_.* = .{ .instruction = .{
                         .labels = try self.label_bucket.toOwnedSlice(),
@@ -520,8 +514,12 @@ const AstGen = struct {
                 // From an instruction or argument loopback, must have the
                 // cursor already on the argument. The top-of-stack must be
                 // populated with the instruction.
-                // fixme: this depends on instruction being top-of-stack, but
-                // it might be used for comma-separated @headercalls()
+                //
+                // Arguments can only appear in an instruction's argument list,
+                // but it's still represented as a Node due to the stack.
+                //
+                //  instr. ra rb 0x00 + 666 666 .reference'u + 2
+                //         ^  ^  ^--------^ ^-^ ^--------------^
                 .argument => switch (self.current()) {
                     .identifier,
                     .plus,
@@ -562,8 +560,8 @@ const AstGen = struct {
                     },
                     else => {
                         try self.fault(AstGenError.UnsupportedArgument, .{ @tagName(self.current()) });
-                        self.stack_pop();
                         self.advance();
+                        continue :state .argument;
                     }
                 },
 
@@ -734,11 +732,13 @@ fn testAstGenErrLine(input: [:0]const u8, errors: []const ErrLine) !void {
     var ast = try testAst(input);
     defer ast.deinit();
 
+    if (options.dump)
+        for (ast.errors) |error_|
+            try error_.write("test.s", input, stderr);
+
     try std.testing.expectEqual(errors.len, ast.errors.len);
 
     for (errors, ast.errors) |expected_error, error_| {
-        if (options.dump)
-            try error_.write("test.s", input, stderr);
         try std.testing.expectEqual(expected_error[0], error_.id);
         try std.testing.expectEqual(expected_error[1], error_.line);
     }
@@ -771,7 +771,7 @@ test "error line number" {
         \\@section test
         \\            ast .foo:
         \\            ast .foo
-        \\            ast 5 .foo:
+        \\            ast 5 .foo: 5
     , &.{
         .{ AstGen.AstGenError.UnsupportedArgument, 3 },
         .{ AstGen.AstGenError.UnsupportedArgument, 5 }
@@ -824,5 +824,6 @@ test "full fledge" {
         \\.aaaaaa:    ast' memory
         \\            ast 1 + .foo'u
         \\            ast .foo'u + 1 .bar
+        \\            @callable ra - 0x00
     );
 }
