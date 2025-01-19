@@ -25,12 +25,12 @@ const Helper = struct {
 
     pub inline fn tag(self: *Helper, tag_: Token.Tag) void {
         self.token.tag = tag_;
-        self.token.end_byte = self.tokeniser.cursor;
+        self.token.location.end_byte = self.tokeniser.cursor;
     }
 
     pub inline fn tag_lookahead(self: *Helper, tag_: Token.Tag) void {
         self.token.tag = tag_;
-        self.token.end_byte = self.tokeniser.cursor - 1;
+        self.token.location.end_byte = self.tokeniser.cursor - 1;
     }
 
     pub inline fn tag_next(self: *Helper, tag_: Token.Tag) void {
@@ -40,7 +40,7 @@ const Helper = struct {
 
     pub inline fn discard(self: *Helper) void {
         self.tokeniser.cursor += 1;
-        self.token.start_byte = self.tokeniser.cursor;
+        self.token.location.start_byte = self.tokeniser.cursor;
     }
 };
 
@@ -70,8 +70,9 @@ const State = enum {
 pub fn next(self: *AsmTokeniser) Token {
     var result: Token = .{
         .tag = undefined,
-        .start_byte = self.cursor,
-        .end_byte = undefined };
+        .location = .{
+            .start_byte = self.cursor,
+            .end_byte = undefined } };
     var helper = Helper.init(self, &result);
 
     state: switch (State.start) {
@@ -109,7 +110,7 @@ pub fn next(self: *AsmTokeniser) Token {
         // the tokeniser can continue (either providing as many errors to the
         // user, or abort the process).
         .invalid => switch (helper.next()) {
-            0, '\n', ',', ' ' => helper.tag_lookahead(.invalid),
+            0, '\n', ' ', '(', ')', ',' => helper.tag_lookahead(.invalid),
             else => continue :state .invalid
         },
 
@@ -119,7 +120,7 @@ pub fn next(self: *AsmTokeniser) Token {
             'a'...'z', 'A'...'Z', '0'...'9', '_', '.'  => continue :state .identifier,
             ':' => helper.tag_next(.label),
             else => {
-                const identifier_ = self.buffer[result.start_byte..self.cursor];
+                const identifier_ = self.buffer[result.location.start_byte..self.cursor];
                 helper.tag_lookahead(if (Token.reserved(identifier_)) |reserved|
                     reserved else
                     .identifier);
@@ -131,7 +132,7 @@ pub fn next(self: *AsmTokeniser) Token {
         .label => switch (helper.next()) {
             'a'...'z', 'A'...'Z', '0'...'9', '_', '.' => continue :state .label,
             ':' => helper.tag_next(.private_label),
-            0, '\n', ' ', '\'' => helper.tag_lookahead(.reference_label),
+            0, '\n', ' ', '(', ')', '\'' => helper.tag_lookahead(.reference_label),
             else => continue :state .invalid
         },
 
@@ -156,7 +157,7 @@ pub fn next(self: *AsmTokeniser) Token {
         // is done at a later stage based on prefixing (like 0x and 0b).
         .numeric_literal => switch (helper.next()) {
             '0'...'9', 'A'...'F', 'x', 'b' => continue :state .numeric_literal,
-            0, '\n', ' ', ',' => helper.tag_lookahead(.numeric_literal),
+            0, '\n', ' ', '(', ')', ',' => helper.tag_lookahead(.numeric_literal),
             else => continue :state .invalid
         },
 
@@ -178,7 +179,7 @@ pub fn next(self: *AsmTokeniser) Token {
         // explicit modifier.
         .modifier => switch (helper.next()) {
             'a'...'z' => continue :state .modifier,
-            0, '\n', ' ', ',' => helper.tag_lookahead(.modifier),
+            0, '\n', ' ', '(', ')', ',' => helper.tag_lookahead(.modifier),
             else => continue :state .invalid
         }
     }
@@ -208,12 +209,12 @@ fn testTokeniseSlices(input: [:0]const u8, expected_slices: []const SlicedToken)
     for (expected_slices) |expected_slice| {
         const token = tokeniser.next();
         if (options.dump)
-            try stderr.print("{s} {s}\n", .{ @tagName(token.tag), token.slice(input) });
+            try stderr.print("{s} {s}\n", .{ @tagName(token.tag), token.location.slice(input) });
         try std.testing.expectEqual(expected_slice[0], token.tag);
 
         // see tag:newline-comment
         if (token.tag != .newline)
-            try std.testing.expectEqualSlices(u8, expected_slice[1], token.slice(input));
+            try std.testing.expectEqualSlices(u8, expected_slice[1], token.location.slice(input));
     }
 }
 
@@ -232,6 +233,10 @@ test "identifiers" {
     try testTokenise("ast, ascii", &.{ .instruction, .comma, .pseudo_instruction, .eof });
 
     try testTokenise("@symbols", &.{ .builtin_symbols, .eof });
+    try testTokenise("@define(expose) boob", &.{ .builtin_define, .l_paran, .option, .r_paran, .identifier, .eof });
+    try testTokenise("@define(0x00) boob", &.{ .builtin_define, .l_paran, .numeric_literal, .r_paran, .identifier, .eof });
+    try testTokenise("@define(.reference) boob", &.{ .builtin_define, .l_paran, .reference_label, .r_paran, .identifier, .eof });
+    try testTokenise("@define(.label:) boob", &.{ .builtin_define, .l_paran, .private_label, .r_paran, .identifier, .eof });
     try testTokenise("@section", &.{ .builtin_section, .eof });
     try testTokenise("@section foo", &.{ .builtin_section, .identifier, .eof });
     try testTokenise("@symbols*", &.{ .builtin_symbols, .invalid, .eof });
@@ -322,7 +327,7 @@ test "full fledge" {
         \\ascii "foo bar roo" 0x00 // comment
         \\
         \\.label:     ast ; comment foo(bar)
-        \\            ast @callable(a, b)
+        \\            ast @callable(a, b) ; only verified in AstGen
         \\label:      ast .ref
         \\0xZZ        ast
     , &.{

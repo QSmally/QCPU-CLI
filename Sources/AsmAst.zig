@@ -7,20 +7,6 @@ const Token = @import("Token.zig");
 
 const AsmAst = @This();
 
-// Tokens are copied anyway, and a TokenLocation for a specifically known tag
-// is half of the memory of a Token due to padding.
-const TokenLocation = struct {
-
-    start_byte: usize,
-    end_byte: usize,
-
-    pub fn from_token(token: Token) TokenLocation {
-        return .{
-            .start_byte = token.start_byte,
-            .end_byte = token.end_byte };
-    }
-};
-
 const Node = union(enum) {
 
     const Container = struct {
@@ -29,40 +15,41 @@ const Node = union(enum) {
     };
 
     const Instruction = struct {
-        labels: []const TokenLocation,
+        labels: []const Token.Location,
         instruction_token: Token,
         is_alternate: bool,
         arguments: NodeList // Node.argument
+    };
+
+    const Builtin = struct {
+        builtin_token: Token,
+        options: NodeList, // Node.argument
+        arguments: NodeList, // Node.argument
+        nodes: NodeList
     };
 
     const Argument = struct {
         tokens: TokenList
     };
 
-    const Builtin = struct {
-        builtin_token: Token,
-        arguments: NodeList, // Node.argument
-        nodes: NodeList
-    };
-
     container: Container,
     instruction: Instruction,
-    argument: Argument,
-    builtin: Builtin
+    builtin: Builtin,
+    argument: Argument
 };
 
 const TokenList = std.ArrayList(Token);
-const TokenLocationList = std.ArrayList(TokenLocation);
+const TokenLocationList = std.ArrayList(Token.Location);
 const NodeList = std.ArrayList(*Node);
 const ErrorList = std.ArrayList(Error);
 
 allocator: std.mem.Allocator,
 buffer: [:0]const u8,
-sections: []const *Node,
+nodes: []const *Node,
 errors: []const Error,
 
 // Tokens can be deallocated after parsing, but the source buffer cannot. The
-// caller owns 'sections' and 'errors'.
+// caller owns 'nodes' and 'errors'.
 pub fn init(allocator: std.mem.Allocator, source: Source) !AsmAst {
     const root_node = try allocator.create(Node);
     defer allocator.destroy(root_node);
@@ -82,16 +69,16 @@ pub fn init(allocator: std.mem.Allocator, source: Source) !AsmAst {
         .container => |*container| return .{
             .allocator = allocator,
             .buffer = source.buffer,
-            .sections = try container.nodes.toOwnedSlice(),
+            .nodes = try container.nodes.toOwnedSlice(),
             .errors = try errors.toOwnedSlice() },
         else => unreachable
     }
 }
 
 pub fn deinit(self: *AsmAst) void {
-    for (self.sections) |section|
+    for (self.nodes) |section|
         self.dealloc(section);
-    self.allocator.free(self.sections);
+    self.allocator.free(self.nodes);
 
     for (self.errors) |error_|
         self.allocator.free(error_.message);
@@ -99,33 +86,30 @@ pub fn deinit(self: *AsmAst) void {
 }
 
 fn dealloc(self: *AsmAst, node: *Node) void {
-    // fixme: clean up allocation/deallocation code by moving some stuff into
-    // Node init/deinit
     switch (node.*) {
         .container => |*container| {
-            for (container.nodes.items) |node_|
-                self.dealloc(node_);
-            container.nodes.deinit();
+            self.dealloc_nodelist(&container.nodes);
         },
         .instruction => |*instruction| {
-            for (instruction.arguments.items) |argument|
-                self.dealloc(argument);
             self.allocator.free(instruction.labels);
-            instruction.arguments.deinit();
+            self.dealloc_nodelist(&instruction.arguments);
         },
         .argument => |*argument| {
             argument.tokens.deinit();
         },
         .builtin => |*builtin| {
-            for (builtin.nodes.items) |node_|
-                self.dealloc(node_);
-            for (builtin.arguments.items) |argument|
-                self.dealloc(argument);
-            builtin.arguments.deinit();
-            builtin.nodes.deinit();
+            self.dealloc_nodelist(&builtin.options);
+            self.dealloc_nodelist(&builtin.arguments);
+            self.dealloc_nodelist(&builtin.nodes);
         }
     }
     self.allocator.destroy(node);
+}
+
+fn dealloc_nodelist(self: *AsmAst, nodelist: *NodeList) void {
+    for (nodelist.items) |node_|
+        self.dealloc(node_);
+    nodelist.deinit();
 }
 
 const render = @import("render.zig");
@@ -136,7 +120,7 @@ fn dump(self: *AsmAst, writer: anytype) !void {
     var renderer = DumpStream {
         .underlying_writer = writer,
         .indent_delta = 4 };
-    for (self.sections) |section|
+    for (self.nodes) |section|
         try self.print_node(&renderer, section);
 }
 
@@ -173,6 +157,13 @@ fn print_node(self: *AsmAst, ais: anytype, node: *Node) !void {
             _ = try ais.write(" ");
             _ = try ais.write(@tagName(builtin.builtin_token.tag));
 
+            if (builtin.options.items.len > 0) {
+                _ = try ais.write("(");
+                for (builtin.options.items) |option|
+                    try self.print_inline(ais, option);
+                _ = try ais.write(")");
+            }
+
             for (builtin.arguments.items) |argument|
                 try self.print_inline(ais, argument);
             _ = try ais.write("\n");
@@ -188,7 +179,7 @@ fn print_inline(self: *AsmAst, ais: anytype, node: *Node) !void {
     switch (node.*) {
         .argument => |argument_| {
             for (argument_.tokens.items) |token|
-                _ = try ais.write(token.slice(self.buffer));
+                _ = try ais.write(token.location.slice(self.buffer));
         },
         else => {}
     }
@@ -200,7 +191,9 @@ const AstGen = struct {
         root,
         section,
         generic,
-        none
+        option_list,
+        argument_list,
+        unspecified
     };
 
     const LinkedNodeList = struct {
@@ -221,8 +214,6 @@ const AstGen = struct {
     // For tracking the current block stack frame during gen. fixme: rename to container_stack?
     stack: *LinkedNodeList,
     cursor: usize = 0,
-    // fixme: convert to options struct?
-    abort_error: bool = false,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -276,9 +267,7 @@ const AstGen = struct {
         BuiltinGenericLevel
     };
 
-    const ParseError = error {
-        Abort
-    } || std.mem.Allocator.Error;
+    const ParseError = std.mem.Allocator.Error;
 
     fn error_message(id: AstGenError) []const u8 {
         return switch (id) {
@@ -314,7 +303,7 @@ const AstGen = struct {
         const token = if (id == AstGenError.MissedEndScope)
             self.previous_token() else // hack for pointing to erroring token
             self.current_token();
-        const token_location = self.source.location_of(token);
+        const token_location = self.source.location_of(token.location);
 
         try self.errors.append(.{
             .id = id,
@@ -323,8 +312,6 @@ const AstGen = struct {
             .line = token_location.line,
             .line_cursor = token_location.line_cursor,
             .end_cursor = token_location.end_cursor });
-        if (self.abort_error)
-            return ParseError.Abort;
     }
 
     const State = enum {
@@ -357,15 +344,16 @@ const AstGen = struct {
                     .private_label, .label => {
                         if (self.stack.container_type == .root)
                             try self.fault(AstGenError.RootLevelLabel, .{});
-                        const token_location = TokenLocation.from_token(self.current_token());
-                        try self.label_bucket.append(token_location);
+                        const token = self.current_token();
+                        try self.label_bucket.append(token.location);
                         self.advance();
                     },
 
-                    .builtin_symbols,
+                    .builtin_align,
                     .builtin_define,
                     .builtin_header,
-                    .builtin_align => continue :state .builtin,
+                    .builtin_region,
+                    .builtin_symbols => continue :state .builtin,
                     .builtin_end => continue :state .end_scope,
                     .builtin_section => continue :state .new_section,
 
@@ -425,6 +413,7 @@ const AstGen = struct {
                     const builtin = try self.allocator.create(Node);
                     builtin.* = .{ .builtin = .{
                         .builtin_token = self.current_token(),
+                        .options = NodeList.init(self.allocator),
                         .arguments = NodeList.init(self.allocator),
                         .nodes = NodeList.init(self.allocator) } };
                     var container_ = self.container();
@@ -434,9 +423,15 @@ const AstGen = struct {
                     if (token.builtin_has_indentation())
                         try self.stack_push(builtin, .generic);
 
-                    // for arguments
-                    try self.stack_push(builtin, .none);
-                    self.advance();
+                    // for arguments, the argument state will pop into this container
+                    try self.stack_push(builtin, .argument_list);
+
+                    // for options
+                    if (self.next_token() == .l_paran) {
+                        try self.stack_push(builtin, .option_list);
+                        self.advance();
+                    }
+
                     continue :state .argument;
                 },
 
@@ -498,7 +493,7 @@ const AstGen = struct {
 
                     var container_ = self.container();
                     try container_.append(instruction_);
-                    try self.stack_push(instruction_, .none);
+                    try self.stack_push(instruction_, .argument_list);
 
                     if (self.next_token() == .modifier) {
                         switch (instruction_.*) {
@@ -522,6 +517,7 @@ const AstGen = struct {
                 //         ^  ^  ^--------^ ^-^ ^--------------^
                 .argument => switch (self.current()) {
                     .identifier,
+                    .option,
                     .plus,
                     .minus,
                     .reference_label,
@@ -529,13 +525,16 @@ const AstGen = struct {
                     .string_literal,
                     .pseudo_instruction,
                     .reserved_argument => {
+                        std.debug.assert(self.stack.container_type == .argument_list or
+                            self.stack.container_type == .option_list);
+
                         const argument_ = try self.allocator.create(Node);
                         argument_.* = .{ .argument = .{
                             .tokens = TokenList.init(self.allocator) }};
 
                         var arguments_ = self.arguments();
                         try arguments_.append(argument_);
-                        try self.stack_push(argument_, .none);
+                        try self.stack_push(argument_, .unspecified);
                         try self.add_token(self.current_token());
 
                         switch (self.current()) {
@@ -544,6 +543,7 @@ const AstGen = struct {
                             .reference_label => continue :state .reference_argument,
                             .identifier,
                             .numeric_literal => continue :state .numeric_argument,
+                            .option,
                             .string_literal,
                             .pseudo_instruction,
                             .reserved_argument => {
@@ -554,9 +554,28 @@ const AstGen = struct {
                             else => unreachable
                         }
                     },
-                    .eof, .newline, .comma => {
-                        self.stack_pop();
-                        self.advance();
+                    .eof, .newline, .comma, .r_paran => {
+                        defer {
+                            self.stack_pop();
+                            self.advance();
+                        }
+
+                        if (self.current() == .r_paran) {
+                            if (self.stack.container_type != .option_list) {
+                                try self.expected(.newline);
+                                continue :state .full_flush;
+                            }
+                            // fixme: option lists always need to pop to arguments,
+                            // so it has a multi-layer stack dependency
+                            continue :state .argument;
+                        }
+
+                        if (self.stack.container_type != .argument_list) {
+                            try self.expected(.r_paran);
+                            // option lists are always followed by argument
+                            // lists currently
+                            self.stack_pop();
+                        }
                     },
                     else => {
                         try self.fault(AstGenError.UnsupportedArgument, .{ @tagName(self.current()) });
@@ -633,7 +652,7 @@ const AstGen = struct {
     }
 
     inline fn buffer_token(self: *AstGen, token: Token) []const u8 {
-        return token.slice(self.source.buffer);
+        return token.location.slice(self.source.buffer);
     }
 
     inline fn next_token(self: *AstGen) Token.Tag {
@@ -659,7 +678,9 @@ const AstGen = struct {
     fn arguments(self: *AstGen) *NodeList {
         switch (self.stack.node.*) {
             .instruction => |*instruction_| return &instruction_.arguments,
-            .builtin => |*builtin_| return &builtin_.arguments,
+            .builtin => |*builtin_| return if (self.stack.container_type == .option_list)
+                &builtin_.options else
+                &builtin_.arguments,
             else => @panic("bug: arguments() expected top-of-stack to be an argument-holding node")
         }
     }
@@ -708,11 +729,12 @@ fn testAstGen(input: [:0]const u8) !void {
     var ast = try testAst(input);
     defer ast.deinit();
 
-    if (options.dump)
+    if (options.dump) {
         try ast.dump(stderr);
+        for (ast.errors) |error_|
+            try error_.write("test.s", input, stderr);
+    }
 
-    for (ast.errors) |error_|
-        std.debug.print("{s}\n", .{ error_.message });
     try std.testing.expect(ast.errors.len == 0);
 }
 
@@ -781,6 +803,9 @@ test "error line number" {
         \\
         \\ascii "foo"
         \\
+        \\@define(foo
+        \\@define foo)
+        \\
         \\@section
         \\@section test
         \\
@@ -791,28 +816,34 @@ test "error line number" {
     , &.{
         .{ AstGen.AstGenError.RootLevelInstruction, 2 },
         .{ AstGen.AstGenError.UnexpectedPrediction, 4 },
-        .{ AstGen.AstGenError.UnsupportedArgument, 7 },
-        .{ AstGen.AstGenError.Unexpected, 9 },
-        .{ AstGen.AstGenError.Unexpected, 10 }
+        .{ AstGen.AstGenError.UnexpectedPrediction, 5 },
+        .{ AstGen.AstGenError.UnexpectedPrediction, 7 },
+        .{ AstGen.AstGenError.UnsupportedArgument, 10 },
+        .{ AstGen.AstGenError.Unexpected, 12 },
+        .{ AstGen.AstGenError.Unexpected, 13 }
     });
 }
 
 test "full fledge" {
     try testAstGen(
-        \\@symbols
-        \\@symbols foo bar
-        \\@define roo doo
+        \\
+        \\@symbols "awd/space @symbols test.s"
+        \\@define foo bar
+        \\@define(expose) aaa
+        \\@define(.reference) bbb
+        \\
+        \\@header(expose) ma dude
+        \\            ascii "foo" 0x00
+        \\@end
         \\
         \\@section bar
         \\
-        \\@align 24
-        \\            ascii "foo" 0x00
         \\            u8 -1
         \\            u16 .label - .foo
-        \\      @align awesome_enabled
+        \\      @align 16
+        \\      @region awesome_enabled
         \\            reserve u8 test
         \\      @end
-        \\@end
         \\
         \\.another:
         \\.label:     ast ra rb
@@ -825,5 +856,22 @@ test "full fledge" {
         \\            ast 1 + .foo'u
         \\            ast .foo'u + 1 .bar
         \\            @callable ra - 0x00
+    );
+
+    try testAstGen(
+        \\
+        \\@header Queue type len
+        \\            @align 16
+        \\            reserve type len
+        \\@end
+        \\
+        \\@section globals
+        \\
+        \\.myqueue:   @Queue u16 24 ; custom type
+        \\
+        \\@section text
+        \\
+        \\main:       ast thisistheonlyinstructioncurrentlylol
+        \\            ast .myqueue + 4
     );
 }

@@ -35,12 +35,12 @@ pub fn deinit(self: Source) void {
     self.allocator.free(self.tokens);
 }
 
-pub fn location_of(self: Source, token: Token) FileLocation {
+pub fn location_of(self: Source, token_location: Token.Location) FileLocation {
     var line: usize = 1;
     var line_cursor: usize = 0;
 
     while (std.mem.indexOfScalarPos(u8, self.buffer, line_cursor, '\n')) |index| {
-        if (index >= token.start_byte)
+        if (index >= token_location.start_byte)
             break;
         line += 1;
         line_cursor = index + 1;
