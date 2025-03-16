@@ -18,6 +18,10 @@ const Helper = struct {
         return self.tokeniser.buffer[self.tokeniser.cursor];
     }
 
+    pub inline fn peek(self: *Helper) u8 {
+        return self.tokeniser.buffer[self.tokeniser.cursor + 1];
+    }
+
     pub inline fn next(self: *Helper) u8 {
         self.tokeniser.cursor += 1;
         return self.current();
@@ -117,7 +121,11 @@ pub fn next(self: *AsmTokeniser) Token {
         // Tags any token starting with a-zA-Z_ and continuing with a-zA-Z0-9_
         // as identifier, or if found, a (pseudo)instruction or builtin.
         .identifier => switch (helper.next()) {
-            'a'...'z', 'A'...'Z', '0'...'9', '_', '.'  => continue :state .identifier,
+            'a'...'z', 'A'...'Z', '0'...'9', '_'  => continue :state .identifier,
+            '.' => switch (helper.peek()) {
+                'a'...'z', 'A'...'Z', '_' => continue :state .identifier,
+                else => continue :state .invalid
+            },
             ':' => helper.tag_next(.label),
             else => {
                 const identifier_ = self.buffer[result.location.start_byte..self.cursor];
@@ -132,7 +140,7 @@ pub fn next(self: *AsmTokeniser) Token {
         .label => switch (helper.next()) {
             'a'...'z', 'A'...'Z', '0'...'9', '_', '.' => continue :state .label,
             ':' => helper.tag_next(.private_label),
-            0, '\n', ' ', '(', ')', '\'' => helper.tag_lookahead(.reference_label),
+            0, '\n', ' ', '(', ')', ',', '\'' => helper.tag_lookahead(.reference_label),
             else => continue :state .invalid
         },
 
@@ -228,6 +236,11 @@ test "eof" {
 
 test "identifiers" {
     try testTokenise("x", &.{ .identifier, .eof });
+    try testTokenise("x.", &.{ .invalid, .eof });
+    try testTokenise("x.y", &.{ .identifier, .eof });
+    try testTokenise("x. y", &.{ .invalid, .identifier, .eof });
+    try testTokenise("x,y", &.{ .identifier, .comma, .identifier, .eof });
+    try testTokenise("x, y", &.{ .identifier, .comma, .identifier, .eof });
     try testTokenise("  x", &.{ .identifier, .eof });
     try testTokenise("ascii", &.{ .pseudo_instruction, .eof });
     try testTokenise("ast, ascii", &.{ .instruction, .comma, .pseudo_instruction, .eof });
@@ -249,6 +262,8 @@ test "identifiers" {
 test "labels" {
     try testTokenise("public_label", &.{ .identifier, .eof });
     try testTokenise("public_label:", &.{ .label, .eof });
+    try testTokenise("public_label:,", &.{ .label, .comma, .eof });
+    try testTokenise("public_label,:", &.{ .identifier, .comma, .invalid, .eof });
     try testTokenise(".public_label:", &.{ .private_label, .eof });
     try testTokenise(".public_label: ast", &.{ .private_label, .instruction, .eof });
     try testTokenise(".reference_label", &.{ .reference_label, .eof });
@@ -300,6 +315,7 @@ test "numeric literals" {
 
 test "string literals" {
     try testTokenise(" \" foo bar \" ", &.{ .string_literal, .eof });
+    try testTokenise(" \" foo, bar, \" ", &.{ .string_literal, .eof });
     try testTokenise("\" foo bar \" 0x00 ", &.{ .string_literal, .numeric_literal, .eof });
     try testTokenise("\" foo bar ", &.{ .unexpected_eof, .eof });
     try testTokenise("\" foo bar \n", &.{ .invalid, .eof });
@@ -311,6 +327,7 @@ test "modifiers" {
     try testTokenise("'u   ", &.{ .modifier, .eof });
     try testTokenise("'upper", &.{ .modifier, .eof });
     try testTokenise("'u foo", &.{ .modifier, .identifier, .eof });
+    try testTokenise("'u, foo", &.{ .modifier, .comma, .identifier, .eof });
     try testTokenise("foo'u foo", &.{ .identifier, .modifier, .identifier, .eof });
     try testTokenise(".foo'u foo", &.{ .reference_label, .modifier, .identifier, .eof });
 

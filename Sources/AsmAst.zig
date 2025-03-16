@@ -1,4 +1,6 @@
 
+// Abstract Syntax Tree
+
 const std = @import("std");
 const AsmTokeniser = @import("AsmTokeniser.zig");
 const Error = @import("Error.zig");
@@ -7,21 +9,22 @@ const Token = @import("Token.zig");
 
 const AsmAst = @This();
 
-const Node = union(enum) {
+pub const Node = union(enum) {
 
-    const Container = struct {
-        section: []const u8,
+    const Section = struct {
+        name: []const u8,
         nodes: NodeList
     };
 
     const Instruction = struct {
         labels: []const Token.Location,
         instruction_token: Token,
-        is_alternate: bool,
+        modifier_token: ?Token,
+        type_token: ?Token,
         arguments: NodeList // Node.argument
     };
 
-    const Builtin = struct {
+    pub const Builtin = struct {
         builtin_token: Token,
         options: NodeList, // Node.argument
         arguments: NodeList, // Node.argument
@@ -32,7 +35,7 @@ const Node = union(enum) {
         tokens: TokenList
     };
 
-    container: Container,
+    section: Section,
     instruction: Instruction,
     builtin: Builtin,
     argument: Argument
@@ -44,17 +47,18 @@ const NodeList = std.ArrayList(*Node);
 const ErrorList = std.ArrayList(Error);
 
 allocator: std.mem.Allocator,
+// fixme: kept track due to dumping Ast to writer
 buffer: [:0]const u8,
 nodes: []const *Node,
 errors: []const Error,
 
 // Tokens can be deallocated after parsing, but the source buffer cannot. The
-// caller owns 'nodes' and 'errors'.
+// caller owns 'nodes' and 'errors' until deinit is called.
 pub fn init(allocator: std.mem.Allocator, source: Source) !AsmAst {
     const root_node = try allocator.create(Node);
     defer allocator.destroy(root_node);
-    root_node.* = .{ .container = .{
-        .section = "root",
+    root_node.* = .{ .section = .{
+        .name = "root",
         .nodes = NodeList.init(allocator) } };
     var errors = ErrorList.init(allocator);
 
@@ -66,10 +70,10 @@ pub fn init(allocator: std.mem.Allocator, source: Source) !AsmAst {
     try ast_gen.parse();
 
     switch (root_node.*) {
-        .container => |*container| return .{
+        .section => |*section| return .{
             .allocator = allocator,
             .buffer = source.buffer,
-            .nodes = try container.nodes.toOwnedSlice(),
+            .nodes = try section.nodes.toOwnedSlice(),
             .errors = try errors.toOwnedSlice() },
         else => unreachable
     }
@@ -86,9 +90,10 @@ pub fn deinit(self: *AsmAst) void {
 }
 
 fn dealloc(self: *AsmAst, node: *Node) void {
+    // fixme: move this into Node and also include clone()
     switch (node.*) {
-        .container => |*container| {
-            self.dealloc_nodelist(&container.nodes);
+        .section => |*section| {
+            self.dealloc_nodelist(&section.nodes);
         },
         .instruction => |*instruction| {
             self.allocator.free(instruction.labels);
@@ -133,9 +138,9 @@ fn print_node(self: *AsmAst, ais: anytype, node: *Node) !void {
     defer ais.popIndent();
 
     switch (node.*) {
-        .container => |container| {
+        .section => |section| {
             _ = try ais.write("\n");
-            for (container.nodes.items) |node_|
+            for (section.nodes.items) |node_|
                 try self.print_node(ais, node_);
         },
         .instruction => |instruction| {
@@ -204,14 +209,15 @@ const AstGen = struct {
 
     allocator: std.mem.Allocator,
     source: Source,
-    // The root node container may include simple builtins as well as
-    // sections.  Instructions may not be directly in the top-level node
-    // list. AstGen verifies these cases.
+    // The root node container may include simple builtins as well as sections.
+    // Instructions may not be directly in the top-level node list. AstGen
+    // verifies these cases.
     root_node: *Node,
     errors: *ErrorList,
-    // For tracking labels before moving them into the first available memory area.
+    // For tracking labels before moving them into the first available memory
+    // area.
     label_bucket: TokenLocationList,
-    // For tracking the current block stack frame during gen. fixme: rename to container_stack?
+    // For tracking the current block stack frame during gen.
     stack: *LinkedNodeList,
     cursor: usize = 0,
 
@@ -221,10 +227,7 @@ const AstGen = struct {
         root_node: *Node,
         errors: *ErrorList
     ) !AstGen {
-        switch (root_node.*) {
-            .container => {},
-            else => unreachable
-        }
+        std.debug.assert(root_node.* == .section);
 
         const stack = try allocator.create(LinkedNodeList);
         stack.* = .{
@@ -255,11 +258,11 @@ const AstGen = struct {
 
     const AstGenError = error {
         UnexpectedEof,
-        UnexpectedPrediction,
+        Expected,
         Unexpected,
+        UnexpectedTag,
         RootLevelInstruction,
         RootLevelLabel,
-        UnsupportedArgument,
         UnsupportedOffsetArgument,
         MissedEndScope,
         ExtraEndScope,
@@ -269,38 +272,36 @@ const AstGen = struct {
 
     const ParseError = std.mem.Allocator.Error;
 
-    fn error_message(id: AstGenError) []const u8 {
-        return switch (id) {
-            AstGenError.UnexpectedEof => "unexpected eof",
-            AstGenError.UnexpectedPrediction => "expected {s}, found {s}",
-            AstGenError.Unexpected => "unexpectedly got {s} '{s}'",
-            AstGenError.RootLevelInstruction => "instructions cannot be defined at the root level",
-            AstGenError.RootLevelLabel => "labels cannot be declared at the root level",
-            AstGenError.UnsupportedArgument => "unsupported argument {s}",
-            AstGenError.UnsupportedOffsetArgument => "invalid offset argument {s}",
-            AstGenError.MissedEndScope => "missed an @end scope or illegal use of {s}",
-            AstGenError.ExtraEndScope => "extra @end",
-            AstGenError.BuiltinRootLevel => "builtin '{s}' requires to be at the root level",
-            AstGenError.BuiltinGenericLevel => "builtin '{s}' cannot appear at the root level"
-        };
-    }
-
     fn verify_root_section(self: *AstGen) !void {
         if (self.stack.container_type != .root and self.stack.container_type != .section)
-            try self.fault(AstGenError.MissedEndScope, .{ @tagName(self.previous_token().tag) });
+            try self.fault(error.MissedEndScope, .{ self.previous_token().tag.fmt() });
     }
 
     fn expected(self: *AstGen, tag: Token.Tag) ParseError!void {
-        @branchHint(.cold);
-        try self.fault(AstGenError.UnexpectedPrediction, .{
-            @tagName(tag),
-            @tagName(self.current()) });
+        try self.fault(error.Expected, .{
+            tag.fmt(),
+            self.current().fmt() });
     }
 
     fn fault(self: *AstGen, comptime id: AstGenError, arguments_: anytype) ParseError!void {
-        @branchHint(.cold);
-        const format = try std.fmt.allocPrint(self.allocator, error_message(id), arguments_);
-        const token = if (id == AstGenError.MissedEndScope)
+        @branchHint(.likely);
+
+        const message = switch (id) {
+            error.UnexpectedEof => "unexpected EOF",
+            error.Expected => "expected {s}, found {s}",
+            error.Unexpected => "unexpectedly got {s} '{s}'",
+            error.UnexpectedTag => "unexpectedly got {s}",
+            error.RootLevelInstruction => "instructions cannot be defined at the root level",
+            error.RootLevelLabel => "labels cannot be declared at the root level",
+            error.UnsupportedOffsetArgument => "invalid offset argument {s}",
+            error.MissedEndScope => "missed an @end scope or illegal use of {s}",
+            error.ExtraEndScope => "extra @end",
+            error.BuiltinRootLevel => "builtin '{s}' requires to be at the root level",
+            error.BuiltinGenericLevel => "builtin '{s}' cannot appear at the root level"
+        };
+
+        const format = try std.fmt.allocPrint(self.allocator, message, arguments_);
+        const token = if (id == error.MissedEndScope)
             self.previous_token() else // hack for pointing to erroring token
             self.current_token();
         const token_location = self.source.location_of(token.location);
@@ -316,8 +317,8 @@ const AstGen = struct {
 
     const State = enum {
         start,
-        flush,
         full_flush,
+        argument_flush,
         expect_flush,
         expect_full_flush,
         builtin,
@@ -325,9 +326,11 @@ const AstGen = struct {
         new_section,
         instruction,
         argument,
+        argument_end,
         reference_argument,
         numeric_argument,
-        offset_argument
+        offset_argument,
+        string_argument
     };
 
     pub fn parse(self: *AstGen) ParseError!void {
@@ -335,15 +338,15 @@ const AstGen = struct {
             state: switch (State.start) {
                 .start => switch (self.current()) {
                     .unexpected_eof => {
-                        try self.fault(AstGenError.UnexpectedEof, .{});
+                        try self.fault(error.UnexpectedEof, .{});
                         break :parse_loop;
                     },
 
-                    .eof, .newline, .comma => self.advance(),
+                    .eof, .newline => self.advance(),
 
                     .private_label, .label => {
                         if (self.stack.container_type == .root)
-                            try self.fault(AstGenError.RootLevelLabel, .{});
+                            try self.fault(error.RootLevelLabel, .{});
                         const token = self.current_token();
                         try self.label_bucket.append(token.location);
                         self.advance();
@@ -359,24 +362,32 @@ const AstGen = struct {
 
                     .identifier,
                     .instruction,
-                    .pseudo_instruction => continue :state .instruction,
+                    .pseudo_instruction,
+                    .typed_instruction => continue :state .instruction,
 
                     else => {
-                        const tag = @tagName(self.current());
+                        const tag = self.current();
                         const input = self.buffer_token(self.current_token());
-                        try self.fault(AstGenError.Unexpected, .{ tag, input });
+                        try self.fault(error.Unexpected, .{ tag.fmt(), input });
                         self.advance();
                     },
-                },
-
-                .flush => switch (self.next_token()) {
-                    .eof, .newline, .comma => self.advance(),
-                    else => continue :state .flush
                 },
 
                 .full_flush => switch (self.next_token()) {
                     .eof, .newline => self.advance(),
                     else => continue :state .full_flush
+                },
+
+                .argument_flush => switch (self.next_token()) {
+                    .comma => {
+                        self.advance();
+                        continue :state .argument;
+                    },
+                    .eof, .newline => {
+                        self.stack_pop();
+                        self.advance();
+                    },
+                    else => continue :state .argument_flush
                 },
 
                 .expect_flush => switch (self.next_token()) {
@@ -395,18 +406,19 @@ const AstGen = struct {
                 // indentation to the stack, popped with @end.
                 .builtin => {
                     const token = self.current_token();
-                    const root_only = token.builtin_rootonly();
+                    const in_root = token.tag.builtin_root();
+                    const in_body = token.tag.builtin_body();
 
-                    if (root_only and self.stack.container_type != .root) {
-                        try self.fault(AstGenError.BuiltinRootLevel, .{ @tagName(self.current()) });
+                    if (!in_root and self.stack.container_type == .root) {
+                        try self.fault(error.BuiltinRootLevel, .{ self.current().fmt() });
                         continue :state .full_flush;
                     }
 
-                    if (!root_only and
-                        self.stack.container_type != .section and
-                         self.stack.container_type != .generic
+                    if (!in_body and
+                        (self.stack.container_type == .section or
+                        self.stack.container_type == .generic)
                     ) {
-                        try self.fault(AstGenError.BuiltinGenericLevel, .{ @tagName(self.current()) });
+                        try self.fault(error.BuiltinGenericLevel, .{ self.current().fmt() });
                         continue :state .full_flush;
                     }
 
@@ -420,7 +432,7 @@ const AstGen = struct {
                     try container_.append(builtin);
 
                     // for nodes, the argument state will pop into this container
-                    if (token.builtin_has_indentation())
+                    if (token.tag.builtin_indented())
                         try self.stack_push(builtin, .generic);
 
                     // for arguments, the argument state will pop into this container
@@ -438,7 +450,7 @@ const AstGen = struct {
                 .end_scope => switch (self.next_token()) {
                     .eof, .newline => {
                         if (self.stack.container_type == .root or self.stack.container_type == .section) {
-                            try self.fault(AstGenError.ExtraEndScope, .{});
+                            try self.fault(error.ExtraEndScope, .{});
                             continue :state .full_flush;
                         }
 
@@ -456,8 +468,8 @@ const AstGen = struct {
                         try self.verify_root_section();
 
                         const new_section = try self.allocator.create(Node);
-                        new_section.* = .{ .container = .{
-                            .section = self.buffer_token(self.current_token()),
+                        new_section.* = .{ .section = .{
+                            .name = self.buffer_token(self.current_token()),
                             .nodes = NodeList.init(self.allocator) } };
                         var sections_ = self.sections();
                         try sections_.append(new_section);
@@ -475,8 +487,8 @@ const AstGen = struct {
                 // headers like instructions with space arguments?
                 .instruction => {
                     if (self.stack.container_type == .root) {
-                        try self.fault(AstGenError.RootLevelInstruction, .{});
-                        continue :state .flush;
+                        try self.fault(error.RootLevelInstruction, .{});
+                        continue :state .full_flush;
                     }
 
                     std.debug.assert(self.stack.container_type == .section or
@@ -487,7 +499,8 @@ const AstGen = struct {
                     instruction_.* = .{ .instruction = .{
                         .labels = try self.label_bucket.toOwnedSlice(),
                         .instruction_token = self.current_token(),
-                        .is_alternate = false,
+                        .modifier_token = null,
+                        .type_token = null,
                         .arguments = NodeList.init(self.allocator) } };
                     self.label_bucket = TokenLocationList.init(self.allocator);
 
@@ -495,12 +508,22 @@ const AstGen = struct {
                     try container_.append(instruction_);
                     try self.stack_push(instruction_, .argument_list);
 
-                    if (self.next_token() == .modifier) {
-                        switch (instruction_.*) {
-                            .instruction => |*hoist| hoist.is_alternate = true,
-                            else => unreachable
-                        }
-                        self.advance();
+                    var token = self.next_token();
+                    const instruction_token = instruction_.*.instruction.instruction_token;
+                    const modifier_token = &instruction_.*.instruction.modifier_token;
+                    const type_token = &instruction_.*.instruction.type_token;
+
+                    if (token == .modifier) {
+                        modifier_token.* = self.current_token();
+                        token = self.next_token();
+                    }
+
+                    if (instruction_token.tag == .typed_instruction and
+                        (token == .pseudo_instruction or
+                        token == .identifier)
+                    ) {
+                        type_token.* = self.current_token();
+                        token = self.next_token();
                     }
 
                     continue :state .argument;
@@ -513,8 +536,8 @@ const AstGen = struct {
                 // Arguments can only appear in an instruction's argument list,
                 // but it's still represented as a Node due to the stack.
                 //
-                //  instr. ra rb 0x00 + 666 666 .reference'u + 2
-                //         ^  ^  ^--------^ ^-^ ^--------------^
+                //  instr. ra, rb, 0x00 + 666, 666, .reference'u + 2
+                //         ^   ^   ^--------^  ^-^  ^--------------^
                 .argument => switch (self.current()) {
                     .identifier,
                     .option,
@@ -543,18 +566,31 @@ const AstGen = struct {
                             .reference_label => continue :state .reference_argument,
                             .identifier,
                             .numeric_literal => continue :state .numeric_argument,
+                            .string_literal => continue :state .string_argument,
                             .option,
-                            .string_literal,
                             .pseudo_instruction,
                             .reserved_argument => {
                                 self.stack_pop();
                                 self.advance();
-                                continue :state .argument;
+                                continue :state .argument_end;
                             },
                             else => unreachable
                         }
                     },
-                    .eof, .newline, .comma, .r_paran => {
+                    .comma => {
+                        try self.fault(error.Expected, .{ "an argument", self.current().fmt() });
+                        self.stack_pop();
+                        continue :state .full_flush;
+                    },
+                    else => continue :state .argument_end
+                },
+
+                .argument_end => switch (self.current()) {
+                    .comma => {
+                        self.advance();
+                        continue :state .argument;
+                    },
+                    .eof, .newline, .r_paran => {
                         defer {
                             self.stack_pop();
                             self.advance();
@@ -578,12 +614,16 @@ const AstGen = struct {
                         }
                     },
                     else => {
-                        try self.fault(AstGenError.UnsupportedArgument, .{ @tagName(self.current()) });
-                        self.advance();
-                        continue :state .argument;
+                        try self.fault(error.UnexpectedTag, .{ self.current().fmt() });
+                        continue :state .argument_flush;
                     }
                 },
 
+                // A reference label is the usage of a defined (private) label.
+                // As it's an address, an offset may be added using arithmetic
+                // symbols. A reference can also can contain a modifier.
+                //
+                //  instr. .reference'l + 0x04
                 .reference_argument => switch (self.next_token()) {
                     .minus, .plus => {
                         try self.add_token(self.current_token());
@@ -596,10 +636,12 @@ const AstGen = struct {
                     else => {
                         // nothing to chain, it may be another argument
                         self.stack_pop();
-                        continue :state .argument;
+                        continue :state .argument_end;
                     }
                 },
 
+                // Any numeric literal, which also allows an offset using the
+                // arithmetic symbols.
                 .numeric_argument => switch (self.next_token()) {
                     .minus, .plus => {
                         try self.add_token(self.current_token());
@@ -608,7 +650,7 @@ const AstGen = struct {
                     else => {
                         // nothing to chain, it may be another argument
                         self.stack_pop();
-                        continue :state .argument;
+                        continue :state .argument_end;
                     }
                 },
 
@@ -622,9 +664,33 @@ const AstGen = struct {
                         continue :state .numeric_argument;
                     },
                     else => {
-                        try self.fault(AstGenError.UnsupportedOffsetArgument, .{ @tagName(self.current()) });
+                        try self.fault(error.UnsupportedOffsetArgument, .{ self.current().fmt() });
                         self.stack_pop();
-                        continue :state .argument;
+                        continue :state .argument_end;
+                    }
+                },
+
+                // A string literal is an array of characters delimited by
+                // double quotes, but it may optionally add a single 'sentinel'
+                // character defined by the numeric literal at the end.
+                //
+                //  ascii "foo bar roo" 0x00
+                //        ^----------------^
+                .string_argument => switch (self.next_token()) {
+                    .string_literal => {
+                        try self.add_token(self.current_token());
+                        continue :state .string_argument;
+                    },
+                    .numeric_literal => {
+                        try self.add_token(self.current_token());
+                        self.stack_pop();
+                        self.advance();
+                        continue :state .argument_end;
+                    },
+                    else => {
+                        // nothing to chain, it may be another argument
+                        self.stack_pop();
+                        continue :state .argument_end;
                     }
                 }
             }
@@ -662,14 +728,14 @@ const AstGen = struct {
 
     fn sections(self: *AstGen) *NodeList {
         switch (self.root_node.*) {
-            .container => |*container_| return &container_.nodes,
-            else => @panic("bug: root node must be a container")
+            .section => |*section| return &section.nodes,
+            else => @panic("bug: root node must be a section")
         }
     }
 
     fn container(self: *AstGen) *NodeList {
         switch (self.stack.node.*) {
-            .container => |*container_| return &container_.nodes,
+            .section => |*section| return &section.nodes,
             .builtin => |*builtin_| return &builtin_.nodes,
             else => @panic("bug: container() expected top-of-stack to be a node container")
         }
@@ -767,16 +833,19 @@ fn testAstGenErrLine(input: [:0]const u8, errors: []const ErrLine) !void {
 }
 
 test "format errors" {
-    try testAstGenErr("/", &.{ AstGen.AstGenError.UnexpectedEof });
+    try testAstGenErr("/", &.{ error.UnexpectedEof });
 }
 
 test "protect section ids" {
-    try testAstGenErr("@section", &.{ AstGen.AstGenError.UnexpectedPrediction });
+    try testAstGenErr("@section", &.{ error.Expected });
+    try testAstGenErr("@section foo", &.{});
+    try testAstGenErr("@section foo bar", &.{ error.Expected });
 }
 
 test "forbid instructions at top level" {
-    try testAstGenErr("ast", &.{ AstGen.AstGenError.RootLevelInstruction });
+    try testAstGenErr("ast", &.{ error.RootLevelInstruction });
     try testAstGenErr("@section foo\nast", &.{});
+    try testAstGenErr("@header foo\nast\n@end", &.{});
 }
 
 test "error line number" {
@@ -785,7 +854,20 @@ test "error line number" {
         \\
         \\ast
     , &.{
-        .{ AstGen.AstGenError.RootLevelInstruction, 3 }
+        .{ error.RootLevelInstruction, 3 }
+    });
+
+    try testAstGenErrLine(
+        \\
+        \\@section test
+        \\            ast ra, ; trailing commas allowed
+        \\            ast ra,, ; double commas not allowed
+        \\            ast, ; commas after instruction not allowed
+        \\            ast 5 +, ; commas after expected arguments not allowed
+    , &.{
+        .{ error.Expected, 4 },
+        .{ error.Expected, 5 },
+        .{ error.UnsupportedOffsetArgument, 6 }
     });
 
     try testAstGenErrLine(
@@ -793,10 +875,12 @@ test "error line number" {
         \\@section test
         \\            ast .foo:
         \\            ast .foo
-        \\            ast 5 .foo: 5
+        \\            ast 5 foo 5 ; emits unsupported argument instead of unexpected token
+        \\            ast 5, .foo:, 5
     , &.{
-        .{ AstGen.AstGenError.UnsupportedArgument, 3 },
-        .{ AstGen.AstGenError.UnsupportedArgument, 5 }
+        .{ error.UnexpectedTag, 3 },
+        .{ error.UnexpectedTag, 5 },
+        .{ error.UnexpectedTag, 6 }
     });
 
     try testAstGenErrLine(
@@ -814,13 +898,13 @@ test "error line number" {
         \\            0x00
         \\            ra
     , &.{
-        .{ AstGen.AstGenError.RootLevelInstruction, 2 },
-        .{ AstGen.AstGenError.UnexpectedPrediction, 4 },
-        .{ AstGen.AstGenError.UnexpectedPrediction, 5 },
-        .{ AstGen.AstGenError.UnexpectedPrediction, 7 },
-        .{ AstGen.AstGenError.UnsupportedArgument, 10 },
-        .{ AstGen.AstGenError.Unexpected, 12 },
-        .{ AstGen.AstGenError.Unexpected, 13 }
+        .{ error.RootLevelInstruction, 2 },
+        .{ error.Expected, 4 },
+        .{ error.Expected, 5 },
+        .{ error.Expected, 7 },
+        .{ error.UnexpectedTag, 10 },
+        .{ error.Unexpected, 12 },
+        .{ error.Unexpected, 13 }
     });
 }
 
@@ -828,11 +912,11 @@ test "full fledge" {
     try testAstGen(
         \\
         \\@symbols "awd/space @symbols test.s"
-        \\@define foo bar
+        \\@define foo, bar
         \\@define(expose) aaa
         \\@define(.reference) bbb
         \\
-        \\@header(expose) ma dude
+        \\@header(expose) ma, dude
         \\            ascii "foo" 0x00
         \\@end
         \\
@@ -846,28 +930,31 @@ test "full fledge" {
         \\      @end
         \\
         \\.another:
-        \\.label:     ast ra rb
-        \\foo:        ast rb + 5
+        \\.label:     ast ra, rb
+        \\foo:        ast +5
         \\
         \\@section bar
         \\
-        \\            ast 0x00 + 0x00 0x00
+        \\            ast 0x00 + 0x00, 0x00
         \\.aaaaaa:    ast' memory
         \\            ast 1 + .foo'u
-        \\            ast .foo'u + 1 .bar
-        \\            @callable ra - 0x00
+        \\            ast .foo'u + 1, .bar
+        \\            @callable -0x01 - 0x001
     );
 
     try testAstGen(
         \\
-        \\@header Queue type len
+        \\@header Queue, type, len
         \\            @align 16
         \\            reserve type len
         \\@end
         \\
         \\@section globals
         \\
-        \\.myqueue:   @Queue u16 24 ; custom type
+        \\.myqueue:   @Queue u16, 24 ; custom type
+        \\
+        \\@define awd, 5
+        \\.newqueue:  @Queue u16, @awd
         \\
         \\@section text
         \\

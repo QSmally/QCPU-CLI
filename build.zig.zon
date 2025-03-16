@@ -1,6 +1,7 @@
 .{
-    .name = "QCPU",
+    .name = .QCPU,
     .version = "0.0.0",
+    .fingerprint = 0x81937c6db284ab3c,
 
     .dependencies = .{
         .clap = .{
