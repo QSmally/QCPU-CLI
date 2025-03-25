@@ -214,10 +214,19 @@ const SlicedToken = struct { Token.Tag, []const u8 };
 
 fn testTokeniseSlices(input: [:0]const u8, expected_slices: []const SlicedToken) !void {
     var tokeniser = AsmTokeniser.init(input);
-    for (expected_slices) |expected_slice| {
+
+    for (expected_slices, 0..) |expected_slice, idx| {
         const token = tokeniser.next();
-        if (options.dump)
-            try stderr.print("{s} {s}\n", .{ @tagName(token.tag), token.location.slice(input) });
+        if (options.dump) {
+            const slice = if (token.tag != .newline)
+                token.location.slice(input) else
+                "\\n";
+            try stderr.print("{}: {s}={s}\n", .{
+                idx,
+                @tagName(token.tag),
+                slice });
+        }
+
         try std.testing.expectEqual(expected_slice[0], token.tag);
 
         // see tag:newline-comment

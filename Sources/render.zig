@@ -67,6 +67,13 @@ pub fn AutoIndentingStream(comptime UnderlyingWriter: type) type {
             return self.writeNoIndent(bytes);
         }
 
+        pub fn print(self: *Self, comptime fmt: []const u8, args: anytype) WriteError!void {
+            try self.applyIndent();
+            try self.underlying_writer.print(fmt, args);
+            if (fmt[fmt.len - 1] == '\n')
+                self.resetLine();
+        }
+
         // Change the indent delta without changing the final indentation level
         pub fn setIndentDelta(self: *Self, new_indent_delta: usize) void {
             if (self.indent_delta == new_indent_delta) {

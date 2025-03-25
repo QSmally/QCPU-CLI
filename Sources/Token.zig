@@ -41,6 +41,7 @@ pub const Tag = enum {
     reserved_argument,
 
     builtin_align,
+    builtin_barrier,
     builtin_define,
     builtin_end,
     builtin_header,
@@ -51,6 +52,7 @@ pub const Tag = enum {
     pub fn builtin_indented(self: Tag) bool {
         return switch (self) {
             .builtin_align,
+            .builtin_barrier,
             .builtin_define,
             .builtin_end,
             .builtin_section,
@@ -66,6 +68,7 @@ pub const Tag = enum {
     pub fn builtin_root(self: Tag) bool {
         return switch (self) {
             .builtin_align,
+            .builtin_barrier,
             .builtin_region => false,
 
             .builtin_define,
@@ -82,6 +85,7 @@ pub const Tag = enum {
             .builtin_symbols => false,
 
             .builtin_align,
+            .builtin_barrier,
             .builtin_define,
             .builtin_region => true,
 
@@ -116,6 +120,7 @@ pub const Tag = enum {
             .reserved_argument => "an argument",
 
             .builtin_align => "@align",
+            .builtin_barrier => "@barrier",
             .builtin_define => "@define",
             .builtin_end => "@end",
             .builtin_header => "@header",
@@ -137,6 +142,7 @@ location: Location,
 const keywords = std.StaticStringMap(Tag).initComptime(.{
     // Builtins
     .{ "@align", .builtin_align },
+    .{ "@barrier", .builtin_barrier },
     .{ "@define", .builtin_define },
     .{ "@end", .builtin_end },
     .{ "@header", .builtin_header },
@@ -145,6 +151,7 @@ const keywords = std.StaticStringMap(Tag).initComptime(.{
     .{ "@symbols", .builtin_symbols },
 
     .{ "expose", .option },
+    .{ "noelimination", .option },
 
     // Instructions
     .{ "ast", .instruction },

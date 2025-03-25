@@ -15,9 +15,10 @@ allocator: std.mem.Allocator,
 buffer: [:0]const u8,
 tokens: []const Token,
 
-pub fn init(allocator: std.mem.Allocator, tokeniser: *AsmTokeniser) !Source {
-    var tokens = std.ArrayList(Token).init(allocator);
-
+pub fn init_estimated(allocator: std.mem.Allocator, tokeniser: *AsmTokeniser, estimation: usize) !Source {
+    var tokens = try std
+        .ArrayList(Token)
+        .initCapacity(allocator, estimation);
     while (true) {
         const token = tokeniser.next();
         try tokens.append(token);
@@ -29,6 +30,11 @@ pub fn init(allocator: std.mem.Allocator, tokeniser: *AsmTokeniser) !Source {
         .allocator = allocator,
         .buffer = tokeniser.buffer,
         .tokens = try tokens.toOwnedSlice() };
+}
+
+pub fn init(allocator: std.mem.Allocator, tokeniser: *AsmTokeniser) !Source {
+    const estimation = tokeniser.buffer.len / 4;
+    return init_estimated(allocator, tokeniser, estimation);
 }
 
 pub fn deinit(self: Source) void {
