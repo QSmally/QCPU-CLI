@@ -27,7 +27,7 @@ pub fn init(allocator: std.mem.Allocator, source: Source) !AsmAst {
     std.debug.assert(source.tokens.len > 0);
     std.debug.assert(source.tokens[source.tokens.len - 1].tag == .eof);
 
-    const estimated_node_count = (source.tokens.len + 2) / 2;
+    const estimated_node_count = source.tokens.len + 2;
     try ast_gen.nodes.ensureTotalCapacity(allocator, estimated_node_count);
     try ast_gen.parse_root();
 
@@ -68,10 +68,13 @@ fn dump_node(self: *AsmAst, ais: anytype, pm: anytype, index: Index) !void {
         .container => for (node.operands.lhs..node.operands.rhs) |index_|
             try self.dump_node(ais, pm, @intCast(index_)),
         .composite,
-        .builtin => {
+        .builtin,
+        .instruction => {
             try self.dump_node(ais, pm, @intCast(node.operands.lhs));
             try self.dump_node(ais, pm, @intCast(node.operands.rhs));
         },
+        .label => if (node.operands.lhs > 0)
+            try ais.print("(public)\n", .{}),
         else => {}
     }
 }
@@ -105,13 +108,15 @@ pub const Node = struct {
     pub const Tag = enum {
         container,      // nodes[lhs..rhs]
         composite,      // lhs and rhs refer to other nodes
-        builtin,        // lhs is options data, rhs is compositie of arguments, container
+        builtin,        // lhs is arguments container, rhs is compositie of options container, opaque
         option,         // both unused, token is option
-        // instruction,    // lhs is arguments data, rhs is labels data
+        label,          // lhs is public bit, rhs is unused, token is label
+        instruction,    // lhs is arguments container, rhs is composite of labels container, modifier
+        modifier,       // both unused, token is modifier
+        identifier,     // both unused, token is identifier
         // add,            // lhs + rhs
         // sub,            // lhs - rhs
         // neg,            // -lhs, rhs is unused
-        identifier,     // both unused, token is identifier
         // integer,        // both unused, token is integer
         // string          // lhs is sentinel, rhs is unused, token is string
     };
@@ -258,8 +263,11 @@ const AstGen = struct {
         RootLevelInstruction,
         RootLevelLabel,
         ExtraEndScope,
+        BuiltinRootLevel,
         BuiltinOpaqueLevel
     };
+
+    const EvalError = std.mem.Allocator.Error;
 
     fn add_error_arg(self: *AstGen, comptime err: ParseError, argument: anytype) !void {
         @branchHint(.unlikely);
@@ -271,6 +279,7 @@ const AstGen = struct {
             error.RootLevelInstruction => "instructions cannot be defined at the root level",
             error.RootLevelLabel => "labels cannot be declared at the root level",
             error.ExtraEndScope => "extra @end",
+            error.BuiltinRootLevel => "builtin '{s}' cannot appear at an opaque level",
             error.BuiltinOpaqueLevel => "builtin '{s}' cannot appear at the root level"
         };
 
@@ -284,6 +293,7 @@ const AstGen = struct {
         const arguments = switch (err) {
             error.Expected => .{ argument.fmt(), token.tag.fmt() },
             error.Unexpected => .{ token.tag.fmt(), self.from_buffer(self.cursor) },
+            error.BuiltinRootLevel,
             error.BuiltinOpaqueLevel => .{ token.tag.fmt() },
             else => argument
         };
@@ -305,58 +315,7 @@ const AstGen = struct {
     }
 
     // Root <- TopBuiltin* Eof
-    //
-    // TopBuiltin <- SimpleBuiltin / IndentedBuiltin / Section
-    // Builtin <- SimpleBuiltin / IndentedBuiltin
-    // SimpleBuiltin <- SimpleBuiltinIdentifier (LParan OptionList RParan)? ArgumentList Eol
-    // IndentedBuiltin <- IndentedBuiltinIdentifier (LParan OptionList RParan)? ArgumentList Eol Opaque End Eol
-    // Section <- '@section' Identifier Eol Opaque [^Section]
-    //
-    // Opaque <- (Builtin / Instruction)*
-    // Instruction <- (Label Eol)* Label? AnyOpcode ArgumentList Eol
-    // AnyOpcode <- Opcode / PseudoOpcode / TypedOpcode
-    //
-    // OptionList <- (Option Comma)* Option?
-    //
-    // ArgumentList <- (Argument Comma)* Argument?
-    // Argument <- ReservedArgument / PseudoOpcode / Expression
-    // Expression <- (Expression Operation)* Target
-    // Operation <- ArithmeticOp
-    // Target <- NegatableTarget / Reference
-    // NegatableTarget <- '-'? (Identifier / Integer)
-    //
-    // Label <- PublicLabel / PrivateLabel
-    // PublicLabel <- Identifier Colon
-    // PrivateLabel <- Dot Identifier Colon
-    // Reference <- Dot Identifier (Apostrophe ReferenceSelector)?
-    //
-    // Integer <- Decimal / Binary / Hexadecimal
-    // Decimal <- [0-9] [0-9]*
-    // Binary <- '0b' [01] [01]*
-    // Hexadecimal <- '0x' [0-9a-fA-F] [0-9a-fA-F]*
-    //
-    // Dot <- '.'
-    // Colon <- ':'
-    // Apostrophe <- '\''
-    // LParan <- '('
-    // RParan <- ')'
-    // Comment <- '//' [^\n]*
-    // Eol <- Comment? '\n'
-    // Eof <- !.
-    //
-    // SimpleBuiltinIdentifier <- '@barrier' / '@define' / '@symbols'
-    // IndentedBuiltin <- '@align' / '@header' / '@region'
-    // End <- '@end'
-    // Option <- 'expose' / 'noelimination'
-    // ReferenceSelector <- 'l' / 'h'
-    // ArithmeticOp <- '+' / '-'
-    // Opcode <- 'ast'
-    // PseudoOpcode <- 'ascii' / 'i16' / 'i24' / 'i8' / 'u16' / 'u24' / 'u8'
-    // TypedOpcode <- 'reserve'
-    // ReservedArgument <- 'ra' / 'rb' / 'rc' / 'rd' / 'rx' / 'ry' /
-    //     'rz' / 's' / 'ns' / 'z' / 'nz' / 'c' / 'nc' / 'u' / 'nu' /
-    //     'sf' / 'sp' / 'xy'
-    pub fn parse_root(self: *AstGen) std.mem.Allocator.Error!void {
+    pub fn parse_root(self: *AstGen) EvalError!void {
         try self.nodes.append(self.allocator, .{
             .tag = .container,
             .token = Null,
@@ -391,8 +350,7 @@ const AstGen = struct {
 
                 .identifier,
                 .instruction,
-                .pseudo_instruction,
-                .typed_instruction => {
+                .pseudo_instruction => {
                     try self.add_error(error.RootLevelInstruction);
                     self.consume_line();
                 },
@@ -423,22 +381,44 @@ const AstGen = struct {
         _ = try self.expect_token(.eof);
     }
 
-    fn parse_builtin(self: *AstGen) !Node {
-        const main_token = self.next_token();
+    // TopBuiltin <- SimpleBuiltin / IndentedBuiltin / Section
+    // Builtin <- SimpleBuiltin / IndentedBuiltin
+    // SimpleBuiltin <- SimpleBuiltinIdentifier (LParan OptionList RParan)? ArgumentList Eol
+    // IndentedBuiltin <- IndentedBuiltinIdentifier (LParan OptionList RParan)? ArgumentList Eol Opaque End Eol
+    // Section <- '@section' Identifier Eol Opaque [^Section]
+    // SimpleBuiltinIdentifier <- '@barrier' / '@define' / '@symbols'
+    // IndentedBuiltin <- '@align' / '@header' / '@region'
+    // End <- '@end'
+    fn parse_builtin(self: *AstGen) EvalError!Node {
+        const token = self.next_token();
         const builtin_options = try self.parse_builtin_options();
         const builtin_arguments = try self.parse_arguments();
         _ = try self.expect_token(.newline);
 
+        const tag = self.source.tokens[token].tag;
+        const has_opaque = tag.builtin_opaque();
+
+        const opaque_ = if (has_opaque) blk: {
+            const payload = try self.parse_opaque();
+            if (tag != .builtin_section) {
+                _ = try self.expect_token(.builtin_end);
+                _ = try self.expect_token(.newline);
+            }
+            break :blk payload;
+        } else Null;
+
         const composite = try self.add_node(.{
             .tag = .composite,
             .token = Null,
-            .operands = .{ .lhs = builtin_arguments } });
+            .operands = .{ .lhs = builtin_options, .rhs = opaque_ } });
         return .{
             .tag = .builtin,
-            .token = main_token,
-            .operands = .{ .lhs = builtin_options, .rhs = composite } };
+            .token = token,
+            .operands = .{ .lhs = builtin_arguments, .rhs = composite } };
     }
 
+    // OptionList <- (Option Comma)* Option?
+    // Option <- 'expose' / 'noelimination'
     fn parse_builtin_options(self: *AstGen) !Index {
         _ = self.eat_token(.l_paran) orelse return Null;
         const frame = self.mark_frame();
@@ -465,7 +445,8 @@ const AstGen = struct {
                 },
 
                 .newline,
-                .eof => {
+                .eof,
+                .unexpected_eof => {
                     try self.add_error_arg(error.Expected, Token.Tag.r_paran);
                     break;
                 },
@@ -481,7 +462,8 @@ const AstGen = struct {
         return try self.add_index_range(range);
     }
 
-    fn parse_arguments(self: *AstGen) !Index {
+    // ArgumentList <- (Argument Comma)* Argument?
+    fn parse_arguments(self: *AstGen) EvalError!Index {
         const frame = self.mark_frame();
         defer self.reset_frame(frame);
 
@@ -493,14 +475,23 @@ const AstGen = struct {
                 .numeric_literal,
                 .string_literal,
                 .identifier,
+                .pseudo_instruction,
                 .reserved_argument => {
                     const expression = try self.parse_expression();
                     try self.add_frame_node(expression);
                     _ = self.eat_token(.comma) orelse break;
+
+                    switch (self.current_tag()) {
+                        .newline,
+                        .eof,
+                        .unexpected_eof => try self.add_error_arg(error.Expected, Token.Tag.identifier),
+                        else => {}
+                    }
                 },
 
                 .newline,
-                .eof => break,
+                .eof,
+                .unexpected_eof => break,
 
                 else => {
                     try self.add_error(error.Unexpected);
@@ -513,11 +504,177 @@ const AstGen = struct {
         return try self.add_index_range(range);
     }
 
-    fn parse_expression(self: *AstGen) !Node {
+    // Argument <- ReservedArgument / PseudoOpcode / Expression
+    // Expression <- (Expression Operation)* Target
+    // Operation <- ArithmeticOp
+    // Target <- NegatableTarget / Reference
+    // NegatableTarget <- '-'? (Identifier / Integer)
+    // Reference <- Dot Identifier (Apostrophe ReferenceSelector)?
+    // Integer <- Decimal / Binary / Hexadecimal
+    // Decimal <- [0-9] [0-9]*
+    // Binary <- '0b' [01] [01]*
+    // Hexadecimal <- '0x' [0-9a-fA-F] [0-9a-fA-F]*
+    // ReferenceSelector <- 'l' / 'h'
+    // ArithmeticOp <- '+' / '-'
+    // ReservedArgument <- 'ra' / 'rb' / 'rc' / 'rd' / 'rx' / 'ry' /
+    //     'rz' / 's' / 'ns' / 'z' / 'nz' / 'c' / 'nc' / 'u' / 'nu' /
+    //     'sf' / 'sp' / 'xy'
+    fn parse_expression(self: *AstGen) EvalError!Node {
+        // fixme: expression implementation
+        defer _ = self.next_token();
         return .{
             .tag = .identifier,
             .token = self.cursor,
             .operands = .{} };
+    }
+
+    // Opaque <- (Builtin / Instruction)*
+    fn parse_opaque(self: *AstGen) EvalError!Index {
+        const frame = self.mark_frame();
+        defer self.reset_frame(frame);
+
+        while (true) {
+            switch (self.current_tag()) {
+                .builtin_align,
+                .builtin_barrier,
+                .builtin_define,
+                .builtin_region => {
+                    const builtin = try self.parse_builtin();
+                    try self.add_frame_node(builtin);
+                },
+
+                .builtin_header,
+                .builtin_symbols => {
+                    try self.add_error(error.BuiltinRootLevel);
+                    // recover by parsing the rest so the Ast reports other
+                    // possible errors.
+                    const builtin = try self.parse_builtin();
+                    try self.add_frame_node(builtin);
+                },
+
+                .identifier,
+                .instruction,
+                .pseudo_instruction => {
+                    const instruction = try self.parse_instruction();
+                    try self.add_frame_node(instruction);
+                },
+
+                .label,
+                .private_label => {
+                    const label = try self.parse_labeled_instruction();
+                    try self.add_frame_node(label);
+                },
+
+                .unexpected_eof => {
+                    try self.add_error(error.UnexpectedEof);
+                    _ = self.next_token();
+                    break;
+                },
+
+                .eof,
+                .builtin_end,
+                .builtin_section => break,
+
+                .newline => _ = self.next_token(),
+
+                else => {
+                    try self.add_error(error.Unexpected);
+                    _ = self.next_token();
+                }
+            }
+        }
+
+        const range = try self.lower_frame_nodes(frame);
+        return try self.add_index_range(range);
+    }
+
+    // Instruction <- (Label Eol)* Label? AnyOpcode ArgumentList Eol
+    // AnyOpcode <- Opcode / PseudoOpcode / TypedOpcode
+    // Opcode <- 'ast'
+    // PseudoOpcode <- 'ascii' / 'i16' / 'i24' / 'i8' / 'u16' / 'u24' / 'u8'
+    // TypedOpcode <- 'reserve'
+    fn parse_instruction(self: *AstGen) EvalError!Node {
+        const instruction = self.cursor;
+        _ = self.next_token();
+
+        const composite = if (self.eat_token(.modifier)) |modifier| blk: {
+            const modifier_node = try self.add_node(.{
+                .tag = .modifier,
+                .token = modifier,
+                .operands = .{} });
+            const node = try self.add_node(.{
+                .tag = .composite,
+                .token = Null,
+                .operands = .{ .rhs = modifier_node } });
+            break :blk node;
+        } else Null;
+
+        const instruction_arguments = try self.parse_arguments();
+
+        return .{
+            .tag = .instruction,
+            .token = instruction,
+            .operands = .{ .lhs = instruction_arguments, .rhs = composite } };
+    }
+
+    // Label <- PublicLabel / PrivateLabel
+    // PublicLabel <- Identifier Colon
+    // PrivateLabel <- Dot Identifier Colon
+    fn parse_labeled_instruction(self: *AstGen) EvalError!Node {
+        const frame = self.mark_frame();
+        defer self.reset_frame(frame);
+
+        const instruction = loop: while (true) {
+            switch (self.current_tag()) {
+                .identifier,
+                .instruction,
+                .pseudo_instruction => {
+                    break :loop try self.parse_instruction();
+                },
+
+                .label,
+                .private_label => {
+                    const public_bit: Index = if (self.current_tag() == .label) 1 else 0;
+                    try self.add_frame_node(.{
+                        .tag = .label,
+                        .token = self.cursor,
+                        .operands = .{ .lhs = public_bit } });
+                    _ = self.next_token();
+                },
+
+                .newline => _ = self.next_token(),
+
+                .eof,
+                .unexpected_eof => {
+                    try self.add_error(error.UnexpectedEof);
+                    // fixme: maybe add a parse fatal instead of adding a
+                    // 'ghost' instruction, seeing as this is an eof anyway.
+                    break :loop Node {
+                        .tag = .instruction,
+                        .token = Null,
+                        .operands = .{} };
+                },
+
+                else => {
+                    try self.add_error_arg(error.Expected, Token.Tag.instruction);
+                    self.consume_line();
+                }
+            }
+        };
+
+        const range = try self.lower_frame_nodes(frame);
+        const range_node = try self.add_index_range(range);
+        const modifier = if (instruction.operands.rhs != Null)
+            self.nodes.items[instruction.operands.rhs].operands.rhs else
+            Null;
+        const composite = try self.add_node(.{
+            .tag = .composite,
+            .token = Null,
+            .operands = .{ .lhs = range_node, .rhs = modifier } });
+        return .{
+            .tag = .instruction,
+            .token = instruction.token,
+            .operands = .{ .lhs = instruction.operands.lhs, .rhs = composite } };
     }
 };
 
@@ -556,7 +713,7 @@ fn testAstGen(input: [:0]const u8) !void {
                 node.operands.rhs });
         try ast.dump(stderr);
 
-        const estimated_node_count = (ast.source.tokens.len + 2) / 2;
+        const estimated_node_count = ast.source.tokens.len + 2;
         try stderr.print("input len:            {} bytes ({}) (estimated={})\n", .{ ast.source.buffer.len, ast.source.tokens.len, input.len / 4 });
         try stderr.print("ast memory consumed:  {} bytes ({})\n", .{ ast.nodes.len * @sizeOf(Node), ast.nodes.len });
         try stderr.print("ast memory estimated: {} bytes ({})\n", .{ estimated_node_count * @sizeOf(Node), estimated_node_count });
@@ -578,6 +735,24 @@ fn testAstGenErr(input: [:0]const u8, errors: []const AstGen.ParseError) !void {
     try std.testing.expectEqualSlices(anyerror, errors, ast_errors.items);
 }
 
+const ErrLine = struct { AstGen.ParseError, usize };
+
+fn testAstGenErrLine(input: [:0]const u8, errors: []const ErrLine) !void {
+    var ast = try testAst(input);
+    defer testAstDeinit(&ast);
+
+    if (options.dump)
+        for (ast.errors) |err|
+            try err.write("test.s", input, stderr);
+
+    try std.testing.expectEqual(errors.len, ast.errors.len);
+
+    for (errors, ast.errors) |expected_error, err| {
+        try std.testing.expectEqual(expected_error[0], err.id);
+        try std.testing.expectEqual(expected_error[1], err.line);
+    }
+}
+
 test "format errors" {
     try testAstGenErr("", &.{});
     try testAstGenErr("/", &.{ error.UnexpectedEof });
@@ -585,6 +760,37 @@ test "format errors" {
     try testAstGenErr("ast", &.{ error.RootLevelInstruction });
     try testAstGenErr(".label:", &.{ error.RootLevelLabel });
     try testAstGenErr("@end", &.{ error.ExtraEndScope });
+}
+
+test "forbid instructions at top level" {
+    try testAstGenErr("ast", &.{ error.RootLevelInstruction });
+    try testAstGenErr("@section foo\nast", &.{});
+    try testAstGenErr("@header foo\nast\n@end", &.{});
+}
+
+test "error line number" {
+    try testAstGenErrLine(
+        \\
+        \\ascii "foo"
+        \\
+        \\@define(foo
+        \\@define foo)
+        \\
+        \\@section test
+        \\
+        \\            ast 0xZZ ; hmmmm
+        \\
+        \\            0x00
+        \\            ra
+    , &.{
+        .{ error.RootLevelInstruction, 2 },
+        .{ error.Expected, 4 },
+        .{ error.Expected, 4 },
+        .{ error.Expected, 5 },
+        .{ error.Unexpected, 9 },
+        .{ error.Unexpected, 11 },
+        .{ error.Unexpected, 12 }
+    });
 }
 
 test "full fledge" {
@@ -596,8 +802,10 @@ test "full fledge" {
     try testAstGen(
         \\// foo
         \\
-        \\@section()
-        \\@section(noelimination)
-        \\@section(expose, noelimination)
+        \\@section foo, foo
+        \\@section(noelimination) bar
+        \\              ast' foo, bar
+        \\.label:
+        \\label:        ast bar
     );
 }

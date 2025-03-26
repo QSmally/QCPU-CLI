@@ -37,7 +37,6 @@ pub const Tag = enum {
     option,
     instruction,
     pseudo_instruction,
-    typed_instruction,
     reserved_argument,
 
     builtin_align,
@@ -49,45 +48,17 @@ pub const Tag = enum {
     builtin_section,
     builtin_symbols,
 
-    pub fn builtin_indented(self: Tag) bool {
+    pub fn builtin_opaque(self: Tag) bool {
         return switch (self) {
             .builtin_align,
             .builtin_barrier,
             .builtin_define,
             .builtin_end,
-            .builtin_section,
             .builtin_symbols => false,
 
             .builtin_header,
-            .builtin_region => true,
-
-            else => unreachable
-        };
-    }
-
-    pub fn builtin_root(self: Tag) bool {
-        return switch (self) {
-            .builtin_align,
-            .builtin_barrier,
-            .builtin_region => false,
-
-            .builtin_define,
-            .builtin_header,
-            .builtin_symbols => true,
-
-            else => unreachable
-        };
-    }
-
-    pub fn builtin_body(self: Tag) bool {
-        return switch (self) {
-            .builtin_header,
-            .builtin_symbols => false,
-
-            .builtin_align,
-            .builtin_barrier,
-            .builtin_define,
-            .builtin_region => true,
+            .builtin_region,
+            .builtin_section => true,
 
             else => unreachable
         };
@@ -115,8 +86,7 @@ pub const Tag = enum {
             .identifier => "an identifier",
             .option => "an option",
             .instruction,
-            .pseudo_instruction,
-            .typed_instruction => "an instruction",
+            .pseudo_instruction => "an instruction",
             .reserved_argument => "an argument",
 
             .builtin_align => "@align",
@@ -164,7 +134,7 @@ const keywords = std.StaticStringMap(Tag).initComptime(.{
     .{ "u24", .pseudo_instruction },
     .{ "u8", .pseudo_instruction },
 
-    .{ "reserve", .typed_instruction },
+    .{ "reserve", .instruction },
 
     // Operands
     .{ "c", .reserved_argument },   // carry out
