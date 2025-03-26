@@ -264,7 +264,10 @@ const AstGen = struct {
         RootLevelLabel,
         ExtraEndScope,
         BuiltinRootLevel,
-        BuiltinOpaqueLevel
+        BuiltinOpaqueLevel,
+        NoteDefinedHere,
+        NoteUseTo,
+        NoteGeneric
     };
 
     const EvalError = std.mem.Allocator.Error;
@@ -280,38 +283,59 @@ const AstGen = struct {
             error.RootLevelLabel => "labels cannot be declared at the root level",
             error.ExtraEndScope => "extra @end",
             error.BuiltinRootLevel => "builtin '{s}' cannot appear at an opaque level",
-            error.BuiltinOpaqueLevel => "builtin '{s}' cannot appear at the root level"
+            error.BuiltinOpaqueLevel => "builtin '{s}' cannot appear at the root level",
+            error.NoteDefinedHere => "{s} defined here",
+            error.NoteUseTo => "use '{s}' to {s}",
+            error.NoteGeneric => "{s}"
         };
 
-        const is_previous = switch (err) {
+        const is_note = switch (err) {
+            error.NoteDefinedHere,
+            error.NoteUseTo,
+            error.NoteGeneric => true,
             else => false
         };
 
-        const token = if (is_previous)
-            self.source.tokens[self.cursor - 1] else
+        const is_locationable = switch (err) {
+            error.NoteUseTo,
+            error.NoteGeneric => false,
+            else => true
+        };
+
+        const token: ?Token =
+            if (!is_locationable) null else
+            if (is_note) argument else
             self.source.tokens[self.cursor];
+        const token_location = if (token) |token_|
+            self.source.location_of(token_.location) else
+            null;
         const arguments = switch (err) {
-            error.Expected => .{ argument.fmt(), token.tag.fmt() },
-            error.Unexpected => .{ token.tag.fmt(), self.from_buffer(self.cursor) },
+            error.Expected => .{ argument.fmt(), token.?.tag.fmt() },
+            error.Unexpected => .{ token.?.tag.fmt(), self.from_buffer(self.cursor) },
             error.BuiltinRootLevel,
-            error.BuiltinOpaqueLevel => .{ token.tag.fmt() },
+            error.BuiltinOpaqueLevel => .{ token.?.tag.fmt() },
+            error.NoteDefinedHere => .{ argument.tag.fmt() },
+            error.NoteUseTo => .{ argument[0], argument[1] },
             else => argument
         };
 
         const format = try std.fmt.allocPrint(self.allocator, message, arguments);
-        const token_location = self.source.location_of(token.location);
 
         try self.errors.append(self.allocator, .{
             .id = err,
             .token = token,
+            .is_note = is_note,
             .message = format,
-            .line = token_location.line,
-            .line_cursor = token_location.line_cursor,
-            .end_cursor = token_location.end_cursor });
+            .location = token_location });
     }
 
     fn add_error(self: *AstGen, comptime err: ParseError) !void {
         return self.add_error_arg(err, .{});
+    }
+
+    fn add_node_notes(self: *AstGen, nodes: []const Node) !void {
+        for (nodes) |node|
+            try self.add_error_arg(error.NoteDefinedHere, self.source.tokens[node.token]);
     }
 
     // Root <- TopBuiltin* Eof
@@ -400,10 +424,16 @@ const AstGen = struct {
 
         const opaque_ = if (has_opaque) blk: {
             const payload = try self.parse_opaque();
-            if (tag != .builtin_section) {
-                _ = try self.expect_token(.builtin_end);
-                _ = try self.expect_token(.newline);
+
+            if (tag == .builtin_section)
+                break :blk payload;
+            if (self.source.tokens[self.cursor].tag != .builtin_end) {
+                try self.add_error_arg(error.Expected, Token.Tag.builtin_end);
+                try self.add_error_arg(error.NoteDefinedHere, self.source.tokens[token]);
             }
+
+            _ = self.next_token();
+            _ = try self.expect_token(.newline);
             break :blk payload;
         } else Null;
 
@@ -657,7 +687,19 @@ const AstGen = struct {
 
                 else => {
                     try self.add_error_arg(error.Expected, Token.Tag.instruction);
-                    self.consume_line();
+                    try self.add_node_notes(self.temporary.items[frame..]);
+
+                    const tag = self.current_tag();
+                    if (tag == .builtin_section or tag == .builtin_end)
+                        try self.add_error_arg(error.NoteUseTo, .{ "reserve [type] [len]", "occupy opaque space" })
+                    else if (tag.is_builtin())
+                        try self.add_error_arg(error.NoteGeneric, .{ "label cannot bind to builtin or opaque without assembletime-known size" });
+                    // fixme: maybe add a parse fatal instead of adding a
+                    // 'ghost' instruction, seeing as this is an eof anyway.
+                    break :loop Node {
+                        .tag = .instruction,
+                        .token = Null,
+                        .operands = .{} };
                 }
             }
         };
@@ -748,8 +790,9 @@ fn testAstGenErrLine(input: [:0]const u8, errors: []const ErrLine) !void {
     try std.testing.expectEqual(errors.len, ast.errors.len);
 
     for (errors, ast.errors) |expected_error, err| {
+        const line = if (err.location) |l| l.line else 0;
         try std.testing.expectEqual(expected_error[0], err.id);
-        try std.testing.expectEqual(expected_error[1], err.line);
+        try std.testing.expectEqual(expected_error[1], line);
     }
 }
 
@@ -790,6 +833,65 @@ test "error line number" {
         .{ error.Unexpected, 9 },
         .{ error.Unexpected, 11 },
         .{ error.Unexpected, 12 }
+    });
+}
+
+test "errors with notes" {
+    try testAstGenErrLine(
+        \\@section test
+        \\            ast
+        \\label:
+        \\.label:     ast
+        \\
+        \\unused_lbl:
+        \\.unused_lbl:
+        \\.another_unused_lbl:
+        \\
+        \\@section test
+        \\          ast
+    , &.{
+        .{ error.Expected, 10 },
+        .{ error.NoteDefinedHere, 6 },
+        .{ error.NoteDefinedHere, 7 },
+        .{ error.NoteDefinedHere, 8 },
+        .{ error.NoteUseTo, 0 }
+    });
+
+    try testAstGenErrLine(
+        \\@section test
+        \\
+        \\unused_lbl:
+        \\
+        \\@align 16
+        \\          ast
+    , &.{
+        .{ error.Expected, 5 },
+        .{ error.NoteDefinedHere, 3 },
+        .{ error.NoteGeneric, 0 }
+    });
+
+    try testAstGenErrLine(
+        \\@section test
+        \\
+        \\unused_lbl:
+        \\
+        \\@region
+        \\          ast
+        \\@end
+    , &.{
+        .{ error.Expected, 5 },
+        .{ error.NoteDefinedHere, 3 },
+        .{ error.NoteGeneric, 0 }
+    });
+
+    try testAstGenErrLine(
+        \\@section test
+        \\
+        \\@region
+        \\          ast
+    , &.{
+        .{ error.Expected, 4 },
+        .{ error.NoteDefinedHere, 3 }
     });
 }
 

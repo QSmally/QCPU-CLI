@@ -64,6 +64,21 @@ pub const Tag = enum {
         };
     }
 
+    pub fn is_builtin(self: Tag) bool {
+        return switch (self) {
+            .builtin_align,
+            .builtin_barrier,
+            .builtin_define,
+            .builtin_end,
+            .builtin_header,
+            .builtin_region,
+            .builtin_section,
+            .builtin_symbols => true,
+
+            else => false
+        };
+    }
+
     pub fn fmt(self: Tag) []const u8 {
         return switch (self) {
             .invalid => "an invalid symbol",
@@ -77,6 +92,7 @@ pub const Tag = enum {
             .plus => "a + sign",
             .minus => "a - sign",
 
+            .label => "a label",
             .private_label => "a private label",
             .reference_label => "a reference label",
             .numeric_literal => "a numeric literal",
@@ -96,9 +112,7 @@ pub const Tag = enum {
             .builtin_header => "@header",
             .builtin_region => "@region",
             .builtin_section => "@section",
-            .builtin_symbols => "@symbols",
-
-            else => @tagName(self)
+            .builtin_symbols => "@symbols"
         };
     }
 };
