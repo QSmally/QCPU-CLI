@@ -25,11 +25,16 @@ pub const Tag = enum {
     comma,
     plus,
     minus,
+    bang,
+    lsh,
+    rsh,
+    mult,
 
     label,
     private_label,
     reference_label,
     numeric_literal,
+    char_literal,
     string_literal,
     modifier,
 
@@ -89,13 +94,18 @@ pub const Tag = enum {
             .l_paran => "'('",
             .r_paran => "')'",
             .comma => "a comma",
-            .plus => "a + sign",
-            .minus => "a - sign",
+            .plus => "a plus sign",
+            .minus => "a minus sign",
+            .bang => "an exclamation point",
+            .lsh => "a left-shift operator",
+            .rsh => "a right-shift operator",
+            .mult => "a multiplication operator",
 
             .label => "a label",
             .private_label => "a private label",
             .reference_label => "a reference label",
             .numeric_literal => "a numeric literal",
+            .char_literal => "a character literal",
             .string_literal => "a string literal",
             .modifier => "a modifier",
 
@@ -150,6 +160,10 @@ const keywords = std.StaticStringMap(Tag).initComptime(.{
 
     .{ "reserve", .instruction },
 
+    // Operators
+    .{ "lsh", .lsh },
+    .{ "rsh", .rsh },
+
     // Operands
     .{ "c", .reserved_argument },   // carry out
     .{ "s", .reserved_argument },   // sign
@@ -185,4 +199,14 @@ const keywords = std.StaticStringMap(Tag).initComptime(.{
 
 pub fn reserved(identifier: []const u8) ?Tag {
     return keywords.get(identifier);
+}
+
+// For use in errors, where the argument is expected to be a struct containing
+// a fmt() method.
+pub fn string(argument: []const u8) type {
+    return struct {
+        pub fn fmt() []const u8 {
+            return argument;
+        }
+    };
 }

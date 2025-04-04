@@ -68,7 +68,7 @@ const State = enum {
     comment,
     numeric_literal,
     string_literal,
-    modifier
+    apostrophe
 };
 
 pub fn next(self: *AsmTokeniser) Token {
@@ -97,6 +97,8 @@ pub fn next(self: *AsmTokeniser) Token {
             ',' => helper.tag_next(.comma),
             '+' => helper.tag_next(.plus),
             '-' => helper.tag_next(.minus),
+            '!' => helper.tag_next(.bang),
+            '*' => helper.tag_next(.mult),
 
             // beginning of tags
             'a'...'z', 'A'...'Z', '_', '@' => continue :state .identifier,
@@ -105,7 +107,7 @@ pub fn next(self: *AsmTokeniser) Token {
             ';' => continue :state .comment,
             '0'...'9' => continue :state .numeric_literal,
             '"' => continue :state .string_literal,
-            '\'' => continue :state .modifier,
+            '\'' => continue :state .apostrophe,
 
             else => continue :state .invalid
         },
@@ -113,8 +115,14 @@ pub fn next(self: *AsmTokeniser) Token {
         // Mark current token as invalid until a barrier character, after which
         // the tokeniser can continue (either providing as many errors to the
         // user, or abort the process).
+        //
+        // A barrier character is a universal list, including:
+        // - eof/newlines/spaces
+        // - parenthesis
+        // - commas
+        // - binary operators
         .invalid => switch (helper.next()) {
-            0, '\n', ' ', '(', ')', ',' => helper.tag_lookahead(.invalid),
+            0, '\n', ' ', '(', ')', ',', '+', '-', '*' => helper.tag_lookahead(.invalid),
             else => continue :state .invalid
         },
 
@@ -140,7 +148,7 @@ pub fn next(self: *AsmTokeniser) Token {
         .label => switch (helper.next()) {
             'a'...'z', 'A'...'Z', '0'...'9', '_', '.' => continue :state .label,
             ':' => helper.tag_next(.private_label),
-            0, '\n', ' ', '(', ')', ',', '\'' => helper.tag_lookahead(.reference_label),
+            0, '\n', ' ', '(', ')', ',', '+', '-', '*', '\'' => helper.tag_lookahead(.reference_label),
             else => continue :state .invalid
         },
 
@@ -165,7 +173,7 @@ pub fn next(self: *AsmTokeniser) Token {
         // is done at a later stage based on prefixing (like 0x and 0b).
         .numeric_literal => switch (helper.next()) {
             '0'...'9', 'A'...'F', 'x', 'b' => continue :state .numeric_literal,
-            0, '\n', ' ', '(', ')', ',' => helper.tag_lookahead(.numeric_literal),
+            0, '\n', ' ', '(', ')', ',', '+', '-', '*' => helper.tag_lookahead(.numeric_literal),
             else => continue :state .invalid
         },
 
@@ -180,14 +188,21 @@ pub fn next(self: *AsmTokeniser) Token {
             else => continue :state .string_literal
         },
 
-        // An address modifier a ' character with an identifier, like 'u. How
-        // something is interpreted depends on the type context in relation to
-        // the parent's content. For example, a u16 interpreting a .reference
-        // will fit just fine, but a u8 interpreting a .reference will need an
-        // explicit modifier.
-        .modifier => switch (helper.next()) {
-            'a'...'z' => continue :state .modifier,
-            0, '\n', ' ', '(', ')', ',' => helper.tag_lookahead(.modifier),
+        // An apostrophe can mean a character literal or a(n) (address)
+        // modifier.
+        // An address modifier is a ' character with an identifier, like 'u.
+        // How something is interpreted depends on the type context in relation
+        // to the parent's content. For example, a u16 interpreting a
+        // .reference will fit just fine, but a u8 interpreting a .reference
+        // will need an explicit modifier.
+        .apostrophe => switch (helper.next()) {
+            // fixme: only a-zA-Z0-9 available
+            'a'...'z', 'A'...'Z', '0'...'9' => switch (helper.next()) {
+                '\'' => helper.tag_next(.char_literal),
+                0, '\n', ' ', '(', ')', ',', '+', '-', '*' => helper.tag_lookahead(.modifier),
+                else => continue :state .invalid
+            },
+            0, '\n', ' ', '(', ')', ',', '+', '-', '*' => helper.tag_lookahead(.modifier),
             else => continue :state .invalid
         }
     }
@@ -261,7 +276,7 @@ test "identifiers" {
     try testTokenise("@define(.label:) boob", &.{ .builtin_define, .l_paran, .private_label, .r_paran, .identifier, .eof });
     try testTokenise("@section", &.{ .builtin_section, .eof });
     try testTokenise("@section foo", &.{ .builtin_section, .identifier, .eof });
-    try testTokenise("@symbols*", &.{ .builtin_symbols, .invalid, .eof });
+    try testTokenise("@symbols&", &.{ .builtin_symbols, .invalid, .eof });
     try testTokenise("@nevergonnagiveyouup", &.{ .identifier, .eof });
 
     // validated at a later stage
@@ -322,6 +337,15 @@ test "numeric literals" {
     try testTokenise("5xbx", &.{ .numeric_literal, .eof });
 }
 
+test "numeric operators" {
+    try testTokenise("5 + 3", &.{ .numeric_literal, .plus, .numeric_literal, .eof });
+    try testTokenise("5-3", &.{ .numeric_literal, .minus, .numeric_literal, .eof });
+    try testTokenise("5 -3", &.{ .numeric_literal, .minus, .numeric_literal, .eof });
+    try testTokenise("-24", &.{ .minus, .numeric_literal, .eof });
+    try testTokenise("1 * 1", &.{ .numeric_literal, .mult, .numeric_literal, .eof });
+    try testTokenise("1 lsh 1", &.{ .numeric_literal, .lsh, .numeric_literal, .eof });
+}
+
 test "string literals" {
     try testTokenise(" \" foo bar \" ", &.{ .string_literal, .eof });
     try testTokenise(" \" foo, bar, \" ", &.{ .string_literal, .eof });
@@ -334,7 +358,7 @@ test "string literals" {
 test "modifiers" {
     try testTokenise("'u", &.{ .modifier, .eof });
     try testTokenise("'u   ", &.{ .modifier, .eof });
-    try testTokenise("'upper", &.{ .modifier, .eof });
+    try testTokenise("'upper", &.{ .invalid, .eof });
     try testTokenise("'u foo", &.{ .modifier, .identifier, .eof });
     try testTokenise("'u, foo", &.{ .modifier, .comma, .identifier, .eof });
     try testTokenise("foo'u foo", &.{ .identifier, .modifier, .identifier, .eof });
@@ -343,6 +367,15 @@ test "modifiers" {
     // validated at a later stage
     try testTokenise("'", &.{ .modifier, .eof });
     try testTokenise("' foo", &.{ .modifier, .identifier, .eof });
+}
+
+test "char literals" {
+    try testTokenise("'a'", &.{ .char_literal, .eof });
+    try testTokenise("'a'b", &.{ .char_literal, .identifier, .eof });
+    try testTokenise("'a'+", &.{ .char_literal, .plus, .eof });
+    try testTokenise("-'a'", &.{ .minus, .char_literal, .eof });
+    try testTokenise(".foo'u' foo", &.{ .reference_label, .char_literal, .identifier, .eof });
+    try testTokenise("'foo' foo", &.{ .invalid, .identifier, .eof });
 }
 
 test "full fledge" {

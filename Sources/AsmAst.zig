@@ -69,12 +69,24 @@ fn dump_node(self: *AsmAst, ais: anytype, pm: anytype, index: Index) !void {
             try self.dump_node(ais, pm, @intCast(index_)),
         .composite,
         .builtin,
-        .instruction => {
+        .instruction,
+        .add,
+        .sub,
+        .mult,
+        .lsh,
+        .rsh => {
             try self.dump_node(ais, pm, @intCast(node.operands.lhs));
             try self.dump_node(ais, pm, @intCast(node.operands.rhs));
         },
+        .neg,
+        .inv => {
+            try self.dump_node(ais, pm, @intCast(node.operands.lhs));
+        },
         .label => if (node.operands.lhs > 0)
             try ais.print("(public)\n", .{}),
+        .string,
+        .reference => if (node.operands.lhs > 0)
+            try self.dump_node(ais, pm, @intCast(node.operands.lhs)),
         else => {}
     }
 }
@@ -114,11 +126,18 @@ pub const Node = struct {
         instruction,    // lhs is arguments container, rhs is composite of labels container, modifier
         modifier,       // both unused, token is modifier
         identifier,     // both unused, token is identifier
-        // add,            // lhs + rhs
-        // sub,            // lhs - rhs
-        // neg,            // -lhs, rhs is unused
-        // integer,        // both unused, token is integer
-        // string          // lhs is sentinel, rhs is unused, token is string
+        neg,            // -lhs, rhs is unused
+        inv,            // !lhs, rhs is unused
+        add,            // lhs + rhs
+        sub,            // lhs - rhs
+        mult,           // lhs * rhs
+        lsh,            // lhs lsh rhs
+        rsh,            // lhs rsh rhs
+        integer,        // both unused, token is integer
+        char,           // both unused, token is char
+        string,         // lhs is sentinel, rhs is unused, token is string
+        reference,      // lhs is modifier, rhs is unused, token is label
+        argument        // both unused, token is reserved argument
     };
 
     pub const Operands = struct {
@@ -459,10 +478,8 @@ const AstGen = struct {
                 .option => {
                     try self.add_frame_node(.{
                         .tag = .option,
-                        .token = self.cursor,
+                        .token = self.next_token(),
                         .operands = .{} });
-                    _ = self.next_token();
-
                     _ = self.eat_token(.comma) orelse {
                         _ = try self.harshly_eat_token(.r_paran);
                         break;
@@ -499,22 +516,33 @@ const AstGen = struct {
 
         while (true) {
             switch (self.current_tag()) {
-                .plus,
+                .l_paran,
                 .minus,
+                .bang,
                 .reference_label,
                 .numeric_literal,
+                .char_literal,
                 .string_literal,
                 .identifier,
                 .pseudo_instruction,
                 .reserved_argument => {
-                    const expression = try self.parse_expression();
+                    const expression: Node = switch (self.current_tag()) {
+                        .string_literal => try self.parse_string_expression(),
+                        .pseudo_instruction,
+                        .reserved_argument => .{
+                            .tag = .argument,
+                            .token = self.next_token(),
+                            .operands = .{} },
+                        else => try self.parse_expression()
+                    };
+
                     try self.add_frame_node(expression);
                     _ = self.eat_token(.comma) orelse break;
 
                     switch (self.current_tag()) {
                         .newline,
                         .eof,
-                        .unexpected_eof => try self.add_error_arg(error.Expected, Token.Tag.identifier),
+                        .unexpected_eof => try self.add_error_arg(error.Expected, Token.string("an argument")),
                         else => {}
                     }
                 },
@@ -524,7 +552,7 @@ const AstGen = struct {
                 .unexpected_eof => break,
 
                 else => {
-                    try self.add_error(error.Unexpected);
+                    try self.add_error_arg(error.Expected, Token.string("an expression"));
                     _ = self.next_token();
                 }
             }
@@ -537,25 +565,112 @@ const AstGen = struct {
     // Argument <- ReservedArgument / PseudoOpcode / Expression
     // Expression <- (Expression Operation)* Target
     // Operation <- ArithmeticOp
-    // Target <- NegatableTarget / Reference
-    // NegatableTarget <- '-'? (Identifier / Integer)
-    // Reference <- Dot Identifier (Apostrophe ReferenceSelector)?
+    // Target <- UnaryExpression / String / Reference
+    // ArithmeticOp <- '+' / '-' / '*' / 'lsh' / 'rsh'
+    fn parse_expression(self: *AstGen) EvalError!Node {
+        const unary_expression = try self.parse_unary_expression();
+
+        const binary_tag: Node.Tag = switch (self.current_tag()) {
+            .plus => .add,
+            .minus => .sub,
+            .mult => .mult,
+            .lsh => .lsh,
+            .rsh => .rsh,
+            else => return unary_expression
+        };
+
+        const binary_token = self.next_token();
+        const another_expression = try self.parse_expression();
+        const lhs = try self.add_node(unary_expression);
+        const rhs = try self.add_node(another_expression);
+
+        return .{
+            .tag = binary_tag,
+            .token = binary_token,
+            .operands = .{ .lhs = lhs, .rhs = rhs } };
+    }
+
+    // UnaryExpression <- ('-' / '!')? (Identifier / Integer)
+    fn parse_unary_expression(self: *AstGen) EvalError!Node {
+        const unary_tag: Node.Tag = switch (self.current_tag()) {
+            .minus => .neg,
+            .bang => .inv,
+            else => return try self.parse_primary_expression()
+        };
+
+        const unary_token = self.next_token();
+        const expression = try self.parse_primary_expression();
+
+        return .{
+            .tag = unary_tag,
+            .token = unary_token,
+            .operands = .{ .lhs = try self.add_node(expression) } };
+    }
+
     // Integer <- Decimal / Binary / Hexadecimal
     // Decimal <- [0-9] [0-9]*
     // Binary <- '0b' [01] [01]*
     // Hexadecimal <- '0x' [0-9a-fA-F] [0-9a-fA-F]*
-    // ReferenceSelector <- 'l' / 'h'
-    // ArithmeticOp <- '+' / '-'
     // ReservedArgument <- 'ra' / 'rb' / 'rc' / 'rd' / 'rx' / 'ry' /
     //     'rz' / 's' / 'ns' / 'z' / 'nz' / 'c' / 'nc' / 'u' / 'nu' /
     //     'sf' / 'sp' / 'xy'
-    fn parse_expression(self: *AstGen) EvalError!Node {
-        // fixme: expression implementation
-        defer _ = self.next_token();
+    fn parse_primary_expression(self: *AstGen) EvalError!Node {
+        const expression_tag: Node.Tag = switch (self.current_tag()) {
+            .identifier => .identifier,
+            .numeric_literal => .integer,
+            .char_literal => .char,
+            .reference_label => return try self.parse_reference_expression(),
+
+            .l_paran => {
+                _ = self.next_token();
+                const paranthesis = try self.parse_expression();
+                _ = try self.harshly_eat_token(.r_paran);
+                return paranthesis;
+            },
+
+            else => {
+                try self.add_error_arg(error.Expected, Token.string("an expression"));
+                _ = self.next_token();
+                return .{
+                    .tag = .identifier,
+                    .token = Null,
+                    .operands = .{} };
+            }
+        };
+
         return .{
-            .tag = .identifier,
-            .token = self.cursor,
+            .tag = expression_tag,
+            .token = self.next_token(),
             .operands = .{} };
+    }
+
+    // Reference <- Dot Identifier (Apostrophe ReferenceSelector)?
+    // ReferenceSelector <- 'l' / 'h'
+    fn parse_reference_expression(self: *AstGen) EvalError!Node {
+        std.debug.assert(self.current_tag() == .reference_label);
+        const reference_token = self.next_token();
+
+        const modifier = if (self.eat_token(.modifier)) |modifier_token|
+            try self.add_node(.{ .tag = .modifier, .token = modifier_token, .operands = .{} }) else
+            Null;
+        return .{
+            .tag = .reference,
+            .token = reference_token,
+            .operands = .{ .lhs = modifier } };
+    }
+
+    // String <- '"' .* '"' Integer?
+    fn parse_string_expression(self: *AstGen) EvalError!Node {
+        std.debug.assert(self.current_tag() == .string_literal);
+        const string_token = self.next_token();
+
+        const sentinel = if (self.eat_token(.numeric_literal)) |numeric_token|
+            try self.add_node(.{ .tag = .integer, .token = numeric_token, .operands = .{} }) else
+            Null;
+        return .{
+            .tag = .string,
+            .token = string_token,
+            .operands = .{ .lhs = sentinel } };
     }
 
     // Opaque <- (Builtin / Instruction)*
@@ -624,8 +739,7 @@ const AstGen = struct {
     // PseudoOpcode <- 'ascii' / 'i16' / 'i24' / 'i8' / 'u16' / 'u24' / 'u8'
     // TypedOpcode <- 'reserve'
     fn parse_instruction(self: *AstGen) EvalError!Node {
-        const instruction = self.cursor;
-        _ = self.next_token();
+        const instruction = self.next_token();
 
         const composite = if (self.eat_token(.modifier)) |modifier| blk: {
             const modifier_node = try self.add_node(.{
@@ -667,9 +781,8 @@ const AstGen = struct {
                     const public_bit: Index = if (self.current_tag() == .label) 1 else 0;
                     try self.add_frame_node(.{
                         .tag = .label,
-                        .token = self.cursor,
+                        .token = self.next_token(),
                         .operands = .{ .lhs = public_bit } });
-                    _ = self.next_token();
                 },
 
                 .newline => _ = self.next_token(),
@@ -830,7 +943,7 @@ test "error line number" {
         .{ error.Expected, 4 },
         .{ error.Expected, 4 },
         .{ error.Expected, 5 },
-        .{ error.Unexpected, 9 },
+        .{ error.Expected, 9 },
         .{ error.Unexpected, 11 },
         .{ error.Unexpected, 12 }
     });
@@ -899,15 +1012,26 @@ test "full fledge" {
     try testAstGen(
         \\// foo
         \\
-    );
-
-    try testAstGen(
-        \\// foo
-        \\
         \\@section foo, foo
         \\@section(noelimination) bar
         \\              ast' foo, bar
         \\.label:
         \\label:        ast bar
+    );
+
+    try testAstGen(
+        \\@section test
+        \\              reserve u24, 4
+        \\              ascii "foo bar roo" 0x00
+        \\@section test
+        \\              ast foo + -(bar - 5)
+        \\              ast foo + -5
+        \\              ast !0x00 - (foo)
+        \\@section test
+        \\              ast foo + 5 lsh 1       ; in (lhs=^binop rhs=binop) cases, lhs and lhs of binop should be evaluated first
+        \\              ast (foo + 5) lsh 1, ra
+        \\              ast .reference'u + 1
+        \\              ast
+        \\              ast 'A' + 5
     );
 }
