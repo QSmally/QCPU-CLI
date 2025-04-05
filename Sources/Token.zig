@@ -130,6 +130,17 @@ pub const Tag = enum {
 tag: Tag,
 location: Location,
 
+pub fn content_slice(self: Token, from_buffer: [:0]const u8) []const u8 {
+    const slice = self.location.slice(from_buffer);
+    return switch (self.tag) {
+        .label => slice[0..(slice.len - 1)],            // remove punctuation
+        .private_label,                                 // remove punctuation
+        .char_literal,                                  // remove quotes
+        .string_literal => slice[1..(slice.len - 1)],   // remove quotes
+        else => slice
+    };
+}
+
 // Precheck list used in the generation of the Abstract Syntax Tree. There's
 // probably a corresponding section in SemAir to further support a keyword,
 // e.g. builtin, option, instruction, etc.

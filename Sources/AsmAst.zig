@@ -10,16 +10,16 @@ const AsmAst = @This();
 
 allocator: std.mem.Allocator,
 source: Source,
-// Index=0 is the root node which references the other nodes.
+/// Index=0 is the root node which references the other nodes.
 nodes: []const Node,
-// If any errors are present in the AST result, the node list cannot be
-// guaranteed to be complete or valid.
+/// If any errors are present in the AST result, the node list cannot be
+/// guaranteed to be complete or valid.
 errors: []const Error,
 
-// From a list of tokens, parses them into an Abstract Syntax Tree and
-// deallocating intermediate results. Tokens can be deallocated after parsing,
-// but the source buffer cannot. The caller owns 'nodes' and 'errors' until
-// deinit is called.
+/// From a list of tokens, parses them into an Abstract Syntax Tree and
+/// deallocating intermediate results. Tokens can be deallocated after parsing,
+/// but the source buffer cannot. The caller owns 'nodes' and 'errors' until
+/// deinit is called.
 pub fn init(allocator: std.mem.Allocator, source: Source) !AsmAst {
     var ast_gen = AstGen.init(allocator, source);
     defer ast_gen.deinit();
@@ -82,8 +82,6 @@ fn dump_node(self: *AsmAst, ais: anytype, pm: anytype, index: Index) !void {
         .inv => {
             try self.dump_node(ais, pm, @intCast(node.operands.lhs));
         },
-        .label => if (node.operands.lhs > 0)
-            try ais.print("(public)\n", .{}),
         .string,
         .reference => if (node.operands.lhs > 0)
             try self.dump_node(ais, pm, @intCast(node.operands.lhs)),
@@ -122,8 +120,8 @@ pub const Node = struct {
         composite,      // lhs and rhs refer to other nodes
         builtin,        // lhs is arguments container, rhs is compositie of options container, opaque
         option,         // both unused, token is option
-        label,          // lhs is public bit, rhs is unused, token is label
-        instruction,    // lhs is arguments container, rhs is composite of labels container, modifier
+        label,          // both are unused, token is label
+        instruction,    // lhs is arguments container, rhs is optional composite of labels container, modifier
         modifier,       // both unused, token is modifier
         identifier,     // both unused, token is identifier
         neg,            // -lhs, rhs is unused
@@ -137,7 +135,15 @@ pub const Node = struct {
         char,           // both unused, token is char
         string,         // lhs is sentinel, rhs is unused, token is string
         reference,      // lhs is modifier, rhs is unused, token is label
-        argument        // both unused, token is reserved argument
+        argument,       // both unused, token is reserved argument
+
+        pub fn fmt(self: Tag) []const u8 {
+            return switch (self) {
+                .identifier => "an identifier",
+                .string => "a string",
+                else => @tagName(self)
+            };
+        }
     };
 
     pub const Operands = struct {
@@ -146,13 +152,14 @@ pub const Node = struct {
     };
 };
 
-const Null = 0;
-const Index = u32;
-const IndexRange = Node.Operands;
+pub const Null = 0;
+pub const Index = u32;
+pub const IndexRange = Node.Operands;
+
 const NodeList = std.ArrayListUnmanaged(Node);
 const ErrorList = std.ArrayListUnmanaged(Error);
 
-// Recursive-descent parser that generates the Abstract Syntax Tree.
+/// Recursive-descent parser that generates the Abstract Syntax Tree.
 const AstGen = struct {
 
     allocator: std.mem.Allocator,
@@ -191,9 +198,11 @@ const AstGen = struct {
     }
 
     fn add_index_range(self: *AstGen, index_range: IndexRange) !Index {
+        if (index_range.lhs == Null or index_range.rhs == Null)
+            return Null;
         return try self.add_node(.{
             .tag = .container,
-            .token = self.cursor,
+            .token = Null,
             .operands = index_range });
     }
 
@@ -289,7 +298,7 @@ const AstGen = struct {
         NoteGeneric
     };
 
-    const EvalError = std.mem.Allocator.Error;
+    const TreeError = std.mem.Allocator.Error;
 
     fn add_error_arg(self: *AstGen, comptime err: ParseError, argument: anytype) !void {
         @branchHint(.unlikely);
@@ -358,7 +367,7 @@ const AstGen = struct {
     }
 
     // Root <- TopBuiltin* Eof
-    pub fn parse_root(self: *AstGen) EvalError!void {
+    pub fn parse_root(self: *AstGen) TreeError!void {
         try self.nodes.append(self.allocator, .{
             .tag = .container,
             .token = Null,
@@ -432,7 +441,7 @@ const AstGen = struct {
     // SimpleBuiltinIdentifier <- '@barrier' / '@define' / '@symbols'
     // IndentedBuiltin <- '@align' / '@header' / '@region'
     // End <- '@end'
-    fn parse_builtin(self: *AstGen) EvalError!Node {
+    fn parse_builtin(self: *AstGen) TreeError!Node {
         const token = self.next_token();
         const builtin_options = try self.parse_builtin_options();
         const builtin_arguments = try self.parse_arguments();
@@ -510,7 +519,7 @@ const AstGen = struct {
     }
 
     // ArgumentList <- (Argument Comma)* Argument?
-    fn parse_arguments(self: *AstGen) EvalError!Index {
+    fn parse_arguments(self: *AstGen) TreeError!Index {
         const frame = self.mark_frame();
         defer self.reset_frame(frame);
 
@@ -567,7 +576,7 @@ const AstGen = struct {
     // Operation <- ArithmeticOp
     // Target <- UnaryExpression / String / Reference
     // ArithmeticOp <- '+' / '-' / '*' / 'lsh' / 'rsh'
-    fn parse_expression(self: *AstGen) EvalError!Node {
+    fn parse_expression(self: *AstGen) TreeError!Node {
         const unary_expression = try self.parse_unary_expression();
 
         const binary_tag: Node.Tag = switch (self.current_tag()) {
@@ -591,7 +600,7 @@ const AstGen = struct {
     }
 
     // UnaryExpression <- ('-' / '!')? (Identifier / Integer)
-    fn parse_unary_expression(self: *AstGen) EvalError!Node {
+    fn parse_unary_expression(self: *AstGen) TreeError!Node {
         const unary_tag: Node.Tag = switch (self.current_tag()) {
             .minus => .neg,
             .bang => .inv,
@@ -614,7 +623,7 @@ const AstGen = struct {
     // ReservedArgument <- 'ra' / 'rb' / 'rc' / 'rd' / 'rx' / 'ry' /
     //     'rz' / 's' / 'ns' / 'z' / 'nz' / 'c' / 'nc' / 'u' / 'nu' /
     //     'sf' / 'sp' / 'xy'
-    fn parse_primary_expression(self: *AstGen) EvalError!Node {
+    fn parse_primary_expression(self: *AstGen) TreeError!Node {
         const expression_tag: Node.Tag = switch (self.current_tag()) {
             .identifier => .identifier,
             .numeric_literal => .integer,
@@ -646,7 +655,7 @@ const AstGen = struct {
 
     // Reference <- Dot Identifier (Apostrophe ReferenceSelector)?
     // ReferenceSelector <- 'l' / 'h'
-    fn parse_reference_expression(self: *AstGen) EvalError!Node {
+    fn parse_reference_expression(self: *AstGen) TreeError!Node {
         std.debug.assert(self.current_tag() == .reference_label);
         const reference_token = self.next_token();
 
@@ -660,7 +669,7 @@ const AstGen = struct {
     }
 
     // String <- '"' .* '"' Integer?
-    fn parse_string_expression(self: *AstGen) EvalError!Node {
+    fn parse_string_expression(self: *AstGen) TreeError!Node {
         std.debug.assert(self.current_tag() == .string_literal);
         const string_token = self.next_token();
 
@@ -674,7 +683,7 @@ const AstGen = struct {
     }
 
     // Opaque <- (Builtin / Instruction)*
-    fn parse_opaque(self: *AstGen) EvalError!Index {
+    fn parse_opaque(self: *AstGen) TreeError!Index {
         const frame = self.mark_frame();
         defer self.reset_frame(frame);
 
@@ -738,7 +747,7 @@ const AstGen = struct {
     // Opcode <- 'ast'
     // PseudoOpcode <- 'ascii' / 'i16' / 'i24' / 'i8' / 'u16' / 'u24' / 'u8'
     // TypedOpcode <- 'reserve'
-    fn parse_instruction(self: *AstGen) EvalError!Node {
+    fn parse_instruction(self: *AstGen) TreeError!Node {
         const instruction = self.next_token();
 
         const composite = if (self.eat_token(.modifier)) |modifier| blk: {
@@ -764,7 +773,7 @@ const AstGen = struct {
     // Label <- PublicLabel / PrivateLabel
     // PublicLabel <- Identifier Colon
     // PrivateLabel <- Dot Identifier Colon
-    fn parse_labeled_instruction(self: *AstGen) EvalError!Node {
+    fn parse_labeled_instruction(self: *AstGen) TreeError!Node {
         const frame = self.mark_frame();
         defer self.reset_frame(frame);
 
@@ -778,11 +787,10 @@ const AstGen = struct {
 
                 .label,
                 .private_label => {
-                    const public_bit: Index = if (self.current_tag() == .label) 1 else 0;
                     try self.add_frame_node(.{
                         .tag = .label,
                         .token = self.next_token(),
-                        .operands = .{ .lhs = public_bit } });
+                        .operands = .{} });
                 },
 
                 .newline => _ = self.next_token(),
@@ -1033,5 +1041,35 @@ test "full fledge" {
         \\              ast .reference'u + 1
         \\              ast
         \\              ast 'A' + 5
+    );
+
+    try testAstGen(
+        \\
+        \\@symbols "awd/space @symbols test.s"
+        \\@define foo, bar
+        \\@define(expose) aaa
+        \\
+        \\@header Queue, type, len
+        \\              @align 16
+        \\              reserve type, len
+        \\@end
+        \\
+        \\@section globals
+        \\
+        \\@define len, 24
+        \\.myqueue:     @Queue u16, @len ; custom type
+        \\
+        \\@region 32
+        \\              ascii "foo bar" 0x00
+        \\@end
+        \\
+        \\@section text
+        \\
+        \\main:
+        \\_start:       ast 0x00 + 0x00, 0x00
+        \\              ast' memory
+        \\              ast .myqueue'l + 4
+        \\@barrier
+        \\              @callable -1 + (1 lsh @len)
     );
 }
