@@ -856,14 +856,14 @@ fn testAst(input: [:0]const u8) !AsmAst {
     return try AsmAst.init(std.testing.allocator, source);
 }
 
-fn testAstDeinit(ast: *AsmAst) void {
+fn testAstFree(ast: *AsmAst) void {
     ast.deinit();
     ast.source.deinit();
 }
 
 fn testAstGen(input: [:0]const u8) !void {
     var ast = try testAst(input);
-    defer testAstDeinit(&ast);
+    defer testAstFree(&ast);
 
     if (options.dump) {
         for (ast.nodes, 0..) |node, idx|
@@ -889,7 +889,7 @@ fn testAstGen(input: [:0]const u8) !void {
 
 fn testAstGenErr(input: [:0]const u8, errors: []const AstGen.ParseError) !void {
     var ast = try testAst(input);
-    defer testAstDeinit(&ast);
+    defer testAstFree(&ast);
 
     var ast_errors = std.ArrayList(anyerror).init(std.testing.allocator);
     defer ast_errors.deinit();
@@ -902,7 +902,7 @@ const ErrLine = struct { AstGen.ParseError, usize };
 
 fn testAstGenErrLine(input: [:0]const u8, errors: []const ErrLine) !void {
     var ast = try testAst(input);
-    defer testAstDeinit(&ast);
+    defer testAstFree(&ast);
 
     if (options.dump)
         for (ast.errors) |err|
