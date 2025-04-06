@@ -16,7 +16,16 @@ pub const Instruction = union(enum) {
     mst_: struct { u1, u2, u16 }, // _ = addressable, relative to section or barrier
 
     // adds fixed zero bytes
-    ld_padding: struct { usize }
+    ld_padding: struct { usize },
+
+    pub fn size(self: Instruction) usize {
+        return switch (self) {
+            .ast => 1,
+            .mst,
+            .mst_ => 3,
+            .ld_padding => |args| args[0]
+        };
+    }
 };
 
 pub const SymbolFile = struct {
@@ -54,9 +63,10 @@ pub const Symbol = union(enum) {
 };
 
 pub const Section = struct {
+
     /// Grows with the use of @align to ensure the correct padding is calculated
     /// ahead-of-time.
-    minimum_alignment: usize = 0,
+    alignment: usize = 0,
     /// A boolean to indicate whether this section is allowed to be removed by
     /// unreachable-code-elimination.
     is_removable: bool = true,
@@ -65,7 +75,13 @@ pub const Section = struct {
     content: InstructionList = .empty,
     /// A section is allowed to be split by @barrier or duplicate @section
     /// tags, which links to a new, unnamed section.
-    next: ?*Section = null
+    next: ?*Section = null,
+
+    pub fn append(self: *Section, new_section: *Section) void {
+        if (self.next) |next_section|
+            return next_section.append(new_section);
+        self.next = new_section;
+    }
 };
 
 const FileList = std.ArrayListUnmanaged(SymbolFile);
@@ -116,10 +132,12 @@ fn destroy_section(self: *AsmSemanticAir, section: *Section) void {
 pub fn deinit(self: *AsmSemanticAir) void {
     self.imports.deinit(self.allocator);
     self.symbols.deinit(self.allocator);
+
     for (self.sections.values()) |section|
         self.destroy_section(section);
     self.sections.deinit(self.allocator);
     self.current_section = null;
+
     for (self.errors.items) |err|
         self.allocator.free(err.message);
     self.errors.deinit(self.allocator);
@@ -134,6 +152,23 @@ fn astgen_assert(ok: bool) void {
 
 fn astgen_failure() noreturn {
     unreachable;
+}
+
+/// To calculate alignment.
+fn find_available_mask(from_address: usize, mask: usize) usize {
+    for (from_address..std.math.maxInt(usize)) |address|
+        if (address % mask == 0)
+            return address;
+    unreachable;
+}
+
+/// Instructions are variably sized, which requires the size of a section to be
+/// calculated iteratively.
+fn find_section_size(section: *Section) usize {
+    var address: usize = 0;
+    for (section.content.items) |instruction|
+        address += instruction.size();
+    return address;
 }
 
 fn node_is_null_or(self: *AsmSemanticAir, index: AsmAst.Index, tag: AsmAst.Node.Tag) bool {
@@ -194,6 +229,11 @@ const ContainerIterator = struct {
         return iterator;
     }
 
+    pub fn expect_empty(sema: *AsmSemanticAir, index: AsmAst.Index, context_token: Token) !void {
+        var iterator = ContainerIterator.init_index_context(sema, index, context_token);
+        try iterator.expect_end();
+    }
+
     fn is_the_end(self: *ContainerIterator) bool {
         return self.current() == self.end or self.start == self.end;
     }
@@ -218,11 +258,11 @@ const ContainerIterator = struct {
     pub fn expect(self: *ContainerIterator, tag: AsmAst.Node.Tag) !?AsmAst.Node {
         if (self.is_the_end()) {
             if (self.context_token) |context_token_|
-                try self.sema.add_error_arg(error.ExpectedContext, .{ tag, context_token_ }) else
-                try self.sema.add_error_arg(error.ExpectedEmpty, tag);
+                try self.sema.add_error(error.ExpectedContext, .{ tag, context_token_ }) else
+                try self.sema.add_error(error.ExpectedEmpty, tag);
             return null;
         } else if (self.sema.nodes[self.current()].tag != tag) {
-            try self.sema.add_error_arg(error.Expected, .{ tag, self.current_token() });
+            try self.sema.add_error(error.Expected, .{ tag, self.current_token() });
             return null;
         }
         return self.next();
@@ -232,7 +272,7 @@ const ContainerIterator = struct {
         if (self.is_the_end())
             return null;
         if (self.sema.nodes[self.current()].tag != tag) {
-            try self.sema.add_error_arg(error.Expected, .{ tag, self.current_token() });
+            try self.sema.add_error(error.Expected, .{ tag, self.current_token() });
             return null;
         }
         return self.next();
@@ -242,8 +282,8 @@ const ContainerIterator = struct {
         if (self.is_the_end()) {
             const str = Token.string("an argument");
             if (self.context_token) |context_token_|
-                try self.sema.add_error_arg(error.ExpectedContext, .{ str, context_token_ }) else
-                try self.sema.add_error_arg(error.ExpectedEmpty, str);
+                try self.sema.add_error(error.ExpectedContext, .{ str, context_token_ }) else
+                try self.sema.add_error(error.ExpectedEmpty, str);
             return null;
         }
 
@@ -253,7 +293,7 @@ const ContainerIterator = struct {
 
     pub fn expect_end(self: *ContainerIterator) !void {
         if (!self.is_the_end())
-            try self.sema.add_error_arg(error.Unexpected, self.current_token());
+            try self.sema.add_error(error.Unexpected, self.current_token());
     }
 };
 
@@ -265,11 +305,13 @@ const SemanticError = error {
     UnsupportedOption,
     UselessSentinel,
     DuplicateSymbol,
+    AlignPowerTwo,
+    RegionExceedsSize,
     NoteDefinedHere,
     Generic
 };
 
-fn add_error_arg(self: *AsmSemanticAir, comptime err: SemanticError, argument: anytype) !void {
+fn add_error(self: *AsmSemanticAir, comptime err: SemanticError, argument: anytype) !void {
     @branchHint(.unlikely);
 
     const message = switch (err) {
@@ -280,6 +322,8 @@ fn add_error_arg(self: *AsmSemanticAir, comptime err: SemanticError, argument: a
         error.UnsupportedOption => "unsupported option: {s}",
         error.UselessSentinel => "useless sentinel",
         error.DuplicateSymbol => "duplicate symbol '{s}'",
+        error.AlignPowerTwo => "alignment of {} is not a power of two",
+        error.RegionExceedsSize => "region of opaque size {} exceeds fixed region of {} bytes",
         error.NoteDefinedHere => "{s} defined here",
         error.Generic => "{s}: {s}"
     };
@@ -293,10 +337,12 @@ fn add_error_arg(self: *AsmSemanticAir, comptime err: SemanticError, argument: a
         error.Expected,
         error.ExpectedContext,
         error.DuplicateSymbol,
+        error.AlignPowerTwo,
         error.NoteDefinedHere => argument[1],
         error.Unexpected,
         error.UnsupportedOption,
         error.UselessSentinel => argument,
+        error.RegionExceedsSize => argument[2],
         else => null
     };
     const token_location = if (token) |token_|
@@ -312,7 +358,9 @@ fn add_error_arg(self: *AsmSemanticAir, comptime err: SemanticError, argument: a
         error.Unexpected => .{ argument.tag.fmt() },
         error.UnsupportedOption => .{ token_slice.? },
         error.UselessSentinel => .{},
-        error.DuplicateSymbol => .{ argument[0] },
+        error.DuplicateSymbol,
+        error.AlignPowerTwo => .{ argument[0] },
+        error.RegionExceedsSize => .{ argument[0], argument[1] },
         error.NoteDefinedHere => .{ argument[0].fmt() },
         else => argument
     };
@@ -325,10 +373,6 @@ fn add_error_arg(self: *AsmSemanticAir, comptime err: SemanticError, argument: a
         .is_note = is_note,
         .message = format,
         .location = token_location });
-}
-
-fn add_error(self: *AsmSemanticAir, comptime err: SemanticError) !void {
-    return self.add_error_arg(err, null);
 }
 
 fn prepare_opaque_container(self: *AsmSemanticAir, parent_node: AsmAst.Node) !void {
@@ -368,7 +412,11 @@ fn prepare_opaque_container(self: *AsmSemanticAir, parent_node: AsmAst.Node) !vo
 
                     .builtin_region,
                     .builtin_section => {
+                        // fixme: empty regions will throw an error
+                        // fixme: empty sections aren't a Null opaque
                         astgen_assert(self.node_is(composite.operands.rhs, .container));
+                        // if (self.is_null(composite.operands.rhs))
+                        //     return;
                         const opaque_ = self.nodes[composite.operands.rhs];
                         try self.prepare_opaque_container(opaque_);
                     },
@@ -424,8 +472,8 @@ const NamedSymbol = struct {
 
     pub fn maybe_emit_duplicate_error(self: *const NamedSymbol, sema: *AsmSemanticAir) !void {
         if (sema.symbols.get(self.name)) |existing_symbol| {
-            try sema.add_error_arg(error.DuplicateSymbol, .{ self.name, self.token });
-            try sema.add_error_arg(error.NoteDefinedHere, .{ Token.string("previously"), existing_symbol.token });
+            try sema.add_error(error.DuplicateSymbol, .{ self.name, self.token });
+            try sema.add_error(error.NoteDefinedHere, .{ Token.string("previously"), existing_symbol.token });
         }
     }
 };
@@ -502,7 +550,7 @@ fn prepare_symbols(self: *AsmSemanticAir, node: AsmAst.Node) !?SymbolFile {
     if (path_string_node.operands.lhs != AsmAst.Null) {
         const sentinel_node = self.nodes[path_string_node.operands.lhs];
         const sentinel_token = self.source.tokens[sentinel_node.token];
-        try self.add_error_arg(error.UselessSentinel, sentinel_token);
+        try self.add_error(error.UselessSentinel, sentinel_token);
     }
 
     const namespace_node = try arguments.gracefully_expect(.identifier);
@@ -549,7 +597,7 @@ fn parse_options(self: *AsmSemanticAir, node: AsmAst.Node, allow_list: []const O
         const option = options_map.get(option_string) orelse astgen_failure();
 
         if (std.mem.indexOfScalar(Option, allow_list, option) == null)
-            try self.add_error_arg(error.UnsupportedOption, option_token) else
+            try self.add_error(error.UnsupportedOption, option_token) else
             try options_.append(option);
     }
 
@@ -596,12 +644,12 @@ pub fn resolve_imports(self: *AsmSemanticAir, units: *const SemanticAirMap, this
         // fixme: add filesystem (and test) interface support for matching
         // filenames/file identifiers
         if (std.mem.eql(u8, import.path, this_path)) {
-            try self.add_error_arg(error.Generic, .{ "cannot import itself", import.path });
+            try self.add_error(error.Generic, .{ "cannot import itself", import.path });
             continue;
         }
 
         import.sema_unit = units.get(import.path) orelse {
-            try self.add_error_arg(error.Generic, .{ "missing sema unit", import.path });
+            try self.add_error(error.Generic, .{ "missing sema unit", import.path });
             continue;
         };
     }
@@ -610,7 +658,139 @@ pub fn resolve_imports(self: *AsmSemanticAir, units: *const SemanticAirMap, this
 /// May only be called once, and subsequent calls are considered undefined
 /// behaviour.
 pub fn semantic_analyse(self: *AsmSemanticAir) !void {
-    _ = self;
+    try self.analyse_container(self.nodes[0]);
+}
+
+fn analyse_container(self: *AsmSemanticAir, parent_node: AsmAst.Node) !void {
+    for (parent_node.operands.lhs..parent_node.operands.rhs) |node_idx| {
+        const node = self.nodes[node_idx];
+        const token = self.source.tokens[node.token];
+
+        switch (node.tag) {
+            .builtin => switch (token.tag) {
+                .builtin_align => try self.emit_align(node),
+                .builtin_barrier => try self.emit_barrier(node),
+
+                .builtin_region => {
+                    const section = self.current_section orelse astgen_failure();
+                    const begin_address = find_section_size(section);
+                    const composite = self.nodes[node.operands.rhs];
+                    const opaque_ = self.nodes[composite.operands.rhs];
+                    try self.analyse_container(opaque_);
+
+                    const len = find_section_size(section) - begin_address;
+                    try self.emit_region(node, len);
+                },
+
+                .builtin_section => {
+                    self.emit_section(node) catch |err| switch (err) {
+                        error.SectionCreateFailed => continue,
+                        else => |err_| return err_
+                    };
+
+                    const composite = self.nodes[node.operands.rhs];
+                    const opaque_ = self.nodes[composite.operands.rhs];
+                    try self.analyse_container(opaque_);
+                },
+
+                // nothing to do here
+                .builtin_define,
+                .builtin_header,
+                .builtin_symbols => {},
+
+                // transparent in the AST
+                .builtin_end => astgen_failure(),
+
+                // non-builtin tokens shouldn't be in the node tags
+                else => astgen_failure()
+            },
+
+            .instruction => {},
+
+            else => astgen_failure()
+        }
+    }
+}
+
+fn emit_align(self: *AsmSemanticAir, node: AsmAst.Node) !void {
+    const composite = self.nodes[node.operands.rhs];
+    if (self.node_unwrap(composite.operands.lhs)) |options_|
+        _ = try self.parse_options(options_, &.{});
+    const align_token = self.source.tokens[node.token];
+    var arguments = ContainerIterator.init_index_context(self, node.operands.lhs, align_token);
+
+    const alignment_node = try arguments.expect(.integer) orelse return;
+    const alignment_token = self.source.tokens[alignment_node.token];
+    const alignment = alignment_token.location.slice(self.source.buffer);
+    try arguments.expect_end();
+
+    const alignment_ = std.fmt.parseInt(usize, alignment, 0) catch astgen_failure();
+    if (!std.math.isPowerOfTwo(alignment_))
+        return try self.add_error(error.AlignPowerTwo, .{ alignment_, align_token });
+    const section = self.current_section orelse astgen_failure();
+    const current_address = find_section_size(section);
+    const padding = find_available_mask(current_address, alignment_) - current_address;
+
+    try section.content.append(self.allocator, .{ .ld_padding = .{ padding } });
+    section.alignment = @max(section.alignment, alignment_);
+}
+
+fn emit_barrier(self: *AsmSemanticAir, node: AsmAst.Node) !void {
+    const composite = self.nodes[node.operands.rhs];
+    if (self.node_unwrap(composite.operands.lhs)) |options_|
+        _ = try self.parse_options(options_, &.{});
+    const barrier_token = self.source.tokens[node.token];
+    try ContainerIterator.expect_empty(self, node.operands.lhs, barrier_token);
+
+    const existing_section = self.current_section orelse return astgen_failure();
+    const section = try self.allocator.create(Section);
+    section.* = .{};
+
+    existing_section.append(section);
+    self.current_section = section;
+}
+
+fn emit_region(self: *AsmSemanticAir, node: AsmAst.Node, opaque_len: usize) !void {
+    const composite = self.nodes[node.operands.rhs];
+    if (self.node_unwrap(composite.operands.lhs)) |options_|
+        _ = try self.parse_options(options_, &.{});
+    const region_token = self.source.tokens[node.token];
+    var arguments = ContainerIterator.init_index_context(self, node.operands.lhs, region_token);
+
+    const size_node = try arguments.expect(.integer) orelse return;
+    const size_token = self.source.tokens[size_node.token];
+    const size = size_token.location.slice(self.source.buffer);
+    try arguments.expect_end();
+
+    const size_ = std.fmt.parseInt(usize, size, 0) catch astgen_failure();
+    if (opaque_len > size_)
+        return try self.add_error(error.RegionExceedsSize, .{ opaque_len, size_, region_token });
+    const section = self.current_section orelse return astgen_failure();
+    const padding = size_ - opaque_len;
+    try section.content.append(self.allocator, .{ .ld_padding = .{ padding } });
+}
+
+fn emit_section(self: *AsmSemanticAir, node: AsmAst.Node) !void {
+    const composite = self.nodes[node.operands.rhs];
+    const options_ = if (self.node_unwrap(composite.operands.lhs)) |options_|
+        try self.parse_options(options_, &.{ .noelimination }) else
+        null;
+    defer self.free_options(options_);
+    const section_token = self.source.tokens[node.token];
+    var arguments = ContainerIterator.init_index_context(self, node.operands.lhs, section_token);
+
+    const name_node = try arguments.expect(.identifier) orelse return error.SectionCreateFailed;
+    const name_token = self.source.tokens[name_node.token];
+    const name = name_token.location.slice(self.source.buffer);
+    try arguments.expect_end();
+
+    const section = try self.allocator.create(Section);
+    section.* = .{};
+
+    if (self.sections.get(name)) |existing_section|
+        existing_section.append(section) else
+        try self.sections.put(self.allocator, name, section);
+    self.current_section = section;
 }
 
 pub fn evaluate_symbol(comptime T: type, self: *AsmSemanticAir) !T {
@@ -626,28 +806,29 @@ const stderr = std.io
     .getStdErr()
     .writer();
 
-fn testSema(input: [:0]const u8) !AsmSemanticAir {
+fn testSema(input: [:0]const u8) !struct { AsmAst, AsmSemanticAir } {
     var tokeniser = Tokeniser.init(input);
     const source = try Source.init(std.testing.allocator, &tokeniser);
     errdefer source.deinit();
     var ast = try AsmAst.init(std.testing.allocator, source);
-    defer ast.deinit();
+    errdefer ast.deinit();
 
     for (ast.errors) |err|
         try err.write("test.s", input, stderr);
     try std.testing.expect(ast.errors.len == 0);
 
-    return try AsmSemanticAir.init(std.testing.allocator, source, ast.nodes);
+    return .{ ast, try AsmSemanticAir.init(std.testing.allocator, source, ast.nodes) };
 }
 
-fn testSemaFree(sema: *AsmSemanticAir) void {
+fn testSemaFree(ast: *AsmAst, sema: *AsmSemanticAir) void {
+    ast.deinit();
     sema.deinit();
     sema.source.deinit();
 }
 
 fn testSema1(input: [:0]const u8) !void {
-    var sema = try testSema(input);
-    defer testSemaFree(&sema);
+    var ast, var sema = try testSema(input);
+    defer testSemaFree(&ast, &sema);
 
     if (options.dump) {
         try stderr.print("Imports ({}):\n", .{ sema.imports.items.len });
@@ -681,16 +862,47 @@ fn testSema1(input: [:0]const u8) !void {
     try std.testing.expect(sema.errors.items.len == 0);
 }
 
-fn testSema2(input_0: [:0]const u8, input_1: [:0]const u8) !void {
+fn testSema2(input: [:0]const u8) !void {
+    var ast, var sema = try testSema(input);
+    defer testSemaFree(&ast, &sema);
+
+    try sema.semantic_analyse();
+
+    if (options.dump) {
+        for (sema.sections.keys()) |section_name| {
+            const section = sema.sections.get(section_name) orelse unreachable;
+            var dumping_section: ?*Section = section;
+            try stderr.print("@section {s} (align {})\n", .{ section_name, section.alignment });
+
+            while (dumping_section) |dumping_section_| {
+                for (dumping_section_.content.items) |instr| {
+                    switch (instr) {
+                        inline else => |instr_| try stderr.print("    {s}({}) : {}\n", .{ @tagName(instr), instr.size(), instr_ })
+                    }
+                }
+
+                if (dumping_section_.next) |next_dumping_section|
+                    try stderr.print("@barrier (align {})\n", .{ next_dumping_section.alignment });
+                dumping_section = dumping_section_.next;
+            }
+        }
+    }
+
+    for (sema.errors.items) |err|
+        try err.write("test.s", input, stderr);
+    try std.testing.expect(sema.errors.items.len == 0);
+}
+
+fn testSema3(input_0: [:0]const u8, input_1: [:0]const u8) !void {
     var sema_map = SemanticAirMap.empty;
     defer sema_map.deinit(std.testing.allocator);
 
-    var sema_0 = try testSema(input_0);
-    defer testSemaFree(&sema_0);
+    var ast_0, var sema_0 = try testSema(input_0);
+    defer testSemaFree(&ast_0, &sema_0);
     try sema_map.put(std.testing.allocator, "test_0.s", &sema_0);
 
-    var sema_1 = try testSema(input_1);
-    defer testSemaFree(&sema_1);
+    var ast_1, var sema_1 = try testSema(input_1);
+    defer testSemaFree(&ast_1, &sema_1);
     try sema_map.put(std.testing.allocator, "test_1.s", &sema_1);
 
     for (sema_map.values()) |per_sema|
@@ -722,6 +934,20 @@ test "full fledge" {
     );
 
     try testSema2(
+        \\@define foo, bar
+        \\@define bar, 5
+        \\@section(noelimination) foo
+        \\              @align 8
+        \\              @align 16
+        \\          @region 24
+        \\              ast
+        \\          @end
+        \\              @align 16
+        \\@barrier
+        \\              @align 4
+    );
+
+    try testSema3(
         \\@symbols "test_0.s"
     ,
         \\@symbols "test_1.s"
