@@ -8,6 +8,11 @@ pub const Location = struct {
     start_byte: usize,
     end_byte: usize,
 
+    pub fn eql(self: Location, location: Location) bool {
+        return self.start_byte == location.start_byte and
+            self.end_byte == location.end_byte;
+    }
+
     pub fn slice(self: Location, from_buffer: [:0]const u8) []const u8 {
         return from_buffer[self.start_byte..(self.end_byte + 1)];
     }
@@ -113,7 +118,7 @@ pub const Tag = enum {
             .option => "an option",
             .instruction,
             .pseudo_instruction => "an instruction",
-            .reserved_argument => "an argument",
+            .reserved_argument => "a reserved argument",
 
             .builtin_align => "@align",
             .builtin_barrier => "@barrier",
@@ -160,6 +165,11 @@ const keywords = std.StaticStringMap(Tag).initComptime(.{
 
     // Instructions
     .{ "ast", .instruction },
+    .{ "cli", .instruction },
+    .{ "mst", .instruction },
+    .{ "mstw", .instruction },
+    .{ "mld", .instruction },
+    .{ "mldw", .instruction },
 
     .{ "ascii", .pseudo_instruction },
     .{ "i16", .pseudo_instruction },
@@ -207,6 +217,19 @@ const keywords = std.StaticStringMap(Tag).initComptime(.{
     .{ "ry", .reserved_argument },
     .{ "rz", .reserved_argument }
 });
+
+comptime {
+    const AsmSemanticAir = @import("AsmSemanticAir.zig");
+    @setEvalBranchQuota(999_999_999);
+
+    for (keywords.keys()) |keyword| {
+        const value = keywords.get(keyword) orelse unreachable;
+        if (value != .instruction and value != .pseudo_instruction)
+            continue;
+        if (std.meta.stringToEnum(AsmSemanticAir.Instruction.Tag, keyword) == null)
+            @compileError("bug: unmapped instruction: " ++ keyword);
+    }
+}
 
 pub fn reserved(identifier: []const u8) ?Tag {
     return keywords.get(identifier);
