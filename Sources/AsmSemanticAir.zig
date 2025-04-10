@@ -201,6 +201,11 @@ fn node_unwrap(self: *AsmSemanticAir, index: AsmAst.Index) ?AsmAst.Node {
     return if (self.not_null(index)) self.nodes[index] else null;
 }
 
+fn is_valid_symbol(self: *AsmSemanticAir, string: []const u8) bool {
+    _ = self;
+    return std.mem.startsWith(u8, string, "@") and string.len > 1;
+}
+
 const ContainerIterator = struct {
 
     sema: *AsmSemanticAir,
@@ -297,7 +302,7 @@ const ContainerIterator = struct {
         }
 
         _ =  self.next();
-        return self.current();
+        return self.current() - 1;
     }
 
     pub fn expect_end(self: *ContainerIterator) !void {
@@ -310,6 +315,7 @@ const SemanticError = error {
     Expected,
     ExpectedContext,
     ExpectedEmpty,
+    ExpectedElsewhere,
     Unexpected,
     UnsupportedOption,
     UselessSentinel,
@@ -317,9 +323,11 @@ const SemanticError = error {
     AlignPowerTwo,
     RegionExceedsSize,
     NonEmptyModifier,
-    ModifiedInstructionUnknown,
-    InstructionUnknown,
+    UnknownModifiedInstruction,
+    UnknownInstruction,
     ExpectedArgumentsLen,
+    AmbiguousIdentifier,
+    UnknownSymbol,
     NoteDefinedHere,
     NoteDidYouMean,
     Generic,
@@ -330,7 +338,8 @@ fn add_error(self: *AsmSemanticAir, comptime err: SemanticError, argument: anyty
     @branchHint(.unlikely);
 
     const message = switch (err) {
-        error.Expected => "expected {s}, found {s}",
+        error.Expected,
+        error.ExpectedElsewhere => "expected {s}, found {s}",
         error.ExpectedContext => "expected {s} in {s}",
         error.ExpectedEmpty => "expected {s}",
         error.Unexpected => "unexpectedly got {s}",
@@ -340,13 +349,15 @@ fn add_error(self: *AsmSemanticAir, comptime err: SemanticError, argument: anyty
         error.AlignPowerTwo => "alignment of {} is not a power of two",
         error.RegionExceedsSize => "region of opaque size {} exceeds fixed region of {} bytes",
         error.NonEmptyModifier => "an empty modifier value is required, but {s} was used",
-        error.ModifiedInstructionUnknown => "instruction {s} doesn't support a modifier",
-        error.InstructionUnknown => "unknown instruction in the QCPU instruction set",
+        error.UnknownModifiedInstruction => "instruction {s} doesn't support a modifier",
+        error.UnknownInstruction => "unknown instruction in the QCPU instruction set",
         error.ExpectedArgumentsLen => "expected {} {s} for instruction {s}, found {}",
+        error.AmbiguousIdentifier => "ambiguous identifier; did you mean @{s}?",
+        error.UnknownSymbol => "unknown symbol '{s}'",
         error.NoteDefinedHere => "{s} defined here",
         error.NoteDidYouMean => "did you mean to {s}{s}?",
         error.Generic,
-        error.GenericToken => "{s}: {s}"
+        error.GenericToken => "{s}{s}"
     };
 
     const is_note = switch (err) {
@@ -362,15 +373,18 @@ fn add_error(self: *AsmSemanticAir, comptime err: SemanticError, argument: anyty
         error.AlignPowerTwo,
         error.NonEmptyModifier,
         error.NoteDefinedHere => argument[1],
-        error.Unexpected,
-        error.UnsupportedOption,
-        error.UselessSentinel,
-        error.ModifiedInstructionUnknown,
-        error.InstructionUnknown => argument,
-        error.ExpectedArgumentsLen => argument[0],
+        error.ExpectedElsewhere,
         error.RegionExceedsSize,
         error.NoteDidYouMean,
         error.GenericToken => argument[2],
+        error.Unexpected,
+        error.UnsupportedOption,
+        error.UselessSentinel,
+        error.UnknownModifiedInstruction,
+        error.UnknownInstruction,
+        error.AmbiguousIdentifier,
+        error.UnknownSymbol => argument,
+        error.ExpectedArgumentsLen => argument[0],
         else => null
     };
     const token_location = if (token) |token_|
@@ -382,12 +396,15 @@ fn add_error(self: *AsmSemanticAir, comptime err: SemanticError, argument: anyty
     const arguments = switch (err) {
         error.Expected,
         error.ExpectedContext => .{ argument[0].fmt(), argument[1].tag.fmt() },
+        error.ExpectedElsewhere => .{ argument[0].fmt(), argument[1].fmt() },
         error.ExpectedEmpty => .{ argument.fmt() },
         error.Unexpected => .{ argument.tag.fmt() },
         error.UnsupportedOption,
-        error.ModifiedInstructionUnknown => .{ token_slice.? },
+        error.UnknownModifiedInstruction,
+        error.AmbiguousIdentifier,
+        error.UnknownSymbol => .{ token_slice.? },
         error.UselessSentinel,
-        error.InstructionUnknown => .{},
+        error.UnknownInstruction => .{},
         error.DuplicateSymbol,
         error.AlignPowerTwo,
         error.NonEmptyModifier => .{ argument[0] },
@@ -418,10 +435,10 @@ fn add_error(self: *AsmSemanticAir, comptime err: SemanticError, argument: anyty
 fn prepare_root(self: *AsmSemanticAir) !void {
     astgen_assert(self.nodes.len > 0);
     astgen_assert(self.nodes[0].tag == .container);
-    try self.prepare_opaque_container(self.nodes[0]);
+    try self.prepare_opaque_container(self.nodes[0], &self.symbols);
 }
 
-fn prepare_opaque_container(self: *AsmSemanticAir, parent_node: AsmAst.Node) !void {
+fn prepare_opaque_container(self: *AsmSemanticAir, parent_node: AsmAst.Node, symbol_map: *SymbolMap) !void {
     for (parent_node.operands.lhs..parent_node.operands.rhs) |node_idx| {
         const node = self.nodes[node_idx];
         const token = self.source.tokens[node.token];
@@ -434,21 +451,20 @@ fn prepare_opaque_container(self: *AsmSemanticAir, parent_node: AsmAst.Node) !vo
                 astgen_assert(self.node_is_null_or(composite.operands.lhs, .container));
                 astgen_assert(self.node_is_null_or(composite.operands.rhs, .container));
 
-                builtin_checklist: switch (token.tag) {
+                switch (token.tag) {
                     .builtin_define => {
                         const define = try self.prepare_define(node) orelse continue;
                         try self.maybe_emit_duplicate_error(define);
-                        try self.symbols.put(self.allocator, define.name, .{
+                        try symbol_map.put(self.allocator, define.name, .{
                             .token = define.token,
                             .symbol = define.symbol });
                     },
                     .builtin_header => {
                         const header = try self.prepare_header(node) orelse continue;
                         try self.maybe_emit_duplicate_error(header);
-                        try self.symbols.put(self.allocator, header.name, .{
+                        try symbol_map.put(self.allocator, header.name, .{
                             .token = header.token,
                             .symbol = header.symbol });
-                        continue :builtin_checklist .builtin_section;
                     },
                     .builtin_symbols => {
                         const symbols = try self.prepare_symbols(node) orelse continue;
@@ -464,7 +480,7 @@ fn prepare_opaque_container(self: *AsmSemanticAir, parent_node: AsmAst.Node) !vo
                         // if (self.is_null(composite.operands.rhs))
                         //     return;
                         const opaque_ = self.nodes[composite.operands.rhs];
-                        try self.prepare_opaque_container(opaque_);
+                        try self.prepare_opaque_container(opaque_, symbol_map);
                     },
 
                     // nothing to do here
@@ -499,7 +515,7 @@ fn prepare_opaque_container(self: *AsmSemanticAir, parent_node: AsmAst.Node) !vo
 
                     const label = try self.prepare_label(label_node, @intCast(node_idx)) orelse continue;
                     try self.maybe_emit_duplicate_error(label);
-                    try self.symbols.put(self.allocator, label.name, .{
+                    try symbol_map.put(self.allocator, label.name, .{
                         .token = label.token,
                         .symbol = label.symbol });
                 }
@@ -545,7 +561,11 @@ fn emit_resolved_expected_error(
     origin_token: Token,
     resolved_token: Token
 ) !void {
-    try self.add_error(error.Expected, .{ expected_token, origin_token });
+    // called after resolve, which means identifiers are guaranteed to be
+    // unlowered headers
+    if (resolved_token.tag == .identifier)
+        try self.add_error(error.ExpectedElsewhere, .{ expected_token, Token.string("a @header call"), origin_token }) else
+        try self.add_error(error.ExpectedElsewhere, .{ expected_token, resolved_token.tag, origin_token });
     if (!origin_token.location.eql(resolved_token.location))
         try self.add_error(error.NoteDefinedHere, .{ resolved_token.tag, resolved_token });
 }
@@ -721,17 +741,17 @@ pub fn resolve_imports(self: *AsmSemanticAir, units: *const SemanticAirMap) !voi
     const qcu = self.qcu orelse @panic("AsmSemanticAir: freestanding");
     for (self.imports.items) |*import| {
         if (try qcu.eql(import.path)) {
-            try self.add_error(error.Generic, .{ "cannot import itself", import.path });
+            try self.add_error(error.Generic, .{ "cannot import itself: ", import.path });
             continue;
         }
 
         const id = qcu.resolve(import.path) orelse {
-            try self.add_error(error.Generic, .{ "file not found", import.path });
+            try self.add_error(error.Generic, .{ "file not found: ", import.path });
             continue;
         };
 
         import.sema_unit = units.get(id) orelse {
-            try self.add_error(error.Generic, .{ "missing sema unit", import.path });
+            try self.add_error(error.Generic, .{ "missing sema unit: ", import.path });
             continue;
         };
     }
@@ -1143,14 +1163,14 @@ fn emit_instructions(self: *AsmSemanticAir, token: Token, is_modified: bool, arg
             astgen_assert(is_modified or tag != null);
 
             if (tag == null and is_modified)
-                return try self.add_error(error.ModifiedInstructionUnknown, token);
+                return try self.add_error(error.UnknownModifiedInstruction, token);
             const instruction = try self.cast_arguments(token, tag.?, arguments) orelse return;
             try section.content.append(self.allocator, instruction);
         },
 
         .identifier => {
             if (!std.mem.startsWith(u8, string, "@") or string.len == 1) {
-                try self.add_error(error.InstructionUnknown, token);
+                try self.add_error(error.UnknownInstruction, token);
                 // fixme: lookup imports
                 const symbol = self.symbols.get(string) orelse return;
                 if (symbol.symbol == .header)
@@ -1210,8 +1230,8 @@ fn cast_arguments(self: *AsmSemanticAir, token: Token, instruction_tag: Instruct
 }
 
 fn cast_gp_register(self: *AsmSemanticAir, node: AsmAst.Node) !?Instruction.GpRegister {
-    // fixme: expand @define to unary
-    const token = self.source.tokens[node.token];
+    const resolved_node = try self.lower_symbol_tree(node) orelse return null;
+    const token = self.source.tokens[resolved_node.token];
     const string = token.content_slice(self.source.buffer);
 
     return Instruction.gp_register_map.get(string) orelse {
@@ -1221,8 +1241,8 @@ fn cast_gp_register(self: *AsmSemanticAir, node: AsmAst.Node) !?Instruction.GpRe
 }
 
 fn cast_sp_register(self: *AsmSemanticAir, node: AsmAst.Node) !?Instruction.SpRegister {
-    // fixme: expand @define to unary
-    const token = self.source.tokens[node.token];
+    const resolved_node = try self.lower_symbol_tree(node) orelse return null;
+    const token = self.source.tokens[resolved_node.token];
     const string = token.content_slice(self.source.buffer);
 
     return Instruction.sp_register_map.get(string) orelse {
@@ -1232,8 +1252,8 @@ fn cast_sp_register(self: *AsmSemanticAir, node: AsmAst.Node) !?Instruction.SpRe
 }
 
 fn cast_string_content(self: *AsmSemanticAir, node: AsmAst.Node) !?Instruction.StringContent {
-    // fixme: expand @define to unary
-    const token = self.source.tokens[node.token];
+    const resolved_node = try self.lower_symbol_tree(node) orelse return null;
+    const token = self.source.tokens[resolved_node.token];
     const string = token.content_slice(self.source.buffer);
 
     if (token.tag != .string_literal) {
@@ -1252,8 +1272,8 @@ fn cast_string_content(self: *AsmSemanticAir, node: AsmAst.Node) !?Instruction.S
 const inherit_base = 0;
 
 fn cast_numeric_literal(self: *AsmSemanticAir, comptime T: type, node: AsmAst.Node) !?T {
-    // fixme: expand @define to unary
-    const token = self.source.tokens[node.token];
+    const resolved_node = try self.lower_symbol_tree(node) orelse return null;
+    const token = self.source.tokens[resolved_node.token];
     const string = token.location.slice(self.source.buffer);
 
     if (token.tag != .numeric_literal) {
@@ -1264,7 +1284,7 @@ fn cast_numeric_literal(self: *AsmSemanticAir, comptime T: type, node: AsmAst.No
     return std.fmt.parseInt(T, string, inherit_base) catch |err| switch (err) {
         error.InvalidCharacter => astgen_failure(),
         error.Overflow => {
-            try self.emit_resolved_generic_error("numeric literal doesn't fit in type", @typeName(T), self.source.tokens[node.token], token);
+            try self.emit_resolved_generic_error("numeric literal doesn't fit in type ", @typeName(T), self.source.tokens[node.token], token);
             return null;
         }
     };
@@ -1289,15 +1309,15 @@ fn cast_expression(self: *AsmSemanticAir, comptime T: type, node: AsmAst.Node) !
 }
 
 fn cast_type_size(self: *AsmSemanticAir, node: AsmAst.Node) !?Instruction.TypeSize {
-    // fixme: expand @define to unary
-    const token = self.source.tokens[node.token];
+    const resolved_node = try self.lower_symbol_tree(node) orelse return null;
+    const token = self.source.tokens[resolved_node.token];
     const string = token.location.slice(self.source.buffer);
 
     if (token.tag != .instruction and
         token.tag != .pseudo_instruction and
         token.tag != .identifier
     ) {
-        try self.add_error(error.Expected, .{ Token.string("a basic opaque"), token });
+        try self.emit_resolved_expected_error(Token.string("a basic opaque"), self.source.tokens[node.token], token);
         return null;
     }
 
@@ -1315,8 +1335,31 @@ fn cast_type_size(self: *AsmSemanticAir, node: AsmAst.Node) !?Instruction.TypeSi
     return .{ .size = @intCast(size) };
 }
 
-// fixme: lower_symbol()
-// fixme: lower_unary_symbol()
+fn lower_symbol_tree(self: *AsmSemanticAir, node: AsmAst.Node) !?AsmAst.Node {
+    const token = self.source.tokens[node.token];
+
+    if (token.tag != .identifier)
+        return node;
+    const identifier = token.location.slice(self.source.buffer);
+
+    if (!self.is_valid_symbol(identifier)) {
+        try self.add_error(error.AmbiguousIdentifier, token);
+        return null;
+    }
+
+    // fixme: check import and switch sema unit if any
+    const symbol = self.symbols.get(identifier[1..]) orelse {
+        try self.add_error(error.UnknownSymbol, token);
+        return null;
+    };
+
+    return switch (symbol.symbol) {
+        .label => unreachable, // labels cannot start with @
+        // fixme: call cast_expression to lower into expressions
+        .define => |define| try self.lower_symbol_tree(self.nodes[define.value_node]),
+        .header => node // headers aren't expanded in arguments
+    };
+}
 
 // Tests
 
@@ -1386,7 +1429,6 @@ fn testSema1(input: [:0]const u8) !void {
 fn testSema2(input: [:0]const u8) !void {
     var ast, var sema = try testSema(input);
     defer testSemaFree(&ast, &sema);
-
     try sema.semantic_analyse();
 
     if (options.dump) {
@@ -1414,6 +1456,184 @@ fn testSema2(input: [:0]const u8) !void {
     try std.testing.expect(sema.errors.items.len == 0);
 }
 
+fn testSemaErr(input: [:0]const u8, errors: []const SemanticError) !void {
+    var ast, var sema = try testSema(input);
+    defer testSemaFree(&ast, &sema);
+    try sema.semantic_analyse();
+
+    var sema_errors = std.ArrayList(anyerror).init(std.testing.allocator);
+    defer sema_errors.deinit();
+    for (sema.errors.items) |err|
+        try sema_errors.append(err.id);
+    if (!std.mem.eql(anyerror, errors, sema_errors.items)) {
+        for (sema.errors.items) |err|
+            try err.write("test.s", input, stderr);
+        try std.testing.expectEqualSlices(anyerror, errors, sema_errors.items);
+    }
+}
+
+fn testSemaGen(input: [:0]const u8, output: []const Instruction) !void {
+    var ast, var sema = try testSema(input);
+    defer testSemaFree(&ast, &sema);
+    try sema.semantic_analyse();
+
+    for (sema.errors.items) |err|
+        try err.write("test.s", input, stderr);
+    try std.testing.expect(sema.errors.items.len == 0);
+    try std.testing.expectEqualSlices(Instruction, sema.current_section.?.content.items, output);
+}
+
+test "@define" {
+    try testSemaErr("@define", &.{ error.ExpectedContext });
+    try testSemaErr("@define 5", &.{ error.Expected });
+    try testSemaErr("@define ra", &.{ error.Expected });
+    try testSemaErr("@define foo", &.{ error.ExpectedContext });
+    try testSemaErr("@define foo, foo", &.{});
+    try testSemaErr("@define foo, foo, foo", &.{ error.Unexpected });
+
+    try testSemaErr(
+        \\@define foo, foo
+        \\@define bar, foo
+    , &.{});
+
+    try testSemaErr(
+        \\@define foo, foo
+        \\@define foo, foo
+    , &.{
+        error.DuplicateSymbol,
+        error.NoteDefinedHere
+    });
+}
+
+test "@header" {
+    try testSemaErr("@header\n@end", &.{ error.ExpectedContext });
+    try testSemaErr("@header 5\n@end", &.{ error.Expected });
+    try testSemaErr("@header ra\n@end", &.{ error.Expected });
+    try testSemaErr("@header foo\n@end", &.{});
+    try testSemaErr("@header foo, bar\n@end", &.{});
+    try testSemaErr("@header foo, bar, roo\n@end", &.{});
+    try testSemaErr("@header foo, 5, roo\n@end", &.{ error.Expected });
+    // fixme: provide two errors instead of one
+    try testSemaErr("@header foo, ra, 5\n@end", &.{ error.Expected });
+
+    try testSemaErr(
+        \\@header foo
+        \\@end
+        \\@header bar, roo, doo
+        \\@end
+        \\@define roo, foo
+    , &.{});
+
+    try testSemaErr(
+        \\@header foo
+        \\@end
+        \\@define foo, foo
+    , &.{
+        error.DuplicateSymbol,
+        error.NoteDefinedHere
+    });
+}
+
+test "@symbols" {
+    try testSemaErr("@symbols", &.{ error.ExpectedContext });
+    try testSemaErr("@symbols foo", &.{ error.Expected });
+    try testSemaErr("@symbols 5", &.{ error.Expected });
+    try testSemaErr("@symbols \"foo\"", &.{});
+    try testSemaErr("@symbols \"foo\" 0", &.{ error.UselessSentinel });
+    // fixme: adds additional unexpected error instead of moving on
+    try testSemaErr("@symbols \"foo\", 0", &.{ error.Expected, error.Unexpected });
+    try testSemaErr("@symbols \"foo\", foo", &.{});
+    try testSemaErr("@symbols \"foo\", foo, foo", &.{ error.Unexpected });
+}
+
+test "@section" {
+    // try testSemaErr("@section", &.{ error.ExpectedContext });
+    // try testSemaErr("@section 5", &.{ error.Expected });
+    // try testSemaErr("@section ra", &.{ error.Expected });
+    // try testSemaErr("@section foo", &.{});
+
+    try testSemaErr(
+        \\@section foo
+        \\          cli
+    , &.{});
+
+    try testSemaErr(
+        \\@section foo
+        \\          cli
+        \\@section bar
+        \\          cli
+    , &.{});
+}
+
+test "labels" {
+    try testSemaErr(
+        \\@section foo
+        \\.label:   cli
+    , &.{});
+}
+
+test "instruction validation" {
+    try testSemaErr("@section foo\ncli", &.{});
+    try testSemaErr("@section foo\ncli'", &.{ error.UnknownModifiedInstruction });
+    try testSemaErr("@section foo\nmst' sf, 0", &.{});
+    try testSemaErr("@section foo\ncli ra", &.{ error.ExpectedArgumentsLen });
+    try testSemaErr("@section foo\nast", &.{ error.ExpectedArgumentsLen });
+    try testSemaErr("@section foo\nast u8", &.{ error.ExpectedElsewhere });
+    try testSemaErr("@section foo\nu8 255", &.{});
+    // fixme: get rid of generic errors
+    try testSemaErr("@section foo\nu8 256", &.{ error.GenericToken });
+    try testSemaErr("@section foo\nfoo", &.{ error.UnknownInstruction });
+    // fixme: headers
+    try testSemaErr("@section foo\n@foo", &.{});
+}
+
+test "instruction codegen" {
+    try testSemaGen("@section foo\ncli", &.{ .{ .cli = {} } });
+    try testSemaGen("@section foo\nast ra", &.{ .{ .ast = .{ .ra } } });
+    try testSemaGen("@section foo\nu8 0", &.{ .{ .u8 = .{ 0 } } });
+    try testSemaGen("@section foo\nu8 255", &.{ .{ .u8 = .{ 255 } } });
+    // fixme: different slice pointers... Zig problem
+    // try testSemaGen("@section foo\nascii \"hello world!\"", &.{ .{ .ascii = .{ .{ .memory = "hello world!", .sentinel = null } } } });
+    // try testSemaGen("@section foo\nascii \"hello world!\" 0", &.{ .{ .ascii = .{ .{ .memory = "hello world!", .sentinel = 0 } } } });
+}
+
+test "lowering @define symbols" {
+    try testSemaGen(
+        \\@define foo, 24
+        \\@section foo
+        \\          u16 @foo
+    , &.{
+        .{ .u16 = .{ 24 } }
+    });
+
+    try testSemaErr(
+        \\@define foo, 256
+        \\@section foo
+        \\          u8 @foo
+    , &.{
+        error.GenericToken,
+        error.NoteDefinedHere
+    });
+
+    try testSemaGen(
+        \\@define foo, @bar
+        \\@define bar, 24
+        \\@section foo
+        \\          u16 @foo
+    , &.{
+        .{ .u16 = .{ 24 } }
+    });
+
+    try testSemaErr(
+        \\@header foo
+        \\@end
+        \\@section foo
+        \\          u8 @foo
+    , &.{
+        error.ExpectedElsewhere
+    });
+}
+
 test "full fledge" {
     try testSema1(
         \\@symbols "foo", foo
@@ -1430,22 +1650,26 @@ test "full fledge" {
     );
 
     try testSema2(
-        \\@define foo, bar
-        \\@define bar, 5
+        \\@define foo, @bar
+        \\@define bar, 0xFFFF
+        \\
         \\@header roo, doo
         \\.doo:         ast
         \\@end
+        \\
+        \\@define doo, sf
+        \\
         \\@section(noelimination) foo
         \\          @region 32
         \\              cli
         \\              ast rb
         \\              @align 4
-        \\              u16 0xFFFF
+        \\              u16 @foo
         \\              u8 0b10101111
         \\              ascii "foo" 0
-        \\              reserve u24, 4
-        \\              mst' sf, 0xFFFF
-        \\              mldw sf, 0xFFFF
+        \\              reserve u16, 4
+        \\              mst' sf, @bar
+        \\              mldw @doo, @bar
         \\          @end
     );
 }
