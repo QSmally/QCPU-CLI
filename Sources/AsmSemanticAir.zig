@@ -135,6 +135,13 @@ pub const Section = struct {
             return next_section.append(new_section);
         self.next = new_section;
     }
+
+    pub fn size(self: *Section) usize {
+        var address: usize = 0;
+        for (self.content.items) |instruction|
+            address += instruction.size();
+        return address;
+    }
 };
 
 const FileList = std.ArrayListUnmanaged(SymbolFile);
@@ -161,15 +168,6 @@ fn find_available_mask(from_address: usize, mask: usize) usize {
         if (address % mask == 0)
             return address;
     unreachable;
-}
-
-/// Instructions are variably sized, which requires the size of a section to be
-/// calculated iteratively.
-fn find_section_size(section: *Section) usize {
-    var address: usize = 0;
-    for (section.content.items) |instruction|
-        address += instruction.size();
-    return address;
 }
 
 fn node_is_null_or(self: *AsmSemanticAir, index: AsmAst.Index, tag: AsmAst.Node.Tag) bool {
@@ -775,12 +773,12 @@ fn analyse_container(self: *AsmSemanticAir, parent_node: AsmAst.Node) !void {
 
                 .builtin_region => {
                     const section = self.current_section orelse astgen_failure();
-                    const begin_address = find_section_size(section);
+                    const begin_address = section.size();
                     const composite = self.nodes[node.operands.rhs];
                     const opaque_ = self.nodes[composite.operands.rhs];
                     try self.analyse_container(opaque_);
 
-                    const len = find_section_size(section) - begin_address;
+                    const len = section.size() - begin_address;
                     try self.emit_region(node, len);
                 },
 
@@ -830,7 +828,7 @@ fn emit_align(self: *AsmSemanticAir, node: AsmAst.Node) !void {
     if (!std.math.isPowerOfTwo(alignment_))
         return try self.add_error(error.AlignPowerTwo, .{ alignment_, align_token });
     const section = self.current_section orelse astgen_failure();
-    const current_address = find_section_size(section);
+    const current_address = section.size();
     const padding = find_available_mask(current_address, alignment_) - current_address;
 
     try section.content.append(self.allocator, .{ .ld_padding = .{ padding } });
@@ -1134,7 +1132,7 @@ fn emit_addressable(self: *AsmSemanticAir, index: AsmAst.Index) !void {
     } else .{ .{}, false };
 
     const section = self.current_section orelse return astgen_failure();
-    const current_address = find_section_size(section);
+    const current_address = section.size();
     try self.emit_labels(current_address, labels);
 
     const arguments = if (self.node_unwrap(node.operands.lhs)) |arguments_node|
@@ -1483,6 +1481,18 @@ fn testSemaGen(input: [:0]const u8, output: []const Instruction) !void {
     try std.testing.expectEqualSlices(Instruction, sema.current_section.?.content.items, output);
 }
 
+fn testSemaGenAnd(input: [:0]const u8, output: []const Instruction, func: anytype) !void {
+    var ast, var sema = try testSema(input);
+    defer testSemaFree(&ast, &sema);
+    try sema.semantic_analyse();
+
+    for (sema.errors.items) |err|
+        try err.write("test.s", input, stderr);
+    try std.testing.expect(sema.errors.items.len == 0);
+    try std.testing.expectEqualSlices(Instruction, sema.current_section.?.content.items, output);
+    try func(&sema);
+}
+
 test "@define" {
     try testSemaErr("@define", &.{ error.ExpectedContext });
     try testSemaErr("@define 5", &.{ error.Expected });
@@ -1563,6 +1573,30 @@ test "@section" {
         \\@section bar
         \\          cli
     , &.{});
+
+    try testSemaGenAnd(
+        \\@section foo
+        \\cli
+    , &.{
+        .{ .cli = {} }
+    }, struct {
+        fn run(sema: *AsmSemanticAir) !void {
+            const section = sema.current_section.?;
+            try std.testing.expect(section.is_removable);
+        }
+    }.run);
+
+    try testSemaGenAnd(
+        \\@section(noelimination) foo
+        \\cli
+    , &.{
+        .{ .cli = {} }
+    }, struct {
+        fn run(sema: *AsmSemanticAir) !void {
+            const section = sema.current_section.?;
+            try std.testing.expect(!section.is_removable);
+        }
+    }.run);
 }
 
 test "labels" {
@@ -1595,6 +1629,156 @@ test "instruction codegen" {
     // fixme: different slice pointers... Zig problem
     // try testSemaGen("@section foo\nascii \"hello world!\"", &.{ .{ .ascii = .{ .{ .memory = "hello world!", .sentinel = null } } } });
     // try testSemaGen("@section foo\nascii \"hello world!\" 0", &.{ .{ .ascii = .{ .{ .memory = "hello world!", .sentinel = 0 } } } });
+    try testSemaGen("@section foo\nmst sf, 0xFFFF", &.{ .{ .mst = .{ .sf, 0xFFFF } } });
+    try testSemaGen("@section foo\nmst' sf, 0xFFFF", &.{ .{ .mst_ = .{ .sf, 0xFFFF } } });
+}
+
+test "@region" {
+    try testSemaGen(
+        \\@section foo
+        \\@region 1
+        \\cli
+        \\@end
+    , &.{
+        .{ .cli = {} },
+        .{ .ld_padding = .{ 0 } }
+    });
+
+    try testSemaGen(
+        \\@section foo
+        \\@region 24
+        \\cli
+        \\@end
+    , &.{
+        .{ .cli = {} },
+        .{ .ld_padding = .{ 23 } }
+    });
+
+    try testSemaErr(
+        \\@section foo
+        \\@region 1
+        \\u16 0
+        \\@end
+    , &.{
+        error.RegionExceedsSize
+    });
+}
+
+test "@align" {
+    try testSemaErr(
+        \\@section foo
+        \\@align 5
+    , &.{
+        error.AlignPowerTwo
+    });
+
+    try testSemaGen(
+        \\@section foo
+        \\@align 8
+    , &.{
+        .{ .ld_padding = .{ 0 } }
+    });
+
+    try testSemaGenAnd(
+        \\@section foo
+        \\cli
+        \\@align 8
+    , &.{
+        .{ .cli = {} },
+        .{ .ld_padding = .{ 7 } }
+    }, struct {
+        fn run(sema: *AsmSemanticAir) !void {
+            const section = sema.current_section.?;
+            try std.testing.expectEqual(@as(u16, 8), section.alignment);
+        }
+    }.run);
+
+    try testSemaGenAnd(
+        \\@section foo
+        \\cli
+        \\@align 8
+        \\@align 16
+    , &.{
+        .{ .cli = {} },
+        .{ .ld_padding = .{ 7 } },
+        .{ .ld_padding = .{ 8 } }
+    }, struct {
+        fn run(sema: *AsmSemanticAir) !void {
+            const section = sema.current_section.?;
+            try std.testing.expectEqual(@as(u16, 16), section.alignment);
+        }
+    }.run);
+
+    try testSemaGenAnd(
+        \\@section foo
+        \\cli
+        \\@align 16
+        \\@align 8
+    , &.{
+        .{ .cli = {} },
+        .{ .ld_padding = .{ 15 } },
+        .{ .ld_padding = .{ 0 } }
+    }, struct {
+        fn run(sema: *AsmSemanticAir) !void {
+            const section = sema.current_section.?;
+            try std.testing.expectEqual(@as(u16, 16), section.alignment);
+        }
+    }.run);
+}
+
+test "@barrier" {
+    try testSemaErr(
+        \\@section foo
+        \\@barrier foo
+        \\@barrier 5
+    , &.{
+        error.Unexpected,
+        error.Unexpected
+    });
+
+    try testSemaGen(
+        \\@section foo
+        \\cli
+        \\@barrier
+        \\ast ra
+    , &.{
+        // checks only last added section
+        .{ .ast = .{ .ra } }
+    });
+
+    try testSemaGenAnd(
+        \\@section foo
+        \\@align 16
+        \\@barrier
+        \\@align 8
+    , &.{
+        .{ .ld_padding = .{ 0 } }
+    }, struct {
+        fn run(sema: *AsmSemanticAir) !void {
+            const section = sema.current_section.?;
+            try std.testing.expectEqual(@as(u16, 8), section.alignment);
+        }
+    }.run);
+
+    try testSemaGenAnd(
+        \\@section foo
+        \\@barrier
+    , &.{}, struct {
+        fn run(sema: *AsmSemanticAir) !void {
+            const section = sema.current_section.?;
+            try std.testing.expect(section.is_removable);
+        }
+    }.run);
+
+    try testSemaGenAnd(
+        \\@section(noelimination) foo
+        \\@barrier
+    , &.{}, struct {
+        fn run(sema: *AsmSemanticAir) !void {
+            const section = sema.current_section.?;
+            try std.testing.expect(!section.is_removable);
+        }
+    }.run);
 }
 
 test "lowering @define symbols" {
