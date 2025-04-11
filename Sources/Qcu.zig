@@ -1,8 +1,22 @@
 
 // QCPU Compilation Unit
+//
+//  A complete assemble/linking pipeline looks like:
+//  - allocate/read file                -> buffer
+//  - tokenisation                      -> tokens
+//  - abstract syntax tree              -> nodes
+//  - semantic analysis prepare pass    -> symbols
+//  - exchange import units
+//  - semantic analysis analyse pass    -> sections
+//  - free tokens, nodes
+//  - liveness pass
+//  - free buffer, symbols
+//  - link sections
 
 const std = @import("std");
 const AsmAst = @import("AsmAst.zig");
+const AsmLiveness = @import("AsmLiveness.zig");
+const AsmSemanticAir = @import("AsmSemanticAir.zig");
 const Error = @import("Error.zig");
 const Source = @import("Source.zig");
 
@@ -24,7 +38,10 @@ pub const File = struct {
     pwd: std.fs.Dir,
     filename: []const u8,
     source: Source,
-    nodes: []const AsmAst.Node,
+
+    nodes: []const AsmAst.Node = undefined,
+    symbols: *const SymbolMap = undefined,
+    sections: *const SectionMap = undefined,
 
     pub fn eql(self: *File, path: []const u8) !bool {
         _ = self;
@@ -53,6 +70,8 @@ pub const LocatableError = struct {
     buffer: []const u8
 };
 
+const SymbolMap = std.StringHashMapUnmanaged(*AsmSemanticAir.Symbol.Locatable);
+const SectionMap = std.StringArrayHashMapUnmanaged(*AsmSemanticAir.Section);
 const ErrorList = std.ArrayListUnmanaged(LocatableError);
 
 // Tests

@@ -3,10 +3,10 @@ pub const Token = @import("Token.zig");
 pub const AsmTokeniser = @import("AsmTokeniser.zig");
 pub const AsmAst = @import("AsmAst.zig");
 pub const AsmSemanticAir = @import("AsmSemanticAir.zig");
-
-const std = @import("std");
+pub const AsmLiveness = @import("AsmLiveness.zig");
 
 test {
+    const std = @import("std");
     std.testing.refAllDecls(@This());
 
     // _ = @import("mem/mem.zig");

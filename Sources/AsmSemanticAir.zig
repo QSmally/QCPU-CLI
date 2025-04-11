@@ -28,6 +28,10 @@ current_section: ?*Section,
 /// Only populated in freestanding.
 errors: ErrorList,
 
+/// Borrows a list of tokens and nodes, and guarantees its output not to have
+/// any dependencies on these tokens and nodes. Tokens are copied when
+/// necessary. The token/node lists may be freed after both semantic analysis
+/// passes.
 pub fn init(qcu: *Qcu.File) !AsmSemanticAir {
     var self = AsmSemanticAir {
         .qcu = qcu,
@@ -46,8 +50,8 @@ pub fn init(qcu: *Qcu.File) !AsmSemanticAir {
 
 pub fn init_freestanding(allocator: std.mem.Allocator, source: Source, nodes: []const AsmAst.Node) !AsmSemanticAir {
     var self = AsmSemanticAir {
-        .allocator = allocator,
         .qcu = null,
+        .allocator = allocator,
         .source = source,
         .nodes = nodes,
         .imports = .empty,
@@ -117,6 +121,7 @@ pub const Symbol = union(enum) {
 
 pub const Section = struct {
 
+    token: Token,
     /// Grows with the use of @align to ensure the correct padding is calculated
     /// ahead-of-time.
     alignment: usize = 0,
@@ -138,7 +143,7 @@ pub const Section = struct {
 
     pub fn size(self: *Section) usize {
         var address: usize = 0;
-        for (self.content.items) |instruction|
+        for (self.content.items(.instruction)) |instruction|
             address += instruction.size();
         return address;
     }
@@ -147,7 +152,7 @@ pub const Section = struct {
 const FileList = std.ArrayListUnmanaged(SymbolFile);
 const SymbolMap = std.StringArrayHashMapUnmanaged(Symbol.Locatable);
 const SectionMap = std.StringArrayHashMapUnmanaged(*Section);
-const InstructionList = std.ArrayListUnmanaged(Instruction);
+const InstructionList = std.MultiArrayList(Instruction.Locatable);
 const ErrorList = std.ArrayListUnmanaged(Error);
 const SemanticAirMap = std.StringArrayHashMapUnmanaged(*AsmSemanticAir);
 
@@ -418,6 +423,7 @@ fn add_error(self: *AsmSemanticAir, comptime err: SemanticError, argument: anyty
     };
 
     const format = try std.fmt.allocPrint(self.allocator, message, arguments);
+    errdefer self.allocator.free(format);
 
     const err_data = Error {
         .id = err,
@@ -831,7 +837,10 @@ fn emit_align(self: *AsmSemanticAir, node: AsmAst.Node) !void {
     const current_address = section.size();
     const padding = find_available_mask(current_address, alignment_) - current_address;
 
-    try section.content.append(self.allocator, .{ .ld_padding = .{ padding } });
+    try section.content.append(self.allocator, .{
+        .token = align_token,
+        .is_labeled = false,
+        .instruction = .{ .ld_padding = .{ padding } } });
     section.alignment = @max(section.alignment, alignment_);
 }
 
@@ -844,7 +853,9 @@ fn emit_barrier(self: *AsmSemanticAir, node: AsmAst.Node) !void {
 
     const existing_section = self.current_section orelse return astgen_failure();
     const section = try self.allocator.create(Section);
-    section.* = .{ .is_removable = existing_section.is_removable };
+    section.* = .{
+        .token = barrier_token,
+        .is_removable = existing_section.is_removable };
 
     existing_section.append(section);
     self.current_section = section;
@@ -867,7 +878,10 @@ fn emit_region(self: *AsmSemanticAir, node: AsmAst.Node, opaque_len: usize) !voi
         return try self.add_error(error.RegionExceedsSize, .{ opaque_len, size_, region_token });
     const section = self.current_section orelse return astgen_failure();
     const padding = size_ - opaque_len;
-    try section.content.append(self.allocator, .{ .ld_padding = .{ padding } });
+    try section.content.append(self.allocator, .{
+        .token = region_token,
+        .is_labeled = false,
+        .instruction = .{ .ld_padding = .{ padding } } });
 }
 
 fn emit_section(self: *AsmSemanticAir, node: AsmAst.Node) !void {
@@ -885,7 +899,9 @@ fn emit_section(self: *AsmSemanticAir, node: AsmAst.Node) !void {
     try arguments.expect_end();
 
     const section = try self.allocator.create(Section);
-    section.* = .{ .is_removable = !self.contains_option(options_, .noelimination) };
+    section.* = .{
+        .token = section_token,
+        .is_removable = !self.contains_option(options_, .noelimination) };
 
     if (self.sections.get(name)) |existing_section|
         existing_section.append(section) else
@@ -895,8 +911,18 @@ fn emit_section(self: *AsmSemanticAir, node: AsmAst.Node) !void {
 
 pub const Instruction = union(Tag) {
 
+    pub const Locatable = struct {
+        token: Token,
+        is_labeled: bool,
+        instruction: Instruction
+    };
+
     cli,
     ast: struct { GpRegister },
+    rst: struct { GpRegister },
+    jmp: struct { u16 },
+    jmpr: struct { u8 },
+    jmpd,
     mst: struct { SpRegister, u16 },
     mst_: struct { SpRegister, u16 },
     mstw: struct { SpRegister, u16 },
@@ -934,6 +960,10 @@ pub const Instruction = union(Tag) {
 
         cli,
         ast,
+        rst,
+        jmp,
+        jmpr,
+        jmpd,
         mst,
         mst_,
         mstw,
@@ -954,10 +984,56 @@ pub const Instruction = union(Tag) {
         // ld_expression,
         // ld_symbol,
 
+        /// Any unconditional jump which guarantees to divert control flow,
+        /// used by Liveness to check unreachable instructions.
+        pub fn is_jump(self: Tag) bool {
+            return switch (self) {
+                .jmp,
+                .jmpr,
+                .jmpd => true,
+
+                else => false
+            };
+        }
+
+        /// These instructions have multiple, 'unknown' contents to make label
+        /// calculation more difficult. Liveness picks up on unlabeled
+        /// instructions defined after these instructions.
+        pub fn is_confusing_size(self: Tag) bool {
+            return switch (self) {
+                .ascii,
+                .reserve,
+                .ld_padding => true,
+
+                else => false
+            };
+        }
+
+        /// Any executable instruction, which is not a data value or internal
+        /// instruction. Liveness checks on padding whether non-jump executable
+        /// instructions spill into zeros.
+        pub fn is_executable(self: Tag) bool {
+            return switch (self) {
+                .u8, .u16, .u24,
+                .i8, .i16, .i24,
+                .ascii,
+                .reserve,
+                .ld_padding => false,
+
+                else => true
+            };
+        }
+
         pub fn basic_size(self: Tag) usize {
             return switch (self) {
                 .cli,
-                .ast => 1,
+                .ast,
+                .rst,
+                .jmpd => 1,
+
+                .jmpr => 2,
+
+                .jmp,
                 .mst,
                 .mst_,
                 .mstw,
@@ -978,7 +1054,7 @@ pub const Instruction = union(Tag) {
         }
     };
 
-    pub const GpRegister = enum {
+    pub const GpRegister = enum(u3) {
         zr,
         ra,
         rb,
@@ -1000,7 +1076,7 @@ pub const Instruction = union(Tag) {
         .{ "rz", .rz }
     });
 
-    pub const SpRegister = enum {
+    pub const SpRegister = enum(u2) {
         sp,
         sf,
         adr,
@@ -1032,6 +1108,10 @@ pub const Instruction = union(Tag) {
     pub const instruction_map = std.StaticStringMap(Tag).initComptime(.{
         .{ "cli", .cli },
         .{ "ast", .ast },
+        .{ "rst", .rst },
+        .{ "jmp", .jmp },
+        .{ "jmpr", .jmpr },
+        .{ "jmpd", .jmpd },
         .{ "mst", .mst },
         .{ "mstw", .mstw },
         .{ "mld", .mld },
@@ -1138,7 +1218,8 @@ fn emit_addressable(self: *AsmSemanticAir, index: AsmAst.Index) !void {
     const arguments = if (self.node_unwrap(node.operands.lhs)) |arguments_node|
         arguments_node.operands else
         null;
-    try self.emit_instructions(token, is_modified, arguments);
+    const is_labeled = (labels.rhs - labels.lhs) > 0;
+    try self.emit_instructions(token, is_modified, is_labeled, arguments);
 }
 
 fn emit_labels(self: *AsmSemanticAir, address: usize, labels: AsmAst.IndexRange) !void {
@@ -1148,7 +1229,13 @@ fn emit_labels(self: *AsmSemanticAir, address: usize, labels: AsmAst.IndexRange)
     _ = labels;
 }
 
-fn emit_instructions(self: *AsmSemanticAir, token: Token, is_modified: bool, arguments: ?AsmAst.IndexRange) !void {
+fn emit_instructions(
+    self: *AsmSemanticAir,
+    token: Token,
+    is_modified: bool,
+    is_labeled: bool,
+    arguments: ?AsmAst.IndexRange
+) !void {
     const section = self.current_section orelse return astgen_failure();
     const string = token.location.slice(self.source.buffer);
 
@@ -1163,7 +1250,10 @@ fn emit_instructions(self: *AsmSemanticAir, token: Token, is_modified: bool, arg
             if (tag == null and is_modified)
                 return try self.add_error(error.UnknownModifiedInstruction, token);
             const instruction = try self.cast_arguments(token, tag.?, arguments) orelse return;
-            try section.content.append(self.allocator, instruction);
+            try section.content.append(self.allocator, .{
+                .token = token,
+                .is_labeled = is_labeled,
+                .instruction = instruction });
         },
 
         .identifier => {
@@ -1436,7 +1526,7 @@ fn testSema2(input: [:0]const u8) !void {
             try stderr.print("@section {s} (align {})\n", .{ section_name, section.alignment });
 
             while (dumping_section) |dumping_section_| {
-                for (dumping_section_.content.items) |instr| {
+                for (dumping_section_.content.items(.instruction)) |instr| {
                     switch (instr) {
                         inline else => |instr_| try stderr.print("    {s}({}) : {}\n", .{ @tagName(instr), instr.size(), instr_ })
                     }
@@ -1471,14 +1561,9 @@ fn testSemaErr(input: [:0]const u8, errors: []const SemanticError) !void {
 }
 
 fn testSemaGen(input: [:0]const u8, output: []const Instruction) !void {
-    var ast, var sema = try testSema(input);
-    defer testSemaFree(&ast, &sema);
-    try sema.semantic_analyse();
-
-    for (sema.errors.items) |err|
-        try err.write("test.s", input, stderr);
-    try std.testing.expect(sema.errors.items.len == 0);
-    try std.testing.expectEqualSlices(Instruction, sema.current_section.?.content.items, output);
+    try testSemaGenAnd(input, output, struct {
+        fn run(_: *AsmSemanticAir) !void {}
+    }.run);
 }
 
 fn testSemaGenAnd(input: [:0]const u8, output: []const Instruction, func: anytype) !void {
@@ -1489,7 +1574,7 @@ fn testSemaGenAnd(input: [:0]const u8, output: []const Instruction, func: anytyp
     for (sema.errors.items) |err|
         try err.write("test.s", input, stderr);
     try std.testing.expect(sema.errors.items.len == 0);
-    try std.testing.expectEqualSlices(Instruction, sema.current_section.?.content.items, output);
+    try std.testing.expectEqualSlices(Instruction, sema.current_section.?.content.items(.instruction), output);
     try func(&sema);
 }
 

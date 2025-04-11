@@ -690,7 +690,7 @@ const AstGen = struct {
         while (true) {
             switch (self.current_tag()) {
                 .builtin_align,
-                .builtin_barrier,
+                .builtin_barrier, // fixme: barriers can only appear at section-level
                 .builtin_define,
                 .builtin_region => {
                     const builtin = try self.parse_builtin();

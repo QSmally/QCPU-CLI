@@ -166,6 +166,10 @@ const keywords = std.StaticStringMap(Tag).initComptime(.{
     // Instructions
     .{ "ast", .instruction },
     .{ "cli", .instruction },
+    .{ "rst", .instruction },
+    .{ "jmp", .instruction },
+    .{ "jmpr", .instruction },
+    .{ "jmpd", .instruction },
     .{ "mst", .instruction },
     .{ "mstw", .instruction },
     .{ "mld", .instruction },
