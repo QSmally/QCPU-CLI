@@ -5,7 +5,8 @@
 //  - empty sections
 //  - unlabeled instruction after unconditional jump/@section
 //  - two consecutive register store operations to same locations
-//  - unlabeled data points?
+//  - control flow spilling into padding or data
+//  - unlabeled instructions after data
 //  - unused private defines/headers/labels?
 //  ran after semantic analysis
 //  recursive symbol usage is verified in SemanticAir
@@ -73,6 +74,8 @@ const LivenessError = error {
     UnreachableOpaque,
     DuplicateStore,
     UncoordinatedPadding,
+    UncoordinatedData,
+    UndefinedControlFlow,
     NoteDivertedHere,
     NotePaddingHere,
     NoteConfusingSize,
@@ -87,6 +90,8 @@ fn add_error(self: *AsmLiveness, comptime err: LivenessError, argument: anytype)
         error.UnreachableOpaque => "unlabeled/unreachable instruction '{s}'",
         error.DuplicateStore => "duplicate write of same register '{s}'",
         error.UncoordinatedPadding => "execution flow spills into padding",
+        error.UncoordinatedData => "execution flow spills into non-executable opaque",
+        error.UndefinedControlFlow => "execution flow reaches end of section",
         error.NoteDivertedHere => "control flow diverted here",
         error.NotePaddingHere => "padding is generated here",
         error.NoteConfusingSize => "'{s}' has a confusing size",
@@ -153,12 +158,11 @@ const LivenessTrack = struct {
 };
 
 fn liveness_inner(self: *AsmLiveness, section: *const Section) !void {
-    if (try self.pass_empty_section(section)) return;
-    var previous_track: ?LivenessTrack = null;
-
     const tokens = section.content.items(.token);
     const is_labeleds = section.content.items(.is_labeled);
     const instructions = section.content.items(.instruction);
+
+    var previous_track: ?LivenessTrack = null;
 
     for (tokens, is_labeleds, instructions) |token, is_labeled, instruction| {
         const track = LivenessTrack {
@@ -177,18 +181,15 @@ fn liveness_inner(self: *AsmLiveness, section: *const Section) !void {
         if (previous_track) |previous_track_| {
             try self.pass_duplicate_store(&track, &previous_track_);
             try self.pass_unreachable_opaque(&track, &previous_track_);
+            try self.pass_uncoordinated_data(&track, &previous_track_);
         } else {
             try self.pass_unreachable_section(section, &track);
         }
     }
-}
 
-fn pass_empty_section(self: *AsmLiveness, section: *const Section) !bool {
-    if (section.content.len == 0) {
+    if (previous_track) |last_track|
+        try self.pass_undefined_control_flow(&last_track) else
         try self.add_error(error.EmptySection, section.token);
-        return true;
-    }
-    return false;
 }
 
 fn pass_uncoordinated_padding(
@@ -208,11 +209,29 @@ fn pass_unreachable_opaque(
     current: *const LivenessTrack,
     previous: *const LivenessTrack
 ) !void {
-    if (!current.is_labeled and (previous.tag.is_jump() or previous.tag.is_confusing_size())) {
+    if (!current.is_labeled and
+        (previous.tag.is_jump() or
+         (previous.tag.is_fixed_data() and !current.tag.is_fixed_data()) or
+         previous.tag.is_confusing_size())
+    ) {
         try self.add_error(error.UnreachableOpaque, current.token);
         if (previous.tag.is_confusing_size())
             try self.add_error(error.NoteConfusingSize, previous.token) else
             try self.add_error(error.NoteDivertedHere, previous.token);
+    }
+}
+
+fn pass_uncoordinated_data(
+    self: *AsmLiveness,
+    current: *const LivenessTrack,
+    previous: *const LivenessTrack
+) !void {
+    if (!current.tag.is_executable() and
+        previous.tag.is_executable() and
+        !previous.tag.is_jump()
+    ) {
+        try self.add_error(error.UncoordinatedData, previous.token);
+        try self.add_error(error.NoteDefinedHere, current.token);
     }
 }
 
@@ -234,6 +253,11 @@ fn pass_duplicate_store(
     ) {
         try self.add_error(error.DuplicateStore, .{ current.token, current.instruction.rst[0] });
     }
+}
+
+fn pass_undefined_control_flow(self: *AsmLiveness, current: *const LivenessTrack) !void {
+    if (current.tag.is_executable() and !current.tag.is_jump())
+        try self.add_error(error.UndefinedControlFlow, current.token);
 }
 
 fn pass_unreachable_section(
@@ -290,11 +314,6 @@ fn testLivenessErr(input: [:0]const u8, errors: []const LivenessError) !void {
     var ast, var sema, var liveness = try testLiveness(input);
     defer testLivenessFree(&ast, &sema, &liveness);
 
-    if (options.dump) {
-        for (liveness.errors.items) |err|
-            try err.write("test.s", input, stderr);
-    }
-
     var liveness_errors = std.ArrayList(anyerror).init(std.testing.allocator);
     defer liveness_errors.deinit();
     for (liveness.errors.items) |err|
@@ -303,21 +322,25 @@ fn testLivenessErr(input: [:0]const u8, errors: []const LivenessError) !void {
         for (liveness.errors.items) |err|
             try err.write("test.s", input, stderr);
         try std.testing.expectEqualSlices(anyerror, errors, liveness_errors.items);
+    } else if (options.dump) {
+        for (liveness.errors.items) |err|
+            try err.write("test.s", input, stderr);
     }
 }
 
 test "unused sections" {
     try testLivenessErr(
         \\@section foo
-        \\foo: cli
+        \\foo: jmpr 0x00
         \\@barrier
-        \\bar: cli
+        \\bar: jmpr 0x00
     , &.{});
 
     try testLivenessErr(
         \\@section foo
         \\@barrier
         \\foo: cli
+        \\     jmpr 0x00
     , &.{ error.EmptySection });
 
     try testLivenessErr(
@@ -341,7 +364,8 @@ test "unlabeled instruction after unconditional jump/unknown sized instructions"
         \\@section foo
         \\foo: cli
         \\ast ra
-        \\ascii "hi mum!"
+        \\ast rb
+        \\jmpr 0x00
     , &.{});
 
     try testLivenessErr(
@@ -376,7 +400,9 @@ test "execution spills into padding" {
     try testLivenessErr(
         \\@section foo
         \\@align 16
-    , &.{}); // fixme: should generate empty section error
+    , &.{
+        error.EmptySection
+    });
 
     try testLivenessErr(
         \\@section foo
@@ -404,6 +430,7 @@ test "execution spills into padding" {
         \\@section foo
         \\foo: cli
         \\@align 16
+        \\jmpr 0x00
     , &.{
         error.UncoordinatedPadding,
         error.NotePaddingHere
@@ -420,6 +447,7 @@ test "execution spills into padding" {
         \\@region 24
         \\foo: cli
         \\@end
+        \\jmpr 0x00
     , &.{
         error.UncoordinatedPadding,
         error.NotePaddingHere
@@ -433,6 +461,37 @@ test "execution spills into padding" {
     , &.{});
 }
 
+test "execution spills into data" {
+    try testLivenessErr(
+        \\@section foo
+        \\foo: cli
+        \\     u8 0x00
+    , &.{
+        error.UncoordinatedData,
+        error.NoteDefinedHere
+    });
+
+    try testLivenessErr(
+        \\@section foo
+        \\@region 24
+        \\foo: cli
+        \\     u8 0x00
+        \\@end
+    , &.{
+        error.UncoordinatedData,
+        error.NoteDefinedHere
+    });
+
+    try testLivenessErr(
+        \\@section foo
+        \\@region 24
+        \\foo: u8 0x00
+        \\     u16 0x00
+        \\     u24 0x00
+        \\@end
+    , &.{});
+}
+
 test "doubly write to same register" {
     try testLivenessErr(
         \\@section foo
@@ -440,6 +499,7 @@ test "doubly write to same register" {
         \\ast ra
         \\ast rb
         \\ast rc
+        \\jmpr 0x00
     , &.{});
 
     try testLivenessErr(
@@ -448,6 +508,7 @@ test "doubly write to same register" {
         \\ast ra
         \\ast ra
         \\ast rc
+        \\jmpr 0x00
     , &.{
         error.DuplicateStore
     });
@@ -457,11 +518,13 @@ test "unlabeled instruction after @section" {
     try testLivenessErr(
         \\@section foo
         \\foo: cli
+        \\     jmpr 0x00
     , &.{});
 
     try testLivenessErr(
         \\@section foo
         \\cli
+        \\jmpr 0x00
     , &.{
         error.UnreachableOpaque,
         error.NoteDefinedHere
@@ -476,26 +539,92 @@ test "unlabeled instruction after @section" {
         error.UnreachableOpaque,
         error.NoteDefinedHere,
         error.UncoordinatedPadding,
-        error.NotePaddingHere
+        error.NotePaddingHere,
+        error.UndefinedControlFlow
     });
 
     try testLivenessErr(
         \\@section foo
-        \\@region 24
-        \\foo: cli
-        \\     u8 0x00
-        \\@end
-    , &.{}); // fixme: unlabeled executable after data, data spills after non-jump executable
-
-    try testLivenessErr(
-        \\@section foo
         \\cli
+        \\jmpr 0x00
         \\@barrier
         \\cli
+        \\jmpr 0x00
     , &.{
         error.UnreachableOpaque,
         error.NoteDefinedHere,
         error.UnreachableOpaque,
         error.NoteDefinedHere
+    });
+}
+
+test "undefined control flow" {
+    try testLivenessErr(
+        \\@section foo
+        \\foo: cli
+        \\     jmpr 0x00
+    , &.{});
+
+    try testLivenessErr(
+        \\@section foo
+        \\foo: cli
+    , &.{
+        error.UndefinedControlFlow
+    });
+
+    try testLivenessErr(
+        \\@section foo
+        \\foo: cli
+        \\     jmpr 0x00
+        \\@barrier
+        \\bar: ast ra
+    , &.{
+        error.UndefinedControlFlow
+    });
+}
+
+test "full fledge" {
+    try testLivenessErr(
+        \\@section foo
+        \\@align 16
+        \\main:         ast ra
+        \\              ast rb
+        \\              rst rb
+        \\              jmpr 0x00
+        \\@align 8
+        \\@region 24
+        \\foo:          u8 0x00
+        \\              u16 0x0000
+        \\@end
+        \\@section bar
+        \\bar:          jmpr 0x00
+    , &.{});
+
+    try testLivenessErr(
+        \\@section foo
+        \\@align 16
+        \\main:         ast ra
+        \\              ast ra
+        \\              rst rb
+        \\@align 8
+        \\@region 24
+        \\              cli
+        \\              u8 0x00
+        \\              u16 0x0000
+        \\@end
+        \\@section bar
+        \\bar:          cli
+        \\@section roo
+        \\roo:          u8 0x00
+    , &.{
+        error.DuplicateStore,
+        error.UncoordinatedPadding,
+        error.NotePaddingHere,
+        // fixme: the 'cli' after @align is invalid
+        // error.UnreachableOpaque,
+        // error.NoteDivertedHere,
+        error.UncoordinatedData,
+        error.NoteDefinedHere,
+        error.UndefinedControlFlow
     });
 }

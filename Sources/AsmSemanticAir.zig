@@ -1009,6 +1009,15 @@ pub const Instruction = union(Tag) {
             };
         }
 
+        pub fn is_fixed_data(self: Tag) bool {
+            return switch (self) {
+                .u8, .u16, .u24,
+                .i8, .i16, .i24 => true,
+
+                else => false
+            };
+        }
+
         /// Any executable instruction, which is not a data value or internal
         /// instruction. Liveness checks on padding whether non-jump executable
         /// instructions spill into zeros.
