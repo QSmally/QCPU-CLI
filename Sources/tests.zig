@@ -4,6 +4,7 @@ pub const AsmTokeniser = @import("AsmTokeniser.zig");
 pub const AsmAst = @import("AsmAst.zig");
 pub const AsmSemanticAir = @import("AsmSemanticAir.zig");
 pub const AsmLiveness = @import("AsmLiveness.zig");
+pub const Qcu = @import("Qcu.zig");
 
 test {
     const std = @import("std");

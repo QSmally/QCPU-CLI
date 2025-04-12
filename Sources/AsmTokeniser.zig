@@ -29,12 +29,12 @@ const Helper = struct {
 
     pub inline fn tag(self: *Helper, tag_: Token.Tag) void {
         self.token.tag = tag_;
-        self.token.location.end_byte = self.tokeniser.cursor;
+        self.token.location.end_byte = self.tokeniser.cursor + 1;
     }
 
     pub inline fn tag_lookahead(self: *Helper, tag_: Token.Tag) void {
         self.token.tag = tag_;
-        self.token.location.end_byte = self.tokeniser.cursor - 1;
+        self.token.location.end_byte = self.tokeniser.cursor;
     }
 
     pub inline fn tag_next(self: *Helper, tag_: Token.Tag) void {

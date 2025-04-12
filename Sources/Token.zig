@@ -3,21 +3,6 @@ const std = @import("std");
 
 const Token = @This();
 
-pub const Location = struct {
-
-    start_byte: usize,
-    end_byte: usize,
-
-    pub fn eql(self: Location, location: Location) bool {
-        return self.start_byte == location.start_byte and
-            self.end_byte == location.end_byte;
-    }
-
-    pub fn slice(self: Location, from_buffer: [:0]const u8) []const u8 {
-        return from_buffer[self.start_byte..(self.end_byte + 1)];
-    }
-};
-
 pub const Tag = enum {
 
     invalid,
@@ -129,6 +114,21 @@ pub const Tag = enum {
             .builtin_section => "@section",
             .builtin_symbols => "@symbols"
         };
+    }
+};
+
+pub const Location = struct {
+
+    start_byte: usize,
+    end_byte: usize,
+
+    pub fn eql(self: Location, location: Location) bool {
+        return self.start_byte == location.start_byte and
+            self.end_byte == location.end_byte;
+    }
+
+    pub fn slice(self: Location, from_buffer: [:0]const u8) []const u8 {
+        return from_buffer[self.start_byte..self.end_byte];
     }
 };
 

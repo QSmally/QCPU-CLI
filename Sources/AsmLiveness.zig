@@ -1,13 +1,14 @@
 
 // Liveness
 //
-//  remove bullshit assembly
+//  points out bullshit assembly
 //  - empty sections
 //  - unlabeled instruction after unconditional jump/@section
-//  - two consecutive register store operations to same locations
+//  - consecutive register store operations to same locations
 //  - control flow spilling into padding or data
 //  - unlabeled instructions after data
-//  - unused private defines/headers/labels?
+//  - unused private defines/headers
+//  - unused private labels?
 //  ran after semantic analysis
 //  recursive symbol usage is verified in SemanticAir
 
@@ -28,13 +29,18 @@ sections: *const SectionMap,
 /// Only populated in freestanding.
 errors: ErrorList,
 
-pub fn init(qcu: *Qcu.File) !AsmLiveness {
+pub fn init(
+    qcu: *Qcu.File,
+    source: Source,
+    symbols: *const SymbolMap,
+    sections: *const SectionMap
+) !AsmLiveness {
     var self = AsmLiveness {
         .qcu = qcu,
         .allocator = qcu.allocator,
-        .source = qcu.source,
-        .symbols = qcu.symbols,
-        .sections = qcu.sections,
+        .source = source,
+        .symbols = symbols,
+        .sections = sections,
         .errors = .empty };
     errdefer self.deinit();
     try self.liveness_root();
@@ -44,8 +50,8 @@ pub fn init(qcu: *Qcu.File) !AsmLiveness {
 pub fn init_freestanding(
     allocator: std.mem.Allocator,
     source: Source,
-    sections: *const SectionMap,
-    symbols: *const SymbolMap
+    symbols: *const SymbolMap,
+    sections: *const SectionMap
 ) !AsmLiveness {
     var self = AsmLiveness {
         .qcu = null,
@@ -76,6 +82,7 @@ const LivenessError = error {
     UncoordinatedPadding,
     UncoordinatedData,
     UndefinedControlFlow,
+    UnusedPrivateSymbol,
     NoteDivertedHere,
     NotePaddingHere,
     NoteConfusingSize,
@@ -92,6 +99,7 @@ fn add_error(self: *AsmLiveness, comptime err: LivenessError, argument: anytype)
         error.UncoordinatedPadding => "execution flow spills into padding",
         error.UncoordinatedData => "execution flow spills into non-executable opaque",
         error.UndefinedControlFlow => "execution flow reaches end of section",
+        error.UnusedPrivateSymbol => "unused private symbol",
         error.NoteDivertedHere => "control flow diverted here",
         error.NotePaddingHere => "padding is generated here",
         error.NoteConfusingSize => "'{s}' has a confusing size",
@@ -148,6 +156,15 @@ fn liveness_root(self: *AsmLiveness) !void {
             barrier_section = barrier_section_.next;
         }
     }
+
+    for (self.symbols.values()) |symbol| {
+        const is_public = switch (symbol.symbol) {
+            inline else => |symbol_| symbol_.is_public
+        };
+
+        if (!symbol.is_used and !is_public)
+            try self.add_error(error.UnusedPrivateSymbol, symbol.token);
+    }
 }
 
 const LivenessTrack = struct {
@@ -189,7 +206,7 @@ fn liveness_inner(self: *AsmLiveness, section: *const Section) !void {
 
     if (previous_track) |last_track|
         try self.pass_undefined_control_flow(&last_track) else
-        try self.add_error(error.EmptySection, section.token);
+        try self.add_error(error.EmptySection, section.token); // 'reserve' succeeds, padding does not
 }
 
 fn pass_uncoordinated_padding(
@@ -300,7 +317,7 @@ fn testLiveness(input: [:0]const u8) !struct { AsmAst, AsmSemanticAir, AsmLivene
         try err.write("test.s", input, stderr);
     try std.testing.expect(sema.errors.items.len == 0);
 
-    return .{ ast, sema, try AsmLiveness.init_freestanding(std.testing.allocator, source, &sema.sections, &sema.symbols) };
+    return .{ ast, sema, try AsmLiveness.init_freestanding(std.testing.allocator, source, &sema.symbols, &sema.sections) };
 }
 
 fn testLivenessFree(ast: *AsmAst, sema: *AsmSemanticAir, liveness: *AsmLiveness) void {
@@ -384,6 +401,23 @@ test "unlabeled instruction after unconditional jump/unknown sized instructions"
     , &.{
         error.UnreachableOpaque,
         error.NoteConfusingSize
+    });
+
+    try testLivenessErr(
+        \\@section foo
+        \\foo: u8 0x00
+        \\     u16 0x0000
+        \\bar: ascii "bye mum!"
+    , &.{});
+
+    try testLivenessErr(
+        \\@section foo
+        \\foo: u8 0x00
+        \\     u16 0x0000
+        \\     ascii "bye mum!"
+    , &.{
+        error.UnreachableOpaque,
+        error.NoteDivertedHere // fixme: confusing note?
     });
 
     try testLivenessErr(
@@ -583,6 +617,42 @@ test "undefined control flow" {
     });
 }
 
+test "unused private symbols" {
+    try testLivenessErr(
+        \\@section foo
+        \\@define bar, 5
+        \\foo: mst sf, @bar
+        \\jmpr 0x00
+    , &.{});
+
+    try testLivenessErr(
+        \\@section foo
+        \\@define bar, @roo
+        \\@define roo, 5
+        \\foo: mst sf, @bar
+        \\jmpr 0x00
+    , &.{});
+
+    try testLivenessErr(
+        \\@section foo
+        \\@define bar, 5
+        \\foo: mst sf, 5
+        \\jmpr 0x00
+    , &.{
+        error.UnusedPrivateSymbol
+    });
+
+    try testLivenessErr(
+        \\@section foo
+        \\@define bar, 5
+        \\.foo: mst sf, 5
+        \\jmpr 0x00
+    , &.{
+        error.UnusedPrivateSymbol,
+        error.UnusedPrivateSymbol
+    });
+}
+
 test "full fledge" {
     try testLivenessErr(
         \\@section foo
@@ -605,8 +675,9 @@ test "full fledge" {
         \\@align 16
         \\main:         ast ra
         \\              ast ra
-        \\              rst rb
+        \\.foo:         rst rb
         \\@align 8
+        \\@define aaaaaaaaaaaa, 0
         \\@region 24
         \\              cli
         \\              u8 0x00
@@ -625,6 +696,8 @@ test "full fledge" {
         // error.NoteDivertedHere,
         error.UncoordinatedData,
         error.NoteDefinedHere,
-        error.UndefinedControlFlow
+        error.UndefinedControlFlow,
+        error.UnusedPrivateSymbol,
+        error.UnusedPrivateSymbol
     });
 }
