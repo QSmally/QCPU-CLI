@@ -158,11 +158,7 @@ fn liveness_root(self: *AsmLiveness) !void {
     }
 
     for (self.symbols.values()) |symbol| {
-        const is_public = switch (symbol.symbol) {
-            inline else => |symbol_| symbol_.is_public
-        };
-
-        if (!symbol.is_used and !is_public)
+        if (!symbol.is_used and !symbol.symbol.is_public())
             try self.add_error(error.UnusedPrivateSymbol, symbol.token);
     }
 }
@@ -678,6 +674,7 @@ test "full fledge" {
         \\.foo:         rst rb
         \\@align 8
         \\@define aaaaaaaaaaaa, 0
+        \\@define(expose) bbbb, 0
         \\@region 24
         \\              cli
         \\              u8 0x00

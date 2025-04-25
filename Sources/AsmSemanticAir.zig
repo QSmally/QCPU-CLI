@@ -87,8 +87,12 @@ pub fn deinit(self: *AsmSemanticAir) void {
 
 pub const SymbolFile = struct {
     path: []const u8,
+    token: Token,
     namespace: ?[]const u8,
-    sema_unit: ?*const AsmSemanticAir = null
+    /// optional (1): unavailable (freestanding)
+    /// pointer:      Qcu's sema field
+    /// optional (2): whether file exists
+    sema: ?*?AsmSemanticAir
 };
 
 pub const Symbol = union(enum) {
@@ -120,6 +124,12 @@ pub const Symbol = union(enum) {
         content: AsmAst.IndexRange,
         is_public: bool
     };
+
+    pub fn is_public(self: Symbol) bool {
+        return switch (self) {
+            inline else => |symbol| symbol.is_public
+        };
+    }
 };
 
 pub const Section = struct {
@@ -334,7 +344,13 @@ const SemanticError = error {
     ExpectedArgumentsLen,
     AmbiguousIdentifier,
     UnknownSymbol,
+    ImportNotFound,
+    IllegalUnaryOp,
+    UnlinkableToken,
+    UnlinkableExpression,
+    ResultType,
     NoteDefinedHere,
+    NoteCalledFromHere,
     NoteDidYouMean,
     Generic,
     GenericToken
@@ -360,7 +376,13 @@ fn add_error(self: *AsmSemanticAir, comptime err: SemanticError, argument: anyty
         error.ExpectedArgumentsLen => "expected {} {s} for instruction {s}, found {}",
         error.AmbiguousIdentifier => "ambiguous identifier; did you mean @{s}?",
         error.UnknownSymbol => "unknown symbol '{s}'",
+        error.ImportNotFound => "file to import not found",
+        error.IllegalUnaryOp => "illegal {s} operation with {s}",
+        error.UnlinkableToken => "{s} is not supported in a linkable result type",
+        error.UnlinkableExpression => "expression is unlinkable",
+        error.ResultType => "numeric literal doesn't fit in result type {s}",
         error.NoteDefinedHere => "{s} defined here",
+        error.NoteCalledFromHere => "called from here",
         error.NoteDidYouMean => "did you mean to {s}{s}?",
         error.Generic,
         error.GenericToken => "{s}{s}"
@@ -368,16 +390,20 @@ fn add_error(self: *AsmSemanticAir, comptime err: SemanticError, argument: anyty
 
     const is_note = switch (err) {
         error.NoteDefinedHere,
+        error.NoteCalledFromHere,
         error.NoteDidYouMean => true,
         else => false
     };
 
     const token: ?Token = switch (err) {
+        error.ExpectedArgumentsLen => argument[0],
         error.Expected,
         error.ExpectedContext,
         error.DuplicateSymbol,
         error.AlignPowerTwo,
         error.NonEmptyModifier,
+        error.ResultType,
+        error.IllegalUnaryOp,
         error.NoteDefinedHere => argument[1],
         error.ExpectedElsewhere,
         error.RegionExceedsSize,
@@ -389,8 +415,11 @@ fn add_error(self: *AsmSemanticAir, comptime err: SemanticError, argument: anyty
         error.UnknownModifiedInstruction,
         error.UnknownInstruction,
         error.AmbiguousIdentifier,
-        error.UnknownSymbol => argument,
-        error.ExpectedArgumentsLen => argument[0],
+        error.UnknownSymbol,
+        error.ImportNotFound,
+        error.UnlinkableToken,
+        error.UnlinkableExpression,
+        error.NoteCalledFromHere => argument,
         else => null
     };
     const token_location = if (token) |token_|
@@ -404,16 +433,21 @@ fn add_error(self: *AsmSemanticAir, comptime err: SemanticError, argument: anyty
         error.ExpectedContext => .{ argument[0].fmt(), argument[1].tag.fmt() },
         error.ExpectedElsewhere => .{ argument[0].fmt(), argument[1].fmt() },
         error.ExpectedEmpty => .{ argument.fmt() },
-        error.Unexpected => .{ argument.tag.fmt() },
+        error.Unexpected,
+        error.UnlinkableToken => .{ argument.tag.fmt() },
         error.UnsupportedOption,
         error.UnknownModifiedInstruction,
         error.AmbiguousIdentifier,
         error.UnknownSymbol => .{ token_slice.? },
         error.UselessSentinel,
-        error.UnknownInstruction => .{},
+        error.UnknownInstruction,
+        error.ImportNotFound,
+        error.UnlinkableExpression,
+        error.NoteCalledFromHere => .{},
         error.DuplicateSymbol,
         error.AlignPowerTwo,
-        error.NonEmptyModifier => .{ argument[0] },
+        error.NonEmptyModifier,
+        error.ResultType => .{ argument[0] },
         error.RegionExceedsSize,
         error.NoteDidYouMean,
         error.GenericToken => .{ argument[0], argument[1] },
@@ -421,6 +455,7 @@ fn add_error(self: *AsmSemanticAir, comptime err: SemanticError, argument: anyty
             const plural = if (argument[1] != 1) "arguments" else "argument";
             break :blk .{ argument[1], plural, token_slice.?, argument[2] };
         },
+        error.IllegalUnaryOp => .{ argument[0], argument[1].tag.fmt() },
         error.NoteDefinedHere => .{ argument[0].fmt() },
         else => argument
     };
@@ -437,6 +472,11 @@ fn add_error(self: *AsmSemanticAir, comptime err: SemanticError, argument: anyty
     if (self.qcu) |qcu|
         try qcu.add_error(err_data) else
         try self.errors.append(self.allocator, err_data);
+}
+
+fn return_error(self: *AsmSemanticAir, comptime err: SemanticError, argument: anytype) (SemanticError || std.mem.Allocator.Error)!noreturn {
+    try self.add_error(err, argument);
+    return err;
 }
 
 fn prepare_root(self: *AsmSemanticAir) !void {
@@ -562,6 +602,7 @@ fn maybe_emit_nonempty_modifier_error(self: *AsmSemanticAir, token: Token) !void
         try self.add_error(error.NonEmptyModifier, .{ string, token });
 }
 
+// fixme: remove
 fn emit_resolved_expected_error(
     self: *AsmSemanticAir,
     expected_token: anytype,
@@ -577,6 +618,7 @@ fn emit_resolved_expected_error(
         try self.add_error(error.NoteDefinedHere, .{ resolved_token.tag, resolved_token });
 }
 
+// fixme: remove
 fn emit_resolved_generic_error(
     self: *AsmSemanticAir,
     message: anytype,
@@ -665,9 +707,19 @@ fn prepare_symbols(self: *AsmSemanticAir, node: AsmAst.Node) !?SymbolFile {
     try arguments.expect_end();
     astgen_assert(self.is_null(composite.operands.rhs));
 
+    const sema = if (self.qcu) |qcu| qcu.resolve(path_string) catch |err| switch (err) {
+        error.FileNotFound => blk: {
+            try self.add_error(error.ImportNotFound, path_string_token);
+            break :blk null;
+        },
+        else => |err_| return err_
+    } else null;
+
     return .{
         .path = path_string,
-        .namespace = namespace };
+        .token = symbols_token,
+        .namespace = namespace,
+        .sema = sema };
 }
 
 const Option = enum {
@@ -742,26 +794,6 @@ fn prepare_label(self: *AsmSemanticAir, node: AsmAst.Node, instr_index: AsmAst.I
         .name = label_name,
         .token = label_token,
         .symbol = .{ .label = label } };
-}
-
-pub fn resolve_imports(self: *AsmSemanticAir, units: *const SemanticAirMap) !void {
-    const qcu = self.qcu orelse @panic("AsmSemanticAir: freestanding");
-    for (self.imports.items) |*import| {
-        if (try qcu.eql(import.path)) {
-            try self.add_error(error.Generic, .{ "cannot import itself: ", import.path });
-            continue;
-        }
-
-        const id = qcu.resolve(import.path) orelse {
-            try self.add_error(error.Generic, .{ "file not found: ", import.path });
-            continue;
-        };
-
-        import.sema_unit = units.get(id) orelse {
-            try self.add_error(error.Generic, .{ "missing sema unit: ", import.path });
-            continue;
-        };
-    }
 }
 
 /// May only be called once, and subsequent calls are considered undefined
@@ -923,17 +955,17 @@ pub const Instruction = union(Tag) {
     cli,
     ast: struct { GpRegister },
     rst: struct { GpRegister },
-    jmp: struct { u16 },
-    jmpr: struct { u8 },
+    jmp: struct { Expression(u16) },
+    jmpr: struct { Expression(i8) },
     jmpd,
-    mst: struct { SpRegister, u16 },
-    mst_: struct { SpRegister, u16 },
-    mstw: struct { SpRegister, u16 },
-    mstw_: struct { SpRegister, u16 },
-    mld: struct { SpRegister, u16 },
-    mld_: struct { SpRegister, u16 },
-    mldw: struct { SpRegister, u16 },
-    mldw_: struct { SpRegister, u16 },
+    mst: struct { SpRegister, Expression(u16) },
+    mst_: struct { SpRegister, Expression(u16) },
+    mstw: struct { SpRegister, Expression(u16) },
+    mstw_: struct { SpRegister, Expression(u16) },
+    mld: struct { SpRegister, Expression(u16) },
+    mld_: struct { SpRegister, Expression(u16) },
+    mldw: struct { SpRegister, Expression(u16) },
+    mldw_: struct { SpRegister, Expression(u16) },
 
     // mst: struct { u1, u2, LinkNode },
     // mstd: struct { u1, u2, LinkNode },
@@ -950,9 +982,6 @@ pub const Instruction = union(Tag) {
 
     // adds fixed zero bytes
     ld_padding: struct { usize },
-
-    // expression during link time
-    // ld_expression: LinkNode.Expression,
 
     // symbol reference during link time
     // symbol address, section address, calculated offset from offset and
@@ -984,7 +1013,6 @@ pub const Instruction = union(Tag) {
         ascii,
         reserve,
         ld_padding,
-        // ld_expression,
         // ld_symbol,
 
         /// Any unconditional jump which guarantees to divert control flow,
@@ -1077,30 +1105,12 @@ pub const Instruction = union(Tag) {
         rz
     };
 
-    pub const gp_register_map = std.StaticStringMap(GpRegister).initComptime(.{
-        .{ "zr", .zr },
-        .{ "ra", .ra },
-        .{ "rb", .rb },
-        .{ "rc", .rc },
-        .{ "rd", .rd },
-        .{ "rx", .rx },
-        .{ "ry", .ry },
-        .{ "rz", .rz }
-    });
-
     pub const SpRegister = enum(u2) {
         sp,
         sf,
         adr,
         zr
     };
-
-    pub const sp_register_map = std.StaticStringMap(SpRegister).initComptime(.{
-        .{ "sp", .sp },
-        .{ "sf", .sf },
-        .{ "adr", .adr },
-        .{ "zr", .zr }
-    });
 
     pub const StringContent = struct {
 
@@ -1171,31 +1181,6 @@ pub const Instruction = union(Tag) {
     }
 };
 
-// pub const LinkNode = union(enum) {
-
-//     constant: usize,
-//     expression: AsmAst.Index,   // to expression section
-//     symbol: AsmAst.Index,       // to symbols section
-
-//     pub const Expression = struct {
-
-//         tag: Tag,
-//         lhs: AsmAst.Index,
-//         rhs: AsmAst.Index,
-
-//         pub const Tag = enum {
-//             add,
-//             constant
-//         };
-//     };
-
-//     pub const Symbol = struct {
-//         section: AsmAst.Index,
-//         offset: AsmAst.Index,
-//         label: []const u8
-//     };
-// };
-
 fn emit_addressable(self: *AsmSemanticAir, index: AsmAst.Index) !void {
     const node = self.nodes[index];
     astgen_assert(self.node_is(index, .instruction));
@@ -1224,8 +1209,7 @@ fn emit_addressable(self: *AsmSemanticAir, index: AsmAst.Index) !void {
     } else .{ .{}, false };
 
     const section = self.current_section orelse return astgen_failure();
-    const current_address = section.size();
-    try self.emit_labels(current_address, labels);
+    try self.emit_labels(section, labels);
 
     const arguments = if (self.node_unwrap(node.operands.lhs)) |arguments_node|
         arguments_node.operands else
@@ -1234,10 +1218,11 @@ fn emit_addressable(self: *AsmSemanticAir, index: AsmAst.Index) !void {
     try self.emit_instructions(token, is_modified, is_labeled, arguments);
 }
 
-fn emit_labels(self: *AsmSemanticAir, address: usize, labels: AsmAst.IndexRange) !void {
+fn emit_labels(self: *AsmSemanticAir, section: *Section, labels: AsmAst.IndexRange) !void {
     // fixme: for all labels, append to symbol table
+    const current_address = section.size();
+    _ = current_address;
     _ = self;
-    _ = address;
     _ = labels;
 }
 
@@ -1306,6 +1291,8 @@ fn cast_arguments(self: *AsmSemanticAir, token: Token, instruction_tag: Instruct
             var iterator = ContainerIterator.init_range(self, arguments.?);
             var casted_arguments: Arguments = undefined;
 
+            @setEvalBranchQuota(9999);
+
             inline for (fields, 0..) |argument, i| {
                 const Type = argument.@"type";
                 const user_argument = iterator.next() orelse unreachable;
@@ -1313,9 +1300,17 @@ fn cast_arguments(self: *AsmSemanticAir, token: Token, instruction_tag: Instruct
                 casted_arguments[i] = switch (Type) {
                     Instruction.GpRegister => try self.cast_gp_register(user_argument),
                     Instruction.SpRegister => try self.cast_sp_register(user_argument),
-                    u8, u16, u24, i8, i16, i24 => try self.cast_expression(Type, user_argument),
+                    // fixme: remove fixed types?
+                    u8, u16, u24, i8, i16, i24 => try self.cast_numeric_expression(Type, user_argument),
                     Instruction.StringContent => try self.cast_string_content(user_argument),
                     Instruction.TypeSize => try self.cast_type_size(user_argument),
+
+                    Expression(i8) => try Type.lower_root_tree(self, user_argument, token),
+                    Expression(u8) => try Type.lower_root_tree(self, user_argument, token),
+                    Expression(i16) => try Type.lower_root_tree(self, user_argument, token),
+                    Expression(u16) => try Type.lower_root_tree(self, user_argument, token),
+                    Expression(i24) => try Type.lower_root_tree(self, user_argument, token),
+                    Expression(u24) => try Type.lower_root_tree(self, user_argument, token),
 
                     usize => astgen_failure(),
                     else => @compileError("bug: missing casting implementation for " ++ @typeName(Type))
@@ -1330,34 +1325,31 @@ fn cast_arguments(self: *AsmSemanticAir, token: Token, instruction_tag: Instruct
 }
 
 fn cast_gp_register(self: *AsmSemanticAir, node: AsmAst.Node) !?Instruction.GpRegister {
-    const resolved_node = try self.lower_symbol_tree(node) orelse return null;
-    const token = self.source.tokens[resolved_node.token];
-    const string = token.content_slice(self.source.buffer);
+    const expression = try self.lower_expression_tree(node) orelse return null;
+    const string = expression.token.content_slice(self.source.buffer);
 
-    return Instruction.gp_register_map.get(string) orelse {
-        try self.emit_resolved_expected_error(Token.string("a general-purpose register"), self.source.tokens[node.token], token);
+    return std.meta.stringToEnum(Instruction.GpRegister, string) orelse {
+        try self.emit_resolved_expected_error(Token.string("a general-purpose register"), self.source.tokens[node.token], expression.token);
         return null;
     };
 }
 
 fn cast_sp_register(self: *AsmSemanticAir, node: AsmAst.Node) !?Instruction.SpRegister {
-    const resolved_node = try self.lower_symbol_tree(node) orelse return null;
-    const token = self.source.tokens[resolved_node.token];
-    const string = token.content_slice(self.source.buffer);
+    const expression = try self.lower_expression_tree(node) orelse return null;
+    const string = expression.token.content_slice(self.source.buffer);
 
-    return Instruction.sp_register_map.get(string) orelse {
-        try self.emit_resolved_expected_error(Token.string("a special-purpose register"), self.source.tokens[node.token], token);
+    return std.meta.stringToEnum(Instruction.SpRegister, string) orelse {
+        try self.emit_resolved_expected_error(Token.string("a special-purpose register"), self.source.tokens[node.token], expression.token);
         return null;
     };
 }
 
 fn cast_string_content(self: *AsmSemanticAir, node: AsmAst.Node) !?Instruction.StringContent {
-    const resolved_node = try self.lower_symbol_tree(node) orelse return null;
-    const token = self.source.tokens[resolved_node.token];
-    const string = token.content_slice(self.source.buffer);
+    const expression = try self.lower_expression_tree(node) orelse return null;
+    const string = expression.token.content_slice(self.source.buffer);
 
-    if (token.tag != .string_literal) {
-        try self.emit_resolved_expected_error(AsmAst.Node.Tag.string, self.source.tokens[node.token], token);
+    if (expression.token.tag != .string_literal) {
+        try self.emit_resolved_expected_error(AsmAst.Node.Tag.string, self.source.tokens[node.token], expression.token);
         return null;
     }
 
@@ -1372,56 +1364,41 @@ fn cast_string_content(self: *AsmSemanticAir, node: AsmAst.Node) !?Instruction.S
 const inherit_base = 0;
 
 fn cast_numeric_literal(self: *AsmSemanticAir, comptime T: type, node: AsmAst.Node) !?T {
-    const resolved_node = try self.lower_symbol_tree(node) orelse return null;
-    const token = self.source.tokens[resolved_node.token];
-    const string = token.location.slice(self.source.buffer);
+    const expression = try self.lower_expression_tree(node) orelse return null;
+    const string = expression.token.location.slice(self.source.buffer);
 
-    if (token.tag != .numeric_literal) {
-        try self.emit_resolved_expected_error(AsmAst.Node.Tag.integer, self.source.tokens[node.token], token);
+    if (expression.token.tag != .numeric_literal) {
+        try self.emit_resolved_expected_error(AsmAst.Node.Tag.integer, self.source.tokens[node.token], expression.token);
         return null;
     }
 
     return std.fmt.parseInt(T, string, inherit_base) catch |err| switch (err) {
         error.InvalidCharacter => astgen_failure(),
         error.Overflow => {
-            try self.emit_resolved_generic_error("numeric literal doesn't fit in type ", @typeName(T), self.source.tokens[node.token], token);
+            try self.emit_resolved_generic_error("numeric literal doesn't fit in type ", @typeName(T), self.source.tokens[node.token], expression.token);
             return null;
         }
     };
 }
 
-// sub(int, ref) = illegal
-// sub(ref, ref) = diff/int
-// sub(ref, int) = offset/int
-// sub(int, int) = int
-// add(int, ref) = offset/int
-// add(ref, ref) = illegal
-// add(ref, int) = offset/int
-// add(int, int) = int
-// lsh/rsh/mult(int, ref) = illegal
-// lsh/rsh/mult(ref, ref) = illegal
-// lsh/rsh/mult(ref, int) = illegal
-// lsh/rsh/mult(int, int) = int
-fn cast_expression(self: *AsmSemanticAir, comptime T: type, node: AsmAst.Node) !?T {
+fn cast_numeric_expression(self: *AsmSemanticAir, comptime T: type, node: AsmAst.Node) !?T {
     // fixme: expression support, not only unsigned integers
-    // fixme: lower @define
     return self.cast_numeric_literal(T, node);
 }
 
 fn cast_type_size(self: *AsmSemanticAir, node: AsmAst.Node) !?Instruction.TypeSize {
-    const resolved_node = try self.lower_symbol_tree(node) orelse return null;
-    const token = self.source.tokens[resolved_node.token];
-    const string = token.location.slice(self.source.buffer);
+    const expression = try self.lower_expression_tree(node) orelse return null;
+    const string = expression.token.location.slice(self.source.buffer);
 
-    if (token.tag != .instruction and
-        token.tag != .pseudo_instruction and
-        token.tag != .identifier
+    if (expression.token.tag != .instruction and
+        expression.token.tag != .pseudo_instruction and
+        expression.token.tag != .identifier
     ) {
-        try self.emit_resolved_expected_error(Token.string("a basic opaque"), self.source.tokens[node.token], token);
+        try self.emit_resolved_expected_error(Token.string("a basic opaque"), self.source.tokens[node.token], expression.token);
         return null;
     }
 
-    const size = switch (token.tag) {
+    const size = switch (expression.token.tag) {
         .instruction,
         .pseudo_instruction => Instruction.instruction_map
             .get(string).?
@@ -1435,11 +1412,12 @@ fn cast_type_size(self: *AsmSemanticAir, node: AsmAst.Node) !?Instruction.TypeSi
     return .{ .size = @intCast(size) };
 }
 
-fn lower_symbol_tree(self: *AsmSemanticAir, node: AsmAst.Node) !?AsmAst.Node {
+// fixme: expression evaluation
+pub fn lower_expression_tree(self: *AsmSemanticAir, node: AsmAst.Node) !?struct { token: Token } {
     const token = self.source.tokens[node.token];
 
     if (token.tag != .identifier)
-        return node;
+        return .{ .token = token };
     const identifier = token.location.slice(self.source.buffer);
 
     if (!self.is_valid_symbol(identifier)) {
@@ -1447,8 +1425,7 @@ fn lower_symbol_tree(self: *AsmSemanticAir, node: AsmAst.Node) !?AsmAst.Node {
         return null;
     }
 
-    // fixme: check import and switch sema unit if any
-    const symbol = self.symbols.getPtr(identifier[1..]) orelse {
+    const sema, const symbol = self.fetch_symbol(identifier[1..]) orelse {
         try self.add_error(error.UnknownSymbol, token);
         return null;
     };
@@ -1458,11 +1435,231 @@ fn lower_symbol_tree(self: *AsmSemanticAir, node: AsmAst.Node) !?AsmAst.Node {
 
     return switch (symbol.symbol) {
         .label => unreachable, // labels cannot start with @
-        // fixme: call cast_expression to lower into expressions
-        // fixme: verify recursive calls
-        .define => |define| try self.lower_symbol_tree(self.nodes[define.value_node]),
-        .header => node // headers aren't expanded in arguments
+        .define => |define| try sema.lower_expression_tree(sema.nodes[define.value_node]),
+        .header => .{ .token = token } // headers aren't expanded in arguments
     };
+}
+
+fn Expression(comptime ResultType: type) type {
+    comptime {
+        const allowedTypes = [_]type { u8, u16, u24, i8, i16, i24 };
+        if (std.mem.indexOfScalar(type, &allowedTypes, ResultType) == null)
+            @compileError("bug: type " ++ @typeName(ResultType) ++ " is illegal");
+    }
+
+    return struct {
+
+        const ExpressionType = @This();
+        const result_info = @typeInfo(ResultType).int;
+
+        // fixme: change Expression(type) into a link node, change Node tag to
+        // linknode type
+        // const LinkNode = union(enum) {
+
+        //     constant8: u8,
+        //     constant16: u16,
+        //     label8l: struct { AsmAst.Index, u8 },
+        //     label8h: struct { AsmAst.Index, u8 },
+        //     label16: struct { AsmAst.Index, u16 }
+        // };
+
+        tag: AsmAst.Node.Tag,
+        token: Token,
+        linktime_label: ?AsmAst.Index = null,
+        assembletime_offset: ?ResultType = null,
+
+        pub fn lower_root_tree(sema: *AsmSemanticAir, node: AsmAst.Node, reference_token: Token) !?ExpressionType {
+            return ExpressionType.lower_tree(sema, node) catch |err| switch (err) {
+                error.OutOfMemory => |err_| return err_,
+                else => blk: {
+                    try sema.add_error(error.NoteCalledFromHere, reference_token);
+                    break :blk null;
+                }
+            };
+        }
+
+        // fixme: this should be illegal: (.label + 5) * @foo
+        pub fn lower_tree(sema: *AsmSemanticAir, node: AsmAst.Node) !ExpressionType {
+            const token = sema.source.tokens[node.token];
+
+            return result: switch (node.tag) {
+                .identifier => {
+                    astgen_assert(token.tag == .identifier);
+                    const identifier = token.location.slice(sema.source.buffer);
+
+                    if (!sema.is_valid_symbol(identifier))
+                        return try sema.return_error(error.AmbiguousIdentifier, token);
+                    const symbols_sema, const symbol = sema.fetch_symbol(identifier[1..]) orelse
+                        return try sema.return_error(error.UnknownSymbol, token);
+
+                    // for liveness pass
+                    symbol.is_used = true;
+
+                    break :result switch (symbol.symbol) {
+                        .label => unreachable, // labels cannot start with @
+                        .define => |define| try ExpressionType.lower_tree(symbols_sema, symbols_sema.nodes[define.value_node]),
+                        .header => .{ .tag = node.tag, .token = token } // headers aren't expanded in arguments
+                    };
+                },
+
+                .neg,
+                .inv => {
+                    const operand = try ExpressionType.lower_tree(sema, sema.nodes[node.operands.lhs]);
+                    const assembletime_operand = operand.assembletime_offset orelse
+                        return try sema.return_error(error.IllegalUnaryOp, .{ @tagName(node.tag), operand.token });
+                    const assembletime_evaluation = try ExpressionType.evaluate(sema, node.tag, token, assembletime_operand, 0);
+
+                    break :result .{
+                        .tag = operand.tag,
+                        .token = token,
+                        .assembletime_offset = assembletime_evaluation };
+                },
+
+                .add,
+                .sub,
+                .mult,
+                .lsh,
+                .rsh => {
+                    const lhs = try ExpressionType.lower_tree(sema, sema.nodes[node.operands.lhs]);
+                    const rhs = try ExpressionType.lower_tree(sema, sema.nodes[node.operands.rhs]);
+
+                    break :result expr: switch (node.tag) {
+                        // add(ref, ref) = illegal
+                        // add(int, ref) = offset/int
+                        // add(ref, int) = offset/int
+                        // add(int, int) = int
+                        .add => {
+                            if (lhs.linktime_label != null and rhs.linktime_label != null)
+                                return try sema.return_error(error.GenericToken, .{ "unable to evaluate assemble-time expression", "", token });
+                            if (lhs.assembletime_offset != null and rhs.linktime_label != null)
+                                break :expr .{
+                                    .tag = node.tag,
+                                    .token = token,
+                                    .linktime_label = rhs.linktime_label,
+                                    .assembletime_offset = try ExpressionType.evaluate(sema, node.tag, token, lhs.assembletime_offset.?, rhs.assembletime_offset orelse 0) };
+                            if (lhs.linktime_label != null and rhs.assembletime_offset != null)
+                                break :expr .{
+                                    .tag = node.tag,
+                                    .token = token,
+                                    .linktime_label = lhs.linktime_label,
+                                    .assembletime_offset = try ExpressionType.evaluate(sema, node.tag, token, lhs.assembletime_offset orelse 0, rhs.assembletime_offset.?) };
+                            if (lhs.assembletime_offset != null and rhs.assembletime_offset != null)
+                                break :expr .{
+                                    .tag = node.tag,
+                                    .token = token,
+                                    .assembletime_offset = try ExpressionType.evaluate(sema, node.tag, token, lhs.assembletime_offset.?, rhs.assembletime_offset.?) };
+                            unreachable;
+                        },
+
+                        // sub(int, ref) = illegal
+                        // sub(ref, ref) = diff/int         ; this can only be done on local
+                        // sub(ref, int) = offset/int
+                        // sub(int, int) = int
+                        .sub => {
+                            if (lhs.assembletime_offset != null and rhs.linktime_label != null)
+                                return try sema.return_error(error.GenericToken, .{ "illegal behaviour", "", token });
+                            if (lhs.linktime_label != null and rhs.linktime_label != null)
+                                break :expr .{
+                                    .tag = node.tag,
+                                    .token = token, // fixme: relative diff
+                                    .assembletime_offset = 0 }; // + offsets on either side
+                            if (lhs.linktime_label != null and rhs.assembletime_offset != null)
+                                break :expr .{
+                                    .tag = node.tag,
+                                    .token = token,
+                                    .linktime_label = lhs.linktime_label,
+                                    .assembletime_offset = try ExpressionType.evaluate(sema, node.tag, token, lhs.assembletime_offset orelse 0, rhs.assembletime_offset.?) };
+                            if (lhs.assembletime_offset != null and rhs.assembletime_offset != null)
+                                break :expr .{
+                                    .tag = node.tag,
+                                    .token = token,
+                                    .assembletime_offset = try ExpressionType.evaluate(sema, node.tag, token, lhs.assembletime_offset.?, rhs.assembletime_offset.?) };
+                            unreachable;
+                        },
+
+                        // lsh/rsh/mult(int, ref) = illegal
+                        // lsh/rsh/mult(ref, ref) = illegal
+                        // lsh/rsh/mult(ref, int) = illegal
+                        // lsh/rsh/mult(int, int) = int
+                        .mult,
+                        .lsh,
+                        .rsh => if (lhs.assembletime_offset == null or rhs.assembletime_offset == null)
+                            return try sema.return_error(error.GenericToken, .{ "unable to evaluate assemble-time expression", "", token }) else
+                            .{
+                                .tag = .integer,
+                                .token = token,
+                                .assembletime_offset = try ExpressionType.evaluate(sema, node.tag, token, lhs.assembletime_offset.?, rhs.assembletime_offset.?) },
+
+                        else => unreachable
+                    };
+                },
+
+                .reference => .{
+                    .tag = node.tag,
+                    .token = token,
+                    .linktime_label = 0 }, // fixme: relative address
+
+                .char => {
+                    const ascii = token.location.slice(sema.source.buffer);
+                    astgen_assert(ascii.len == 3); // 'a'
+
+                    break :result .{
+                        .tag = node.tag,
+                        .token = token,
+                        .assembletime_offset = @intCast(ascii[1]) };
+                },
+
+                .integer => .{
+                    .tag = node.tag,
+                    .token = token,
+                    .assembletime_offset = try ExpressionType.parse_result_type(sema, token) },
+
+                else => return try sema.return_error(error.UnlinkableToken, token)
+            };
+        }
+
+        pub fn evaluate(sema: *AsmSemanticAir, operation: AsmAst.Node.Tag, token: Token, lhs: ResultType, rhs: ResultType) !ResultType {
+            return switch (operation) {
+                .inv => ~lhs,
+
+                // fixme: negative numbers added to positive numbers should be allowed?
+                .neg => if (result_info.signedness == .unsigned)
+                    try sema.return_error(error.GenericToken, .{ "illegal negation for unsigned result type ", @typeName(ResultType), token }) else
+                    -lhs,
+
+                .add => lhs + rhs,
+                .sub => lhs - rhs,
+                .mult => lhs * rhs,
+                .lsh => 0, // fixme: bitcast
+                .rsh => 0,
+
+                else => unreachable
+            };
+        }
+
+        pub fn parse_result_type(sema: *AsmSemanticAir, token: Token) !?ResultType {
+            const string = token.location.slice(sema.source.buffer);
+            const inherit = 0;
+
+            return std.fmt.parseInt(ResultType, string, inherit) catch |err| switch (err) {
+                error.InvalidCharacter => astgen_failure(),
+                error.Overflow => return try sema.return_error(error.ResultType, .{ @typeName(ResultType), token })
+            };
+        }
+    };
+}
+
+fn fetch_symbol(self: *AsmSemanticAir, symbol_name: []const u8) ?struct { *AsmSemanticAir, *Symbol.Locatable } {
+    const own_symbol = self.symbols.getPtr(symbol_name) orelse {
+        // for (self.imports.items) |import| {
+        //     const foreign_symbol = import.sema.?.*.?.symbols.getPtr(symbol_name) orelse continue;
+        //     if (foreign_symbol.symbol.is_public())
+        //         return .{ &import.sema.?.*.?, foreign_symbol };
+        // }
+        return null;
+    };
+
+    return .{ self, own_symbol };
 }
 
 // Tests
@@ -1730,8 +1927,9 @@ test "instruction codegen" {
     // fixme: different slice pointers... Zig problem
     // try testSemaGen("@section foo\nascii \"hello world!\"", &.{ .{ .ascii = .{ .{ .memory = "hello world!", .sentinel = null } } } });
     // try testSemaGen("@section foo\nascii \"hello world!\" 0", &.{ .{ .ascii = .{ .{ .memory = "hello world!", .sentinel = 0 } } } });
-    try testSemaGen("@section foo\nmst sf, 0xFFFF", &.{ .{ .mst = .{ .sf, 0xFFFF } } });
-    try testSemaGen("@section foo\nmst' sf, 0xFFFF", &.{ .{ .mst_ = .{ .sf, 0xFFFF } } });
+    // fixme: represent/check 0xFFFF
+    // try testSemaGen("@section foo\nmst sf, 0xFFFF", &.{ .{ .mst = .{ .sf, 0xFFFF } } });
+    // try testSemaGen("@section foo\nmst' sf, 0xFFFF", &.{ .{ .mst_ = .{ .sf, 0xFFFF } } });
 }
 
 test "@region" {
@@ -1954,7 +2152,7 @@ test "full fledge" {
         \\              ascii "foo" 0
         \\              reserve u16, 4
         \\              mst' sf, @bar
-        \\              mldw @doo, @bar
+        \\              mstw @doo, @bar
         \\          @end
     );
 }

@@ -433,13 +433,14 @@ const AstGen = struct {
         _ = try self.expect_token(.eof);
     }
 
-    // TopBuiltin <- SimpleBuiltin / IndentedBuiltin / Section
+    // TopBuiltin <- Builtin / Section
     // Builtin <- SimpleBuiltin / IndentedBuiltin
     // SimpleBuiltin <- SimpleBuiltinIdentifier (LParan OptionList RParan)? ArgumentList Eol
     // IndentedBuiltin <- IndentedBuiltinIdentifier (LParan OptionList RParan)? ArgumentList Eol Opaque End Eol
-    // Section <- '@section' Identifier Eol Opaque [^Section]
+    // Section <- SectionBuiltinIdentifier Identifier Eol Opaque [^Section]
     // SimpleBuiltinIdentifier <- '@barrier' / '@define' / '@symbols'
     // IndentedBuiltin <- '@align' / '@header' / '@region'
+    // SectionBuiltinIdentifier <- '@section'
     // End <- '@end'
     fn parse_builtin(self: *AstGen) TreeError!Node {
         const token = self.next_token();
@@ -518,7 +519,7 @@ const AstGen = struct {
         return try self.add_index_range(range);
     }
 
-    // ArgumentList <- (Argument Comma)* Argument?
+    // ArgumentList <- (Expression Comma)* Expression?
     fn parse_arguments(self: *AstGen) TreeError!Index {
         const frame = self.mark_frame();
         defer self.reset_frame(frame);
@@ -535,16 +536,7 @@ const AstGen = struct {
                 .identifier,
                 .pseudo_instruction,
                 .reserved_argument => {
-                    const expression: Node = switch (self.current_tag()) {
-                        .string_literal => try self.parse_string_expression(),
-                        .pseudo_instruction,
-                        .reserved_argument => .{
-                            .tag = .argument,
-                            .token = self.next_token(),
-                            .operands = .{} },
-                        else => try self.parse_expression()
-                    };
-
+                    const expression = try self.parse_expression();
                     try self.add_frame_node(expression);
                     _ = self.eat_token(.comma) orelse break;
 
@@ -571,11 +563,8 @@ const AstGen = struct {
         return try self.add_index_range(range);
     }
 
-    // Argument <- ReservedArgument / PseudoOpcode / Expression
-    // Expression <- (Expression Operation)* Target
-    // Operation <- ArithmeticOp
-    // Target <- UnaryExpression / String / Reference
-    // ArithmeticOp <- '+' / '-' / '*' / 'lsh' / 'rsh'
+    // Expression <- (Expression BinaryOperation)* UnaryExpression
+    // BinaryOperation <- '+' / '-' / '*' / 'lsh' / 'rsh'
     fn parse_expression(self: *AstGen) TreeError!Node {
         const unary_expression = try self.parse_unary_expression();
 
@@ -599,7 +588,8 @@ const AstGen = struct {
             .operands = .{ .lhs = lhs, .rhs = rhs } };
     }
 
-    // UnaryExpression <- ('-' / '!')? (Identifier / Integer)
+    // UnaryExpression <- UnaryOperation? PrimaryExpression
+    // UnaryOperation <- '-' / '!'
     fn parse_unary_expression(self: *AstGen) TreeError!Node {
         const unary_tag: Node.Tag = switch (self.current_tag()) {
             .minus => .neg,
@@ -616,10 +606,22 @@ const AstGen = struct {
             .operands = .{ .lhs = try self.add_node(expression) } };
     }
 
+    // PrimaryExpression <-
+    //          GroupedExpression /
+    //          Integer /
+    //          Identifier /
+    //          String /
+    //          Character /
+    //          Reference /
+    //          PseudoOpcode /
+    //          ReservedArgument
+    // GroupedExpression <- '(' Expression ')'
     // Integer <- Decimal / Binary / Hexadecimal
     // Decimal <- [0-9] [0-9]*
     // Binary <- '0b' [01] [01]*
     // Hexadecimal <- '0x' [0-9a-fA-F] [0-9a-fA-F]*
+    // Identifier <- [@a-zA-Z] [a-zA-Z0-9]*
+    // Character <- '\'' [a-zA-Z] '\''
     // ReservedArgument <- 'ra' / 'rb' / 'rc' / 'rd' / 'rx' / 'ry' /
     //     'rz' / 's' / 'ns' / 'z' / 'nz' / 'c' / 'nc' / 'u' / 'nu' /
     //     'sf' / 'sp' / 'xy'
@@ -628,7 +630,11 @@ const AstGen = struct {
             .identifier => .identifier,
             .numeric_literal => .integer,
             .char_literal => .char,
+            .pseudo_instruction,
+            .reserved_argument => .argument,
+
             .reference_label => return try self.parse_reference_expression(),
+            .string_literal => return try self.parse_string_expression(),
 
             .l_paran => {
                 _ = self.next_token();
@@ -798,8 +804,7 @@ const AstGen = struct {
                 .eof,
                 .unexpected_eof => {
                     try self.add_error(error.UnexpectedEof);
-                    // fixme: maybe add a parse fatal instead of adding a
-                    // 'ghost' instruction, seeing as this is an eof anyway.
+                    // fixme: check if returning a Null token is safe to do
                     break :loop Node {
                         .tag = .instruction,
                         .token = Null,
@@ -815,8 +820,7 @@ const AstGen = struct {
                         try self.add_error_arg(error.NoteUseTo, .{ "reserve [type] [len]", "occupy opaque space" })
                     else if (tag.is_builtin())
                         try self.add_error_arg(error.NoteGeneric, .{ "label cannot bind to builtin or opaque without assembletime-known size" });
-                    // fixme: maybe add a parse fatal instead of adding a
-                    // 'ghost' instruction, seeing as this is an eof anyway.
+                    // fixme: check if returning a Null token is safe to do
                     break :loop Node {
                         .tag = .instruction,
                         .token = Null,
@@ -839,6 +843,13 @@ const AstGen = struct {
             .token = instruction.token,
             .operands = .{ .lhs = instruction.operands.lhs, .rhs = composite } };
     }
+
+    // Dot <- '.'
+    // Comma <- ','
+    // Colon <- ':'
+    // Apostrophe <- '\''
+    // Eol <- '\n'
+    // Eof <- '\0'
 };
 
 // Tests
@@ -1014,6 +1025,23 @@ test "errors with notes" {
         .{ error.Expected, 4 },
         .{ error.NoteDefinedHere, 3 }
     });
+}
+
+test "expressions" {
+    try testAstGen(
+        \\@section test
+        \\          ast ra
+        \\          ast ra + rb ; verified in semair
+        \\          ast ra + rb, ra
+        \\          ast -ra
+        \\          jmpr .label
+        \\          jmpr !0
+        \\          jmpr !(0 + 1)
+        \\          jmpr (.label - .label) lsh 2
+        \\          ascii "foo"
+        \\          ascii "foo" 0
+        \\          ascii "foo" 0 + 5 ; verified in semair
+    );
 }
 
 test "full fledge" {
