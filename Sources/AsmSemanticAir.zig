@@ -361,6 +361,7 @@ const SemanticError = error {
     DuplicateSymbol,
     AlignPowerTwo,
     RegionExceedsSize,
+    MissingBarrierContext,
     NonEmptyModifier,
     UnknownModifiedInstruction,
     UnknownInstruction,
@@ -393,6 +394,7 @@ fn add_error(self: *AsmSemanticAir, comptime err: SemanticError, argument: anyty
         error.DuplicateSymbol => "duplicate symbol '{s}'",
         error.AlignPowerTwo => "alignment of {} is not a power of two",
         error.RegionExceedsSize => "region of opaque size {} exceeds fixed region of {} bytes",
+        error.MissingBarrierContext => "@barrier must be defined in a @section context",
         error.NonEmptyModifier => "an empty modifier value is required, but {s} was used",
         error.UnknownModifiedInstruction => "instruction {s} doesn't support a modifier",
         error.UnknownInstruction => "unknown instruction in the QCPU instruction set",
@@ -440,6 +442,7 @@ fn add_error(self: *AsmSemanticAir, comptime err: SemanticError, argument: anyty
         error.AmbiguousIdentifier,
         error.UnknownSymbol,
         error.ImportNotFound,
+        error.MissingBarrierContext,
         error.UnlinkableToken,
         error.UnlinkableExpression,
         error.NoteCalledFromHere => argument,
@@ -465,6 +468,7 @@ fn add_error(self: *AsmSemanticAir, comptime err: SemanticError, argument: anyty
         error.UselessSentinel,
         error.UnknownInstruction,
         error.ImportNotFound,
+        error.MissingBarrierContext,
         error.UnlinkableExpression,
         error.NoteCalledFromHere => .{},
         error.DuplicateSymbol,
@@ -543,19 +547,15 @@ fn prepare_opaque_container(self: *AsmSemanticAir, parent_node: AsmAst.Node, sym
                     },
 
                     .builtin_region,
-                    .builtin_section => {
-                        // fixme: empty regions will throw an error
-                        // fixme: empty sections aren't a Null opaque
-                        astgen_assert(self.node_is(composite.operands.rhs, .container));
-                        // if (self.is_null(composite.operands.rhs))
-                        //     return;
-                        const opaque_ = self.nodes[composite.operands.rhs];
-                        try self.prepare_opaque_container(opaque_, symbol_map);
+                    .builtin_section,
+                    .builtin_barrier => {
+                        astgen_assert(self.node_is_null_or(composite.operands.rhs, .container));
+                        if (self.node_unwrap(composite.operands.rhs)) |opaque_|
+                            try self.prepare_opaque_container(opaque_, symbol_map);
                     },
 
                     // nothing to do here
-                    .builtin_align,
-                    .builtin_barrier => {},
+                    .builtin_align => {},
 
                     // transparent in the AST
                     .builtin_end => astgen_failure(),
@@ -833,14 +833,20 @@ fn analyse_container(self: *AsmSemanticAir, parent_node: AsmAst.Node) !void {
         switch (node.tag) {
             .builtin => switch (token.tag) {
                 .builtin_align => try self.emit_align(node),
-                .builtin_barrier => try self.emit_barrier(node),
+
+                .builtin_barrier => {
+                    try self.emit_barrier(node);
+                    const composite = self.nodes[node.operands.rhs];
+                    if (self.node_unwrap(composite.operands.rhs)) |opaque_|
+                        try self.analyse_container(opaque_);
+                },
 
                 .builtin_region => {
                     const section = self.current_section orelse astgen_failure();
                     const begin_address = section.size();
                     const composite = self.nodes[node.operands.rhs];
-                    const opaque_ = self.nodes[composite.operands.rhs];
-                    try self.analyse_container(opaque_);
+                    if (self.node_unwrap(composite.operands.rhs)) |opaque_|
+                        try self.analyse_container(opaque_);
 
                     const len = section.size() - begin_address;
                     try self.emit_region(node, len);
@@ -853,8 +859,8 @@ fn analyse_container(self: *AsmSemanticAir, parent_node: AsmAst.Node) !void {
                     };
 
                     const composite = self.nodes[node.operands.rhs];
-                    const opaque_ = self.nodes[composite.operands.rhs];
-                    try self.analyse_container(opaque_);
+                    if (self.node_unwrap(composite.operands.rhs)) |opaque_|
+                        try self.analyse_container(opaque_);
                 },
 
                 // nothing to do here
@@ -909,7 +915,8 @@ fn emit_barrier(self: *AsmSemanticAir, node: AsmAst.Node) !void {
     const barrier_token = self.source.tokens[node.token];
     try ContainerIterator.expect_empty(self, node.operands.lhs, barrier_token);
 
-    const existing_section = self.current_section orelse return astgen_failure();
+    const existing_section = self.current_section orelse
+        return try self.add_error(error.MissingBarrierContext, barrier_token);
     const section = try self.allocator.create(Section);
     section.* = .{
         .token = barrier_token,
@@ -2041,6 +2048,13 @@ test "@barrier" {
     , &.{
         error.Unexpected,
         error.Unexpected
+    });
+
+    try testSemaErr(
+        \\@barrier
+        \\@section foo
+    , &.{
+        error.MissingBarrierContext
     });
 
     try testSemaGen(

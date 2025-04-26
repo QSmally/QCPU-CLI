@@ -46,14 +46,14 @@ pub const Tag = enum {
     pub fn builtin_opaque(self: Tag) bool {
         return switch (self) {
             .builtin_align,
-            .builtin_barrier,
             .builtin_define,
             .builtin_end,
             .builtin_symbols => false,
 
             .builtin_header,
             .builtin_region,
-            .builtin_section => true,
+            .builtin_section,
+            .builtin_barrier => true,
 
             else => unreachable
         };

@@ -380,13 +380,13 @@ const AstGen = struct {
                 .builtin_define,
                 .builtin_header,
                 .builtin_section,
+                .builtin_barrier,
                 .builtin_symbols => {
                     const builtin = try self.parse_builtin();
                     try self.add_frame_node(builtin);
                 },
 
                 .builtin_align,
-                .builtin_barrier,
                 .builtin_region => {
                     try self.add_error(error.BuiltinOpaqueLevel);
                     // recover by parsing the rest so the Ast reports other
@@ -454,7 +454,7 @@ const AstGen = struct {
         const opaque_ = if (has_opaque) blk: {
             const payload = try self.parse_opaque();
 
-            if (tag == .builtin_section)
+            if (tag == .builtin_section or tag == .builtin_barrier)
                 break :blk payload;
             if (self.source.tokens[self.cursor].tag != .builtin_end) {
                 try self.add_error_arg(error.Expected, Token.Tag.builtin_end);
@@ -696,7 +696,6 @@ const AstGen = struct {
         while (true) {
             switch (self.current_tag()) {
                 .builtin_align,
-                .builtin_barrier, // fixme: barriers can only appear at section-level
                 .builtin_define,
                 .builtin_region => {
                     const builtin = try self.parse_builtin();
@@ -733,7 +732,8 @@ const AstGen = struct {
 
                 .eof,
                 .builtin_end,
-                .builtin_section => break,
+                .builtin_section,
+                .builtin_barrier => break,
 
                 .newline => _ = self.next_token(),
 
@@ -804,7 +804,6 @@ const AstGen = struct {
                 .eof,
                 .unexpected_eof => {
                     try self.add_error(error.UnexpectedEof);
-                    // fixme: check if returning a Null token is safe to do
                     break :loop Node {
                         .tag = .instruction,
                         .token = Null,
@@ -816,11 +815,10 @@ const AstGen = struct {
                     try self.add_node_notes(self.temporary.items[frame..]);
 
                     const tag = self.current_tag();
-                    if (tag == .builtin_section or tag == .builtin_end)
+                    if (tag == .builtin_section or tag == .builtin_barrier or tag == .builtin_end)
                         try self.add_error_arg(error.NoteUseTo, .{ "reserve [type] [len]", "occupy opaque space" })
                     else if (tag.is_builtin())
                         try self.add_error_arg(error.NoteGeneric, .{ "label cannot bind to builtin or opaque without assembletime-known size" });
-                    // fixme: check if returning a Null token is safe to do
                     break :loop Node {
                         .tag = .instruction,
                         .token = Null,
@@ -1041,6 +1039,20 @@ test "expressions" {
         \\          ascii "foo"
         \\          ascii "foo" 0
         \\          ascii "foo" 0 + 5 ; verified in semair
+    );
+}
+
+test "barriers" {
+    try testAstGen(
+        \\@barrier ; verified in semair
+        \\@section test
+        \\          ast ra
+        \\@region 24
+        \\@end
+        \\@barrier
+        \\          ast ra
+        \\@section test
+        \\          ast rb
     );
 }
 
