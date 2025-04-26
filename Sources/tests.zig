@@ -5,6 +5,7 @@ pub const AsmAst = @import("AsmAst.zig");
 pub const AsmSemanticAir = @import("AsmSemanticAir.zig");
 pub const AsmLiveness = @import("AsmLiveness.zig");
 pub const Qcu = @import("Qcu.zig");
+pub const qcpu = @import("qcpu.zig");
 
 test {
     const std = @import("std");

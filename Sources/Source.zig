@@ -41,6 +41,18 @@ pub fn deinit(self: Source) void {
     self.allocator.free(self.tokens);
 }
 
+pub fn dump(self: Source, writer: anytype) !void {
+    for (self.tokens, 0..) |token, idx| {
+        const slice = if (token.tag != .newline)
+            token.location.slice(self.buffer) else
+            "\\n";
+        try writer.print("    {}: {s}={s}\n", .{
+            idx,
+            @tagName(token.tag),
+            slice });
+    }
+}
+
 pub fn location_of(self: Source, token_location: Token.Location) FileLocation {
     var line: usize = 1;
     var line_cursor: usize = 0;

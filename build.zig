@@ -5,17 +5,12 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // const clap = b.dependency("clap", .{
-    //     .target = target,
-    //     .optimize = optimize });
-
-    // const qcpuv = b.addExecutable(.{
-    //     .name = "qcpuv",
-    //     .root_source_file = .{ .path = "Sources/qcpuv.zig" },
-    //     .target = target,
-    //     .optimize = optimize });
-    // qcpuv.addModule("clap", clap.module("clap"));
-    // b.installArtifact(qcpuv);
+    const qcpu = b.addExecutable(.{
+        .name = "qcpu",
+        .root_source_file = b.path("Sources/qcpu.zig"),
+        .target = target,
+        .optimize = optimize });
+    b.installArtifact(qcpu);
 
     const test_options = b.addOptions();
     const option_dump = b.option(bool, "dump", "dump debug information");

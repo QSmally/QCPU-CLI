@@ -24,9 +24,12 @@ const Qcu = @This();
 allocator: std.mem.Allocator,
 cwd: std.fs.Dir,
 files: FileList,
+link_list: FileList,
 options: Options,
 work_queue: JobQueue,
 errors: ErrorList,
+
+log: std.fs.File = std.io.getStdErr(),
 
 /// Each run of QCPU-CLI contains exactly one Qcu. From a list of input files,
 /// it performs tokenisation, AstGen, and lastly, both passes of semantic
@@ -44,6 +47,7 @@ pub fn init(
         .allocator = allocator,
         .cwd = cwd,
         .files = .empty,
+        .link_list = .empty,
         .options = options,
         .work_queue = .init(allocator, {}),
         .errors = .empty };
@@ -60,6 +64,7 @@ pub fn deinit(self: *Qcu) void {
     for (self.files.items) |file|
         file.deinit();
     self.files.deinit(self.allocator);
+    self.link_list.deinit(self.allocator);
     self.work_queue.deinit();
     for (self.errors.items) |lerr|
         self.allocator.free(lerr.err.message);
@@ -68,7 +73,13 @@ pub fn deinit(self: *Qcu) void {
 }
 
 pub const Options = struct {
-    noliveness: bool = false
+    dload: bool = false,
+    dtokens: bool = false,
+    dast: bool = false,
+    dair: bool = false,
+    noliveness: bool = false,
+    noelimination: bool = false,
+    origin: u16 = 0
 };
 
 pub const File = struct {
@@ -115,6 +126,12 @@ pub const File = struct {
             .sha256 = undefined };
         file.buffer = try file.get_source();
         file.sha256 = file.get_hash_source();
+
+        if (qcu.options.dload)
+            try qcu.log.writer().print("File load '{s}' ({}) ({s})\n", .{
+                file_path,
+                std.fmt.fmtIntSizeBin(file.buffer.len),
+                std.fmt.bytesToHex(file.sha256, .lower) });
         return file;
     }
 
@@ -139,6 +156,12 @@ pub const File = struct {
         self.free_temporary();
         self.allocator.free(self.buffer);
         self.allocator.destroy(self);
+    }
+
+    fn dump(self: *File, tag: []const u8, thing: anytype) !void {
+        const log = self.qcu.log.writer();
+        try log.print("{s} ({s}):\n", .{ tag, self.file_path });
+        try thing.dump(log);
     }
 
     // From SemanticAir (and Liveness)
@@ -182,8 +205,11 @@ pub const File = struct {
 
         var tokeniser = AsmTokeniser.init(self.buffer);
         self.source = try Source.init(self.allocator, &tokeniser);
+        if (self.qcu.options.dtokens) try self.dump("Tokens", &self.source.?);
+
         self.ast = try AsmAst.init(self.allocator, self.source.?);
         defer self.ast.?.allocator.free(self.ast.?.errors); // not nodes or error messages
+        if (self.qcu.options.dast) try self.dump("AST", &self.ast.?);
 
         if (self.ast.?.errors.len > 0) {
             try self.qcu.errors.ensureUnusedCapacity(self.allocator, self.ast.?.errors.len);
@@ -209,9 +235,15 @@ pub const File = struct {
         std.debug.assert(self.sema.?.sections.count() == 0);
 
         try self.sema.?.semantic_analyse();
+        if (self.qcu.options.dair) try self.dump("AIR", &self.sema.?);
+
         std.debug.assert(self.sema.?.errors.items.len == 0);
         try self.verify_errorless_or(error.SemanticAnalysis);
         std.debug.assert(self.qcu.errors.items.len == 0);
+
+        // imports aren't added to the link list as they're not being
+        // semantically analysed
+        try self.qcu.link_list.append(self.qcu.allocator, self);
     }
 
     /// Liveness pass. Illegal to call when both passes of semantic analysis
@@ -378,24 +410,4 @@ test "full fledge" {
 
     while (qcu.work_queue.removeOrNull()) |job|
         try testJob(qcu, job);
-    for (qcu.files.items) |file| {
-        try stderr.print("{s}:\n", .{ file.file_path });
-        for (file.sema.?.sections.keys()) |section_name| {
-            const section = file.sema.?.sections.get(section_name) orelse unreachable;
-            var dumping_section: ?*AsmSemanticAir.Section = section;
-            try stderr.print("@section {s} (align {})\n", .{ section_name, section.alignment });
-
-            while (dumping_section) |dumping_section_| {
-                for (dumping_section_.content.items(.instruction)) |instr| {
-                    switch (instr) {
-                        inline else => |instr_| try stderr.print("    {s}({}) : {}\n", .{ @tagName(instr), instr.size(), instr_ })
-                    }
-                }
-
-                if (dumping_section_.next) |next_dumping_section|
-                    try stderr.print("@barrier (align {})\n", .{ next_dumping_section.alignment });
-                dumping_section = dumping_section_.next;
-            }
-        }
-    }
 }

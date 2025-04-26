@@ -3,12 +3,7 @@
     .version = "0.0.0",
     .fingerprint = 0x81937c6db284ab3c,
 
-    .dependencies = .{
-        .clap = .{
-            .url = "https://github.com/Hejsil/zig-clap/archive/refs/tags/0.7.0.tar.gz",
-            .hash = "1220f48518ce22882e102255ed3bcdb7aeeb4891f50b2cdd3bd74b5b2e24d3149ba2"
-        }
-    },
+    .dependencies = .{},
 
     .paths = .{
         "Sources",
