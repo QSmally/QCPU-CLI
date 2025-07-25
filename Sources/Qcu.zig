@@ -21,6 +21,10 @@ const Source = @import("Source.zig");
 
 const Qcu = @This();
 
+const stderr = std.io
+    .getStdErr()
+    .writer();
+
 allocator: std.mem.Allocator,
 cwd: std.fs.Dir,
 files: FileList,
@@ -28,8 +32,6 @@ link_list: FileList,
 options: Options,
 work_queue: JobQueue,
 errors: ErrorList,
-
-log: std.fs.File = std.io.getStdErr(),
 
 /// Each run of QCPU-CLI contains exactly one Qcu. From a list of input files,
 /// it performs tokenisation, AstGen, and lastly, both passes of semantic
@@ -128,7 +130,7 @@ pub const File = struct {
         file.sha256 = file.get_hash_source();
 
         if (qcu.options.dload)
-            try qcu.log.writer().print("File load '{s}' ({}) ({s})\n", .{
+            try stderr.print("File load '{s}' ({}) ({s})\n", .{
                 file_path,
                 std.fmt.fmtIntSizeBin(file.buffer.len),
                 std.fmt.bytesToHex(file.sha256, .lower) });
@@ -159,9 +161,8 @@ pub const File = struct {
     }
 
     fn dump(self: *File, tag: []const u8, thing: anytype) !void {
-        const log = self.qcu.log.writer();
-        try log.print("{s} ({s}):\n", .{ tag, self.file_path });
-        try thing.dump(log);
+        try stderr.print("{s} ({s}):\n", .{ tag, self.file_path });
+        try thing.dump(stderr);
     }
 
     // From SemanticAir (and Liveness)
@@ -357,10 +358,6 @@ fn link_sema_units(self: *Qcu) !void {
 // Tests
 
 const options_ = @import("options");
-
-const stderr = std.io
-    .getStdErr()
-    .writer();
 
 const JobTypeTag = @typeInfo(JobType).@"union".tag_type.?;
 

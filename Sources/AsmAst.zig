@@ -456,12 +456,11 @@ const AstGen = struct {
 
             if (tag == .builtin_section or tag == .builtin_barrier)
                 break :blk payload;
-            if (self.source.tokens[self.cursor].tag != .builtin_end) {
+            if (self.source.tokens[self.next_token()].tag != .builtin_end) {
                 try self.add_error_arg(error.Expected, Token.Tag.builtin_end);
                 try self.add_error_arg(error.NoteDefinedHere, self.source.tokens[token]);
             }
 
-            _ = self.next_token();
             _ = try self.expect_token(.newline);
             break :blk payload;
         } else Null;

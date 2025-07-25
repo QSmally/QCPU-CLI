@@ -13,12 +13,13 @@ pub fn main() u8 {
 
     const run_files,
     var run_options = arguments.parse(Options, arena.allocator()) catch |err| {
-        switch (err) {
-            error.InvalidCharacter => std.debug.print("error: {s}: invalid numeric '{s}'\n", .{ arguments.current_option, arguments.current_value }),
-            error.Overflow => std.debug.print("error: {s}: {s} doesn't fit in type {s}\n", .{ arguments.current_option, arguments.current_value, arguments.current_type }),
-            error.ArgumentExpected => std.debug.print("error: {s}: expected option value\n", .{ arguments.current_option }),
-            error.OutOfMemory => std.debug.print("error: out of memory\n", .{})
-        }
+        _ = switch (err) {
+            error.InvalidCharacter => stderr.print("error: {s}: invalid numeric '{s}'\n", .{ arguments.current_option, arguments.current_value }),
+            error.Overflow => stderr.print("error: {s}: {s} doesn't fit in type {s}\n", .{ arguments.current_option, arguments.current_value, arguments.current_type }),
+            error.ArgumentExpected => stderr.print("error: {s}: expected option value\n", .{ arguments.current_option }),
+            error.OptionNotFound => stderr.print("error: {s}: invalid option\n", .{  arguments.current_value }),
+            error.OutOfMemory => stderr.print("error: out of memory\n", .{})
+        } catch return 255;
         return 1;
     };
 
@@ -31,54 +32,70 @@ pub fn main() u8 {
     }
 
     if (run_options.doptions)
-        std.debug.print("{any}\n", .{ run_options });
+        stderr.print("{any}\n", .{ run_options }) catch return 255;
 
     if (run_options.version) {
-        std.debug.print("QCPU-CLI v{s} (Zig {s}) ({s}, {s})", .{
-            "0.0.0",
-            builtin.zig_version_string,
-            @tagName(builtin.os.tag),
-            @tagName(builtin.cpu.arch) });
-        if (builtin.link_mode == .dynamic)
-            std.debug.print(" dynamically linked", .{});
-        if (builtin.mode == .Debug)
-            std.debug.print(" in debug mode", .{});
-        std.debug.print("\n", .{});
+        version(stdout) catch return 255;
         return 0;
     }
 
     if (run_files.len == 0) {
-        std.debug.print("error: no input files; nothing to do\n", .{});
+        stderr.print("error: no input files; nothing to do\n", .{}) catch return 255;
         return 1;
     }
 
     // fixme: deinit with gpa on error gives segfault/double panic
     const qcu = Qcu.init(arena.allocator(), std.fs.cwd(), run_files, unmerge(Qcu.Options, run_options)) catch |err| {
-        std.debug.print("error: unhandled {}\n", .{ err });
+        stderr.print("error: unhandled {}\n", .{ err }) catch return 255;
         return 1;
     };
 
     while (qcu.work_queue.removeOrNull()) |job| {
         job.execute() catch {
             for (qcu.errors.items) |err|
-                err.write(qcu.log.writer()) catch {};
+                err.write(stderr) catch return 255;
             return 1;
         };
     }
 
-    // if (run_options.virtualise)
-    //     qcpuv.begin(&qcu, unmerge(qcpuv.Options, run_options))
-    // else if (run_options.output) |file|
-    //     qcu.output_file(file)
-    // else
-    //     qcu.output_file("binary");
+    if (!run_options.dry) {
+        // if (run_options.output) |file|
+        //     try qcu.output_file(file);
+        // if (run_options.virtualise)
+        //     try qcpuv.begin(&qcu, unmerge(qcpuv.Options, run_options));
+        // if (run_options.output == null and run_options.virtualise == null)
+        //     qcu.output_file("binary");
+    }
+
     return 0;
+}
+
+const stdout = std.io
+    .getStdOut()
+    .writer();
+const stderr = std.io
+    .getStdErr()
+    .writer();
+
+fn version(writer: anytype) !void {
+    try writer.print("QCPU-CLI v{s} (Zig {s}) ({s}, {s})", .{
+        "0.0.0",
+        builtin.zig_version_string,
+        @tagName(builtin.os.tag),
+        @tagName(builtin.cpu.arch) });
+    defer writer.print("\n", .{}) catch {};
+
+    if (builtin.link_mode == .dynamic)
+        try writer.print(" dynamically linked", .{});
+    if (builtin.mode == .Debug)
+        try writer.print(" in debug mode", .{});
 }
 
 const CliOptions = struct {
     version: bool = false,
     doptions: bool = false,
     verbose: bool = false,
+    dry: bool = false,
     output: ?[]const u8 = null,
     virtualise: bool = false
 };
@@ -172,6 +189,8 @@ fn Arguments(comptime T: type) type {
                     }
                 }
 
+                if (std.mem.startsWith(u8, argument, "--"))
+                    return error.OptionNotFound;
                 try run_files.append(allocator, argument);
             }
 
@@ -260,4 +279,12 @@ test "arguments parser advanced incorrectly 2" {
     const err = iterator.parse(TestOptions, std.testing.allocator);
 
     try std.testing.expectError(error.Overflow, err);
+}
+
+test "arguments parser advanced incorrectly 3" {
+    const foo = std.mem.splitScalar(u8, "--aaa 0xFFFFFF", ' ');
+    var iterator = Arguments(@TypeOf(foo)).init(foo);
+    const err = iterator.parse(TestOptions, std.testing.allocator);
+
+    try std.testing.expectError(error.OptionNotFound, err);
 }

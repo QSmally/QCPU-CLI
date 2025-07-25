@@ -533,6 +533,7 @@ fn prepare_opaque_container(self: *AsmSemanticAir, parent_node: AsmAst.Node, sym
                             .token = define.token,
                             .symbol = define.symbol });
                     },
+
                     .builtin_header => {
                         const header = try self.prepare_header(node) orelse continue;
                         try self.maybe_emit_duplicate_error(header);
@@ -540,16 +541,16 @@ fn prepare_opaque_container(self: *AsmSemanticAir, parent_node: AsmAst.Node, sym
                             .token = header.token,
                             .symbol = header.symbol });
                     },
+
                     .builtin_symbols => {
                         const symbols = try self.prepare_symbols(node) orelse continue;
-                        // fixme: check for duplicate namespaces?
+                        // fixme: check for duplicate namespace or existing symbol?
                         try self.imports.append(self.allocator, symbols);
                     },
 
                     .builtin_region,
                     .builtin_section,
                     .builtin_barrier => {
-                        astgen_assert(self.node_is_null_or(composite.operands.rhs, .container));
                         if (self.node_unwrap(composite.operands.rhs)) |opaque_|
                             try self.prepare_opaque_container(opaque_, symbol_map);
                     },
