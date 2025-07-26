@@ -59,6 +59,9 @@ pub fn init(
     for (file_paths) |file_path|
         qcu.files.appendAssumeCapacity(try File.init_work(qcu, cwd, file_path));
     try qcu.work_queue.add(.{ .link = qcu });
+
+    if (!options.noelimination)
+        try qcu.work_queue.add(.{ .tree_elimination = qcu });
     return qcu;
 }
 
@@ -320,6 +323,7 @@ pub const JobType = union(enum) {
     liveness: *File,
     /// sections + sections -> sections
     link: *Qcu,
+    tree_elimination: *Qcu,
 
     /// Jobs higher in the list are performed earlier and at the same time as
     /// each other.
@@ -339,7 +343,8 @@ pub const JobType = union(enum) {
             .semantic_analysis => |file| try file.semantic_analysis(),
             .free_temporary => |file| file.free_temporary(),
             .liveness => |file| try file.liveness(),
-            .link => |qcu| try qcu.link_sema_units()
+            .link => |qcu| try qcu.link_sema_units(),
+            .tree_elimination => |qcu| try qcu.tree_optimise()
         };
     }
 };
@@ -352,6 +357,11 @@ const ErrorList = std.ArrayListUnmanaged(LocatableError);
 
 fn link_sema_units(self: *Qcu) !void {
     // fixme: add linker
+    _ = self;
+}
+
+fn tree_optimise(self: *Qcu) !void {
+    // fixme: tree elimination passes on linked binary
     _ = self;
 }
 
@@ -395,6 +405,7 @@ test "work queue dependency order" {
     try std.testing.expectEqual(@as(?JobTypeTag, .liveness), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
     try std.testing.expectEqual(@as(?JobTypeTag, .liveness), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
     try std.testing.expectEqual(@as(?JobTypeTag, .link), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
+    try std.testing.expectEqual(@as(?JobTypeTag, .tree_elimination), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
     try std.testing.expectEqual(@as(?JobTypeTag, null), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
 }
 

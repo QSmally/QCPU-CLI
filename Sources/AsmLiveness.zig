@@ -255,16 +255,16 @@ fn pass_duplicate_store(
 ) !void {
     if (current.tag == .ast and
         previous.tag == .ast and
-        current.instruction.ast[0] == previous.instruction.ast[0]
+        current.instruction.ast[0].result == previous.instruction.ast[0].result
     ) {
-        try self.add_error(error.DuplicateStore, .{ current.token, current.instruction.ast[0] });
+        try self.add_error(error.DuplicateStore, .{ current.token, current.instruction.ast[0].result });
     }
 
     if (current.tag == .rst and
         previous.tag == .rst and
-        current.instruction.rst[0] == previous.instruction.rst[0]
+        current.instruction.rst[0].result == previous.instruction.rst[0].result
     ) {
-        try self.add_error(error.DuplicateStore, .{ current.token, current.instruction.rst[0] });
+        try self.add_error(error.DuplicateStore, .{ current.token, current.instruction.rst[0].result });
     }
 }
 
