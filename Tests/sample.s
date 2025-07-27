@@ -1,8 +1,14 @@
 
-@symbols "Library.s"
+; @symbols aaa, "Library.s"
 
-@define(expose) foo, 0x00
+@define roo, 0x05
+@define(expose) foo, @roo
 
 @section text
 bar:              cli
-                  jmpr  0x00
+                  jmpr  @foo
+
+@section data
+ccc:              u8 255
+@align 2
+bbb:              u16 0xFFFF
