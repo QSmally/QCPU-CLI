@@ -361,6 +361,7 @@ const SemanticError = error {
     ExpectedArgumentsLen,
     AmbiguousIdentifier,
     UnknownSymbol,
+    NamespacePrivateSymbol,
     ImportNotFound,
     IllegalUnaryOp,
     UnlinkableToken,
@@ -395,6 +396,7 @@ fn add_error(self: *AsmSemanticAir, comptime err: SemanticError, argument: anyty
         error.ExpectedArgumentsLen => "expected {} {s} for instruction {s}, found {}",
         error.AmbiguousIdentifier => "ambiguous identifier; did you mean @{s}?",
         error.UnknownSymbol => "unknown symbol '{s}'",
+        error.NamespacePrivateSymbol => "symbol is marked private in its namespace",
         error.ImportNotFound => "file to import not found",
         error.IllegalUnaryOp => "illegal {s} operation with {s}",
         error.UnlinkableToken => "{s} is not supported in a linkable result type",
@@ -436,6 +438,7 @@ fn add_error(self: *AsmSemanticAir, comptime err: SemanticError, argument: anyty
         error.UnknownInstruction,
         error.AmbiguousIdentifier,
         error.UnknownSymbol,
+        error.NamespacePrivateSymbol,
         error.ImportNotFound,
         error.MissingBarrierContext,
         error.UnlinkableToken,
@@ -463,6 +466,7 @@ fn add_error(self: *AsmSemanticAir, comptime err: SemanticError, argument: anyty
         error.UnknownSymbol => .{ token_slice.? },
         error.UselessSentinel,
         error.UnknownInstruction,
+        error.NamespacePrivateSymbol,
         error.ImportNotFound,
         error.MissingBarrierContext,
         error.UnlinkableExpression,
@@ -615,24 +619,24 @@ fn maybe_emit_nonempty_modifier_error(self: *AsmSemanticAir, token: Token) !void
 fn emit_resolved_expected_error(
     self: *AsmSemanticAir,
     expected_token: anytype,
-    origin_token: Token,
+    origin_token: ForeignToken,
     resolved_token: Token
 ) !void {
-    try self.add_error(error.ExpectedElsewhere, .{ expected_token, resolved_token.tag, origin_token });
-    if (!origin_token.location.eql(resolved_token.location))
+    try self.add_error(error.ExpectedElsewhere, .{ expected_token, resolved_token.tag, origin_token.token });
+    if (!origin_token.token.location.eql(resolved_token.location))
         try self.add_error(error.NoteDefinedHere, .{ resolved_token.tag, resolved_token });
 }
 
 fn emit_resolved_error(
     self: *AsmSemanticAir,
     comptime err: SemanticError,
-    origin_token: Token,
+    origin_token: ForeignToken,
     resolved_token: Token,
     argument: anytype
 ) !void {
     try self.add_error(err, argument);
-    if (!origin_token.location.eql(resolved_token.location))
-        try self.add_error(error.NoteCalledFromHere, origin_token);
+    if (!origin_token.token.location.eql(resolved_token.location))
+        try origin_token.sema.add_error(error.NoteCalledFromHere, origin_token.token);
 }
 
 // fixme: remove
@@ -640,11 +644,11 @@ fn emit_resolved_generic_error(
     self: *AsmSemanticAir,
     message: anytype,
     topic: anytype,
-    origin_token: Token,
+    origin_token: ForeignToken,
     resolved_token: Token
 ) !void {
-    try self.add_error(error.GenericToken, .{ message, topic, origin_token });
-    if (!origin_token.location.eql(resolved_token.location))
+    try origin_token.sema.add_error(error.GenericToken, .{ message, topic, origin_token.token });
+    if (!origin_token.token.location.eql(resolved_token.location))
         try self.add_error(error.NoteDefinedHere, .{ resolved_token.tag, resolved_token });
 }
 
@@ -1290,10 +1294,11 @@ fn cast_arguments(self: *AsmSemanticAir, token: Token, instruction_tag: Instruct
             inline for (fields, 0..) |argument, i| {
                 const Type = argument.@"type";
                 const user_argument = iterator.next() orelse unreachable;
+                const origin = ForeignToken { .sema = self, .token = self.source.tokens[user_argument.token] };
 
                 casted_arguments[i] = switch (Type) {
                     usize => astgen_failure(),
-                    inline else => try Type.lower_tree(self, user_argument, self.source.tokens[user_argument.token])
+                    inline else => try Type.lower_tree(self, user_argument, origin)
                 } orelse return null;
             }
 
@@ -1309,30 +1314,26 @@ fn Expression(comptime ResultType: type) type {
 
         const ExpressionType = @This();
 
-        token: Token, // the argument / origin of the expression
-        executed_token: Token, // first evaluated token after lowering tree
+        token: ForeignToken, // the argument / origin of the expression
+        executed_token: ForeignToken, // first evaluated token after lowering tree
         result: ResultType,
 
         const EvaluationError = std.mem.Allocator.Error || SemanticError;
 
-        pub fn lower_tree(sema: *AsmSemanticAir, node: AsmAst.Node, origin_token: Token) EvaluationError!?ExpressionType {
+        pub fn lower_tree(sema: *AsmSemanticAir, node: AsmAst.Node, origin_token: ForeignToken) EvaluationError!?ExpressionType {
             const token = sema.source.tokens[node.token];
 
             if (node.tag == .identifier) {
                 astgen_assert(token.tag == .identifier);
                 const identifier = token.location.slice(sema.source.buffer);
 
-                if (!sema.is_valid_symbol(identifier)) {
-                    try sema.emit_resolved_error(error.AmbiguousIdentifier, origin_token, token, token);
-                    return null;
-                }
-                // fixme: look-up namespaces' symbols
-                const symbols_sema, const symbol = sema.fetch_symbol(identifier[1..]) orelse {
-                    try sema.emit_resolved_error(error.UnknownSymbol, origin_token, token, token);
-                    return null;
-                };
+                const symbols_sema,
+                const symbol,
+                const namespace = try sema.fetch_symbol(identifier, origin_token, token) orelse return null;
 
                 // for liveness pass
+                if (namespace) |namespace_|
+                    namespace_.is_used = true;
                 symbol.is_used = true;
 
                 return switch (symbol.symbol) {
@@ -1341,7 +1342,7 @@ fn Expression(comptime ResultType: type) type {
                     .header => |header| blk: {
                         if (ResultType == Symbol.Header)
                             break :blk .{ .tag = node.tag, .token = token, .result = header }; // headers aren't expanded in arguments
-                        try sema.add_error(error.HeaderResultType, origin_token);
+                        try origin_token.sema.add_error(error.HeaderResultType, origin_token.token);
                         break :blk null;
                     },
                     .file => unreachable // handled in look-up
@@ -1353,11 +1354,11 @@ fn Expression(comptime ResultType: type) type {
                 u8, u16, u24,
                 i8, i16, i24 => .{
                     .token = origin_token,
-                    .executed_token = token,
+                    .executed_token = .{ .sema = sema, .token = token },
                     .result = try sema.cast_numeric_literal(ResultType, node) orelse return null },
 
                 else => if (try ResultType.analyse(sema, node, origin_token)) |result|
-                    .{ .token = origin_token, .executed_token = token, .result = result } else
+                    .{ .token = origin_token, .executed_token = .{ .sema = sema, .token = token }, .result = result } else
                     null
             };
         }
@@ -1369,7 +1370,8 @@ fn cast_numeric_literal(self: *AsmSemanticAir, comptime T: type, node: AsmAst.No
     const string = token.location.slice(self.source.buffer);
 
     if (token.tag != .numeric_literal) {
-        try self.emit_resolved_expected_error(AsmAst.Node.Tag.integer, self.source.tokens[node.token], token);
+        const origin = ForeignToken { .sema = self, .token = self.source.tokens[node.token] };
+        try self.emit_resolved_expected_error(AsmAst.Node.Tag.integer, origin, token);
         return null;
     }
 
@@ -1378,8 +1380,71 @@ fn cast_numeric_literal(self: *AsmSemanticAir, comptime T: type, node: AsmAst.No
     return std.fmt.parseInt(T, string, inherit_base) catch |err| switch (err) {
         error.InvalidCharacter => astgen_failure(),
         error.Overflow => {
-            try self.emit_resolved_generic_error("numeric literal doesn't fit in type ", @typeName(T), self.source.tokens[node.token], token);
+            const origin = ForeignToken { .sema = self, .token = self.source.tokens[node.token] };
+            try self.emit_resolved_generic_error("numeric literal doesn't fit in type ", @typeName(T), origin, token);
             return null;
+        }
+    };
+}
+
+const ForeignToken = struct {
+    // fixme: location eql has an edge case
+    sema: *AsmSemanticAir,
+    token: Token
+};
+
+fn fetch_symbol(self: *AsmSemanticAir, path: []const u8, origin_token: ForeignToken, token: Token) !?struct {
+    *AsmSemanticAir,
+    *Symbol.Locatable,
+    ?*Symbol.Locatable
+} {
+    if (!self.is_valid_symbol(path)) {
+        try self.emit_resolved_error(error.AmbiguousIdentifier, origin_token, token, token);
+        return null;
+    }
+
+    var components = std.mem.splitScalar(u8, path[1..], '.');
+    const namespace = components.next() orelse unreachable;
+
+    if (namespace.len == 0) {
+        try self.emit_resolved_error(error.AmbiguousIdentifier, origin_token, token, token);
+        return null;
+    }
+
+    const own_symbol = self.symbols.getPtr(namespace) orelse {
+        try self.emit_resolved_error(error.UnknownSymbol, origin_token, token, token);
+        return null;
+    };
+
+    return switch (own_symbol.symbol) {
+        .file => |file| blk: {
+            const symbol_name = components.next() orelse {
+                // fixme: this is a namespace error
+                try self.emit_resolved_error(error.AmbiguousIdentifier, origin_token, token, token);
+                break :blk null;
+            };
+
+            // fixme: sema unit not available error
+            const foreign_symbol = file.sema.?.*.?.symbols.getPtr(symbol_name) orelse {
+                try self.emit_resolved_error(error.UnknownSymbol, origin_token, token, token);
+                return null;
+            };
+
+            if (!foreign_symbol.symbol.is_public()) {
+                try self.emit_resolved_error(error.NamespacePrivateSymbol, origin_token, token, token);
+                return null;
+            }
+
+            break :blk .{ &file.sema.?.*.?, foreign_symbol, own_symbol };
+        },
+
+        else => blk: {
+            if (components.next() != null) {
+                try self.emit_resolved_error(error.AmbiguousIdentifier, origin_token, token, token);
+                break :blk null;
+            }
+
+            break :blk .{ self, own_symbol, null };
         }
     };
 }
@@ -1403,7 +1468,7 @@ fn Numeric(comptime Type: NumericResult) type {
         linktime_label: ?AsmAst.Node = null,
         assembletime_offset: ?i32 = null,
 
-        pub fn analyse(sema: *AsmSemanticAir, node: AsmAst.Node, origin_token: Token) !?NumericType {
+        pub fn analyse(sema: *AsmSemanticAir, node: AsmAst.Node, origin_token: ForeignToken) !?NumericType {
             const token = sema.source.tokens[node.token];
 
             return result: switch (node.tag) {
@@ -1411,7 +1476,7 @@ fn Numeric(comptime Type: NumericResult) type {
                 .inv => {
                     const operand = try ExpressionType.lower_tree(sema, sema.nodes[node.operands.lhs], origin_token) orelse return null;
                     const assembletime_operand = operand.result.assembletime_offset orelse {
-                        try sema.emit_resolved_error(error.IllegalUnaryOp, origin_token, operand.token, .{ @tagName(node.tag), operand.token });
+                        try operand.token.sema.emit_resolved_error(error.IllegalUnaryOp, origin_token, operand.token.token, .{ @tagName(node.tag), operand.token.token });
                         return null;
                     };
 
@@ -1555,7 +1620,7 @@ const GpRegister = enum(u3) {
     ry,
     rz,
 
-    pub fn analyse(sema: *AsmSemanticAir, node: AsmAst.Node, origin_token: Token) !?GpRegister {
+    pub fn analyse(sema: *AsmSemanticAir, node: AsmAst.Node, origin_token: ForeignToken) !?GpRegister {
         const token = sema.source.tokens[node.token];
         const name = token.content_slice(sema.source.buffer);
 
@@ -1573,7 +1638,7 @@ const SpRegister = enum(u2) {
     sf,
     adr,
 
-    pub fn analyse(sema: *AsmSemanticAir, node: AsmAst.Node, origin_token: Token) !?SpRegister {
+    pub fn analyse(sema: *AsmSemanticAir, node: AsmAst.Node, origin_token: ForeignToken) !?SpRegister {
         const token = sema.source.tokens[node.token];
         const name = token.content_slice(sema.source.buffer);
 
@@ -1589,7 +1654,7 @@ const StringContent = struct {
     memory: []const u8,
     sentinel: ?Expression(u8),
 
-    pub fn analyse(sema: *AsmSemanticAir, node: AsmAst.Node, origin_token: Token) !?StringContent {
+    pub fn analyse(sema: *AsmSemanticAir, node: AsmAst.Node, origin_token: ForeignToken) !?StringContent {
         const token = sema.source.tokens[node.token];
         const string = token.content_slice(sema.source.buffer);
 
@@ -1599,9 +1664,12 @@ const StringContent = struct {
         }
 
         // fixme: non-integer sentinel nulls out without error
-        const sentinel = if (sema.node_unwrap(node.operands.lhs)) |sentinel_node|
-            try Expression(u8).lower_tree(sema, sentinel_node, sema.source.tokens[sentinel_node.token]) orelse return null else
-            null;
+        const sentinel = if (sema.node_unwrap(node.operands.lhs)) |sentinel_node| blk: {
+            const origin = ForeignToken { .sema = sema, .token = sema.source.tokens[sentinel_node.token] };
+            const expression = try Expression(u8).lower_tree(sema, sentinel_node, origin) orelse return null;
+            break :blk expression;
+        } else null;
+
         return .{
             .memory = string,
             .sentinel = sentinel };
@@ -1617,7 +1685,7 @@ const TypeSize = struct {
 
     size: u16,
 
-    pub fn analyse(sema: *AsmSemanticAir, node: AsmAst.Node, origin_token: Token) !?TypeSize {
+    pub fn analyse(sema: *AsmSemanticAir, node: AsmAst.Node, origin_token: ForeignToken) !?TypeSize {
         const token = sema.source.tokens[node.token];
         const string = token.location.slice(sema.source.buffer);
 
@@ -1643,19 +1711,6 @@ const TypeSize = struct {
         return .{ .size = @intCast(size) };
     }
 };
-
-fn fetch_symbol(self: *AsmSemanticAir, symbol_name: []const u8) ?struct { *AsmSemanticAir, *Symbol.Locatable } {
-    const own_symbol = self.symbols.getPtr(symbol_name) orelse {
-        // for (self.imports.items) |import| {
-        //     const foreign_symbol = import.sema.?.*.?.symbols.getPtr(symbol_name) orelse continue;
-        //     if (foreign_symbol.symbol.is_public())
-        //         return .{ &import.sema.?.*.?, foreign_symbol };
-        // }
-        return null;
-    };
-
-    return .{ self, own_symbol };
-}
 
 // Tests
 
