@@ -537,7 +537,18 @@ const AstGen = struct {
                 .reserved_argument => {
                     const expression = try self.parse_expression();
                     try self.add_frame_node(expression);
-                    _ = self.eat_token(.comma) orelse break;
+
+                    _ = self.eat_token(.comma) orelse switch (self.current_tag()) {
+                        .newline,
+                        .eof,
+                        .unexpected_eof => break,
+
+                        else => {
+                            try self.add_error_arg(error.Expected, Token.string("a comma"));
+                            _ = self.next_token();
+                            break;
+                        }
+                    };
 
                     switch (self.current_tag()) {
                         .newline,

@@ -361,6 +361,7 @@ const SemanticError = error {
     ExpectedArgumentsLen,
     AmbiguousIdentifier,
     UnknownSymbol,
+    Namespace,
     NamespacePrivateSymbol,
     ImportNotFound,
     IllegalUnaryOp,
@@ -396,6 +397,7 @@ fn add_error(self: *AsmSemanticAir, comptime err: SemanticError, argument: anyty
         error.ExpectedArgumentsLen => "expected {} {s} for instruction {s}, found {}",
         error.AmbiguousIdentifier => "ambiguous identifier; did you mean @{s}?",
         error.UnknownSymbol => "unknown symbol '{s}'",
+        error.Namespace => "namespace '{s}' cannot be expanded",
         error.NamespacePrivateSymbol => "symbol is marked private in its namespace",
         error.ImportNotFound => "file to import not found",
         error.IllegalUnaryOp => "illegal {s} operation with {s}",
@@ -438,6 +440,7 @@ fn add_error(self: *AsmSemanticAir, comptime err: SemanticError, argument: anyty
         error.UnknownInstruction,
         error.AmbiguousIdentifier,
         error.UnknownSymbol,
+        error.Namespace,
         error.NamespacePrivateSymbol,
         error.ImportNotFound,
         error.MissingBarrierContext,
@@ -463,7 +466,8 @@ fn add_error(self: *AsmSemanticAir, comptime err: SemanticError, argument: anyty
         error.UnsupportedOption,
         error.UnknownModifiedInstruction,
         error.AmbiguousIdentifier,
-        error.UnknownSymbol => .{ token_slice.? },
+        error.UnknownSymbol,
+        error.Namespace => .{ token_slice.? },
         error.UselessSentinel,
         error.UnknownInstruction,
         error.NamespacePrivateSymbol,
@@ -981,8 +985,6 @@ pub const Instruction = union(Tag) {
         instruction: Instruction
     };
 
-    // fixme: IMM: allow both signed and unsigned values
-
     cli,
     ast: struct { Expression(GpRegister) },
     rst: struct { Expression(GpRegister) },
@@ -1420,7 +1422,7 @@ fn fetch_symbol(self: *AsmSemanticAir, path: []const u8, origin_token: ForeignTo
         .file => |file| blk: {
             const symbol_name = components.next() orelse {
                 // fixme: this is a namespace error
-                try self.emit_resolved_error(error.AmbiguousIdentifier, origin_token, token, token);
+                try self.emit_resolved_error(error.Namespace, origin_token, token, token);
                 break :blk null;
             };
 
@@ -1747,9 +1749,6 @@ fn testSema1(input: [:0]const u8) !void {
     try sema.semantic_analyse();
 
     if (options.dump) {
-        try stderr.print("Imports ({}):\n", .{ sema.imports.items.len });
-        for (sema.imports.items) |import|
-            try stderr.print("    {s} = {s}\n", .{ import.namespace orelse "_", import.path });
         try stderr.print("Symbols ({}):\n", .{ sema.symbols.count() });
         for (sema.symbols.keys()) |symbol_name| {
             const symbol = sema.symbols.get(symbol_name) orelse unreachable;
@@ -1768,7 +1767,10 @@ fn testSema1(input: [:0]const u8) !void {
                     header.arguments.rhs,
                     header.content.lhs,
                     header.content.rhs,
-                    header.is_public })
+                    header.is_public }),
+                .file => |file| try stderr.print("    {s} = {s}\n", .{
+                    symbol_name,
+                    file.path })
             }
         }
         try stderr.print("AIR ({}):\n", .{ sema.sections.count() });
