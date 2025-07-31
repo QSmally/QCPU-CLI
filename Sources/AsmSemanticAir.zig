@@ -22,6 +22,7 @@ nodes: []const AsmAst.Node,
 symbols: SymbolMap,
 sections: SectionMap,
 current_section: ?*Section,
+emit_reference: ?*EmitReference,
 /// Only populated in freestanding.
 errors: ErrorList,
 
@@ -38,6 +39,7 @@ pub fn init(qcu: *Qcu.File, source: Source, nodes: []const AsmAst.Node) !AsmSema
         .symbols = .empty,
         .sections = .empty,
         .current_section = null,
+        .emit_reference = null,
         .errors = .empty };
     errdefer self.deinit();
     try self.prepare_root();
@@ -53,6 +55,7 @@ pub fn init_freestanding(allocator: std.mem.Allocator, source: Source, nodes: []
         .symbols = .empty,
         .sections = .empty,
         .current_section = null,
+        .emit_reference = null,
         .errors = .empty };
     errdefer self.deinit();
     try self.prepare_root();
@@ -179,6 +182,45 @@ pub const Section = struct {
     }
 };
 
+pub const EmitReference = struct {
+
+    const Scope = struct {
+        symbols: SymbolMap,
+        previous: ?*Scope
+    };
+
+    calling_token: ForeignToken,
+    section: *Section,
+    scope: ?*Scope,
+
+    pub fn init(allocator: std.mem.Allocator, calling_token: ForeignToken, section: *Section) !*EmitReference {
+        const emit_reference = try allocator.create(EmitReference);
+        emit_reference.* = .{
+            .calling_token = calling_token,
+            .section = section,
+            .scope = null };
+        return emit_reference;
+    }
+
+    pub fn deinit(self: *EmitReference, allocator: std.mem.Allocator) void {
+        allocator.destroy(self);
+    }
+
+    pub fn push_scope(self: *EmitReference, allocator: std.mem.Allocator, symbols: SymbolMap) !void {
+        const scope = try allocator.create(Scope);
+        scope.* = .{
+            .symbols = symbols,
+            .previous = self.scope };
+        self.scope = scope;
+    }
+
+    pub fn pop_scope(self: *EmitReference, allocator: std.mem.Allocator) void {
+        const popped_scope = self.scope;
+        self.scope = popped_scope.?.previous;
+        allocator.destroy(popped_scope.?);
+    }
+};
+
 const SymbolMap = std.StringArrayHashMapUnmanaged(Symbol.Locatable);
 const SectionMap = std.StringArrayHashMapUnmanaged(*Section);
 const InstructionList = std.MultiArrayList(Instruction.Locatable);
@@ -293,12 +335,20 @@ const ContainerIterator = struct {
         return self.sema.source.tokens[node.token];
     }
 
+    pub fn left(self: *ContainerIterator) AsmAst.Index {
+        return self.end - self.current();
+    }
+
+    pub fn next_index(self: *ContainerIterator) AsmAst.Index {
+        const index = self.current();
+        self.cursor += 1;
+        return index;
+    }
+
     pub fn next(self: *ContainerIterator) ?AsmAst.Node {
         if (self.is_the_end())
             return null;
-        const index = self.current();
-        self.cursor += 1;
-        return self.sema.nodes[index];
+        return self.sema.nodes[self.next_index()];
     }
 
     pub fn expect(self: *ContainerIterator, tag: AsmAst.Node.Tag) !?AsmAst.Node {
@@ -369,6 +419,8 @@ const SemanticError = error {
     UnlinkableExpression,
     ResultType,
     HeaderResultType,
+    HeaderContextIllegal,
+    HeaderDuplicateParameter,
     NoteDefinedHere,
     NoteCalledFromHere,
     NoteDidYouMean,
@@ -405,6 +457,8 @@ fn add_error(self: *AsmSemanticAir, comptime err: SemanticError, argument: anyty
         error.UnlinkableExpression => "expression is unlinkable",
         error.ResultType => "numeric literal doesn't fit in result type {s}",
         error.HeaderResultType => "a @header call isn't supported in result type",
+        error.HeaderContextIllegal => "{s} in a header context is considered illegal",
+        error.HeaderDuplicateParameter => "duplicate header argument '{s}'",
         error.NoteDefinedHere => "{s} defined here",
         error.NoteCalledFromHere => "called from here",
         error.NoteDidYouMean => "did you mean to {s}{s}?",
@@ -447,6 +501,8 @@ fn add_error(self: *AsmSemanticAir, comptime err: SemanticError, argument: anyty
         error.UnlinkableToken,
         error.UnlinkableExpression,
         error.HeaderResultType,
+        error.HeaderContextIllegal,
+        error.HeaderDuplicateParameter,
         error.NoteCalledFromHere => argument,
         else => null
     };
@@ -462,11 +518,13 @@ fn add_error(self: *AsmSemanticAir, comptime err: SemanticError, argument: anyty
         error.ExpectedElsewhere => .{ argument[0].fmt(), argument[1].fmt() },
         error.ExpectedEmpty => .{ argument.fmt() },
         error.Unexpected,
+        error.HeaderContextIllegal,
         error.UnlinkableToken => .{ argument.tag.fmt() },
         error.UnsupportedOption,
         error.UnknownModifiedInstruction,
         error.AmbiguousIdentifier,
         error.UnknownSymbol,
+        error.HeaderDuplicateParameter,
         error.Namespace => .{ token_slice.? },
         error.UselessSentinel,
         error.UnknownInstruction,
@@ -531,6 +589,7 @@ fn prepare_opaque_container(self: *AsmSemanticAir, parent_node: AsmAst.Node, sym
                     .builtin_symbols => {
                         const symbol = switch (token.tag) {
                             .builtin_define => try self.prepare_define(node),
+                            // header content not prepared yet
                             .builtin_header => try self.prepare_header(node),
                             .builtin_symbols => try self.prepare_symbols(node),
                             else => unreachable
@@ -574,6 +633,7 @@ fn prepare_opaque_container(self: *AsmSemanticAir, parent_node: AsmAst.Node, sym
                     continue;
                 var labels = ContainerIterator.init_index(self, composite.operands.lhs);
 
+                // fixme: labels in headers are not supported
                 while (try labels.gracefully_expect(.label)) |label_node| {
                     astgen_assert(self.is_null(label_node.operands.lhs));
                     astgen_assert(self.is_null(label_node.operands.rhs));
@@ -641,6 +701,17 @@ fn emit_resolved_error(
     try self.add_error(err, argument);
     if (!origin_token.token.location.eql(resolved_token.location))
         try origin_token.sema.add_error(error.NoteCalledFromHere, origin_token.token);
+}
+
+fn emit_header_error(
+    self: *AsmSemanticAir,
+    emit_reference: *const EmitReference,
+    token: Token
+) !void {
+    // kind of an unnecessary error as the AST handles section/barriers, but in
+    // case something ever changes in that regard
+    try self.add_error(error.HeaderContextIllegal, token);
+    try emit_reference.calling_token.sema.add_error(error.NoteCalledFromHere, emit_reference.calling_token.token);
 }
 
 // fixme: remove
@@ -825,11 +896,14 @@ fn prepare_label(self: *AsmSemanticAir, node: AsmAst.Node, instr_index: AsmAst.I
 /// May only be called once, and subsequent calls are considered undefined
 /// behaviour.
 pub fn semantic_analyse(self: *AsmSemanticAir) !void {
-    try self.analyse_container(self.nodes[0]);
+    const operands = self.nodes[0].operands;
+    try self.analyse_container(operands.lhs, operands.rhs);
 }
 
-fn analyse_container(self: *AsmSemanticAir, parent_node: AsmAst.Node) !void {
-    for (parent_node.operands.lhs..parent_node.operands.rhs) |node_idx| {
+const AnalysisError = SemanticError || std.mem.Allocator.Error;
+
+fn analyse_container(self: *AsmSemanticAir, lhs: AsmAst.Index, rhs: AsmAst.Index) AnalysisError!void {
+    for (lhs..rhs) |node_idx| {
         const node = self.nodes[node_idx];
         const token = self.source.tokens[node.token];
 
@@ -838,10 +912,15 @@ fn analyse_container(self: *AsmSemanticAir, parent_node: AsmAst.Node) !void {
                 .builtin_align => try self.emit_align(node),
 
                 .builtin_barrier => {
+                    if (self.emit_reference) |emit_reference| {
+                        try self.emit_header_error(emit_reference, token);
+                        continue;
+                    }
+
                     try self.emit_barrier(node);
                     const composite = self.nodes[node.operands.rhs];
                     if (self.node_unwrap(composite.operands.rhs)) |opaque_|
-                        try self.analyse_container(opaque_);
+                        try self.analyse_container(opaque_.operands.lhs, opaque_.operands.rhs);
                 },
 
                 .builtin_region => {
@@ -849,21 +928,27 @@ fn analyse_container(self: *AsmSemanticAir, parent_node: AsmAst.Node) !void {
                     const begin_address = section.size();
                     const composite = self.nodes[node.operands.rhs];
                     if (self.node_unwrap(composite.operands.rhs)) |opaque_|
-                        try self.analyse_container(opaque_);
+                        try self.analyse_container(opaque_.operands.lhs, opaque_.operands.rhs);
 
                     const len = section.size() - begin_address;
                     try self.emit_region(node, len);
                 },
 
                 .builtin_section => {
+                    if (self.emit_reference) |emit_reference| {
+                        try self.emit_header_error(emit_reference, token);
+                        continue;
+                    }
+
                     self.emit_section(node) catch |err| switch (err) {
-                        error.SectionCreateFailed => continue,
+                        // abort if there's no section already on error
+                        error.SectionCreateFailed => if (self.current_section != null) continue else return,
                         else => |err_| return err_
                     };
 
                     const composite = self.nodes[node.operands.rhs];
                     if (self.node_unwrap(composite.operands.rhs)) |opaque_|
-                        try self.analyse_container(opaque_);
+                        try self.analyse_container(opaque_.operands.lhs, opaque_.operands.rhs);
                 },
 
                 // nothing to do here
@@ -883,6 +968,12 @@ fn analyse_container(self: *AsmSemanticAir, parent_node: AsmAst.Node) !void {
             else => astgen_failure()
         }
     }
+}
+
+fn current_emitting_section(self: *AsmSemanticAir) *Section {
+    return if (self.emit_reference) |emit_reference|
+        emit_reference.section else
+        self.current_section orelse return astgen_failure();
 }
 
 fn emit_align(self: *AsmSemanticAir, node: AsmAst.Node) !void {
@@ -944,7 +1035,7 @@ fn emit_region(self: *AsmSemanticAir, node: AsmAst.Node, opaque_len: usize) !voi
     const size_ = std.fmt.parseInt(usize, size, 0) catch astgen_failure();
     if (opaque_len > size_)
         return try self.add_error(error.RegionExceedsSize, .{ opaque_len, size_, region_token });
-    const section = self.current_section orelse return astgen_failure();
+    const section = self.current_emitting_section();
     const padding = size_ - opaque_len;
     try section.content.append(self.allocator, .{
         .token = region_token,
@@ -1208,14 +1299,14 @@ fn emit_addressable(self: *AsmSemanticAir, index: AsmAst.Index) !void {
         break :blk .{ label_range, modifier_token != null };
     } else .{ .{}, false };
 
-    const section = self.current_section orelse return astgen_failure();
+    const section = self.current_emitting_section();
     try self.emit_labels(section, labels);
 
     const arguments = if (self.node_unwrap(node.operands.lhs)) |arguments_node|
         arguments_node.operands else
         null;
     const is_labeled = (labels.rhs - labels.lhs) > 0;
-    try self.emit_instructions(token, is_modified, is_labeled, arguments);
+    try self.emit_instructions(node, is_modified, is_labeled, arguments);
 }
 
 fn emit_labels(self: *AsmSemanticAir, section: *Section, labels: AsmAst.IndexRange) !void {
@@ -1228,12 +1319,13 @@ fn emit_labels(self: *AsmSemanticAir, section: *Section, labels: AsmAst.IndexRan
 
 fn emit_instructions(
     self: *AsmSemanticAir,
-    token: Token,
+    node: AsmAst.Node,
     is_modified: bool,
     is_labeled: bool,
     arguments: ?AsmAst.IndexRange
 ) !void {
-    const section = self.current_section orelse return astgen_failure();
+    const section = self.current_emitting_section();
+    const token = self.source.tokens[node.token];
     const string = token.location.slice(self.source.buffer);
 
     switch (token.tag) {
@@ -1256,15 +1348,17 @@ fn emit_instructions(
         .identifier => {
             if (!std.mem.startsWith(u8, string, "@") or string.len == 1) {
                 try self.add_error(error.UnknownInstruction, token);
-                // fixme: lookup imports
-                const symbol = self.symbols.get(string) orelse return;
+
+                const symbol = self.fetch_symbol_inner(string) orelse return;
                 if (symbol.symbol == .header)
                     try self.add_error(error.NoteDidYouMean, .{ "call the header @", string, symbol.token });
                 return;
             }
 
-            // fixme: add identifier header lookup and recursive analyse_container() call
-            // ...
+            const origin = ForeignToken { .sema = self, .token = self.source.tokens[node.token] };
+            const header = try Expression(Symbol.Header).lower_tree(self, node, origin) orelse return;
+            // fixme: is_labeled first header instruction
+            try self.unroll_header(header, arguments);
         },
 
         else => unreachable
@@ -1311,6 +1405,71 @@ fn cast_arguments(self: *AsmSemanticAir, token: Token, instruction_tag: Instruct
     astgen_failure();
 }
 
+fn unroll_header(self: *AsmSemanticAir, header: Expression(Symbol.Header), arguments: ?AsmAst.IndexRange) !void {
+    var foreign_sema = header.executed_token.sema;
+    const is_origin = self.emit_reference == null; // non-null when this sema is currently lowering header
+    const is_reference_owner = foreign_sema.emit_reference == null; // first call also cleans up last
+
+    var mapping = try foreign_sema.map_header_arguments(self, header, arguments orelse .zero) orelse return;
+    defer mapping.deinit(self.allocator);
+
+    var emit_reference = if (is_origin)
+        try EmitReference.init(self.allocator, header.token, self.current_section.?) else
+        self.emit_reference.?;
+    defer if (is_origin) emit_reference.deinit(self.allocator);
+
+    foreign_sema.emit_reference = emit_reference;
+    defer { if (is_reference_owner) foreign_sema.emit_reference = null; }
+
+    try emit_reference.push_scope(self.allocator, mapping);
+    defer emit_reference.pop_scope(self.allocator);
+
+    try foreign_sema.analyse_container(header.result.content.lhs, header.result.content.rhs);
+}
+
+fn map_header_arguments(
+    self: *AsmSemanticAir,
+    calling_sema: *AsmSemanticAir,
+    header: Expression(Symbol.Header),
+    argument_range: AsmAst.IndexRange
+) !?SymbolMap {
+    var parameters = ContainerIterator.init_range(self, header.result.arguments);
+    var arguments = ContainerIterator.init_range(calling_sema, argument_range);
+
+    if (parameters.left() != arguments.left()) {
+        try calling_sema.add_error(error.ExpectedArgumentsLen, .{ header.token.token, parameters.left(), arguments.left() });
+        try self.add_error(error.NoteDefinedHere, .{ header.executed_token.token.tag, header.executed_token.token });
+        return null;
+    }
+
+    var mappings = SymbolMap.empty;
+    try mappings.ensureTotalCapacity(self.allocator, parameters.left());
+    errdefer mappings.deinit(self.allocator);
+
+    while (parameters.next()) |parameter_node| {
+        const parameter_token = self.source.tokens[parameter_node.token];
+        const name = parameter_token.location.slice(self.source.buffer);
+
+        // fixme: header arguments cannot be used as arguments to headers
+        // fixme: cross-sema header arguments are not supported
+        const mapping = Symbol.Define {
+            .value_node = arguments.next_index(),
+            .is_public = false };
+        if (mappings.contains(name))
+            try self.add_error(error.HeaderDuplicateParameter, parameter_token);
+        try self.maybe_emit_duplicate_error(.{
+            .name = name,
+            .token = parameter_token,
+            .symbol = .{ .define = mapping } });
+
+        mappings.putAssumeCapacity(name, .{
+            .token = parameter_token,
+            .symbol = .{ .define = mapping } });
+    }
+
+    return mappings;
+}
+
 fn Expression(comptime ResultType: type) type {
     return struct {
 
@@ -1324,8 +1483,10 @@ fn Expression(comptime ResultType: type) type {
 
         pub fn lower_tree(sema: *AsmSemanticAir, node: AsmAst.Node, origin_token: ForeignToken) EvaluationError!?ExpressionType {
             const token = sema.source.tokens[node.token];
+            const is_define = node.tag == .identifier;
+            const is_header = ResultType == Symbol.Header and node.tag == .instruction;
 
-            if (node.tag == .identifier) {
+            if (is_define or is_header) {
                 astgen_assert(token.tag == .identifier);
                 const identifier = token.location.slice(sema.source.buffer);
 
@@ -1343,7 +1504,7 @@ fn Expression(comptime ResultType: type) type {
                     .define => |define| try ExpressionType.lower_tree(symbols_sema, symbols_sema.nodes[define.value_node], origin_token),
                     .header => |header| blk: {
                         if (ResultType == Symbol.Header)
-                            break :blk .{ .tag = node.tag, .token = token, .result = header }; // headers aren't expanded in arguments
+                            break :blk .{ .token = origin_token, .executed_token = .{ .sema = symbols_sema, .token = symbol.token }, .result = header }; // headers aren't expanded in arguments
                         try origin_token.sema.add_error(error.HeaderResultType, origin_token.token);
                         break :blk null;
                     },
@@ -1358,6 +1519,12 @@ fn Expression(comptime ResultType: type) type {
                     .token = origin_token,
                     .executed_token = .{ .sema = sema, .token = token },
                     .result = try sema.cast_numeric_literal(ResultType, node) orelse return null },
+
+                // if lowered tree isn't a header (handled above in lowering)
+                Symbol.Header => blk: {
+                    try origin_token.sema.add_error(error.HeaderResultType, origin_token.token);
+                    break :blk null;
+                },
 
                 else => if (try ResultType.analyse(sema, node, origin_token)) |result|
                     .{ .token = origin_token, .executed_token = .{ .sema = sema, .token = token }, .result = result } else
@@ -1413,7 +1580,7 @@ fn fetch_symbol(self: *AsmSemanticAir, path: []const u8, origin_token: ForeignTo
         return null;
     }
 
-    const own_symbol = self.symbols.getPtr(namespace) orelse {
+    const own_symbol = self.fetch_symbol_inner(namespace) orelse {
         try self.emit_resolved_error(error.UnknownSymbol, origin_token, token, token);
         return null;
     };
@@ -1421,7 +1588,6 @@ fn fetch_symbol(self: *AsmSemanticAir, path: []const u8, origin_token: ForeignTo
     return switch (own_symbol.symbol) {
         .file => |file| blk: {
             const symbol_name = components.next() orelse {
-                // fixme: this is a namespace error
                 try self.emit_resolved_error(error.Namespace, origin_token, token, token);
                 break :blk null;
             };
@@ -1449,6 +1615,14 @@ fn fetch_symbol(self: *AsmSemanticAir, path: []const u8, origin_token: ForeignTo
             break :blk .{ self, own_symbol, null };
         }
     };
+}
+
+// fixme: add foreign symbols because of mapping
+fn fetch_symbol_inner(self: *AsmSemanticAir, key: []const u8) ?*Symbol.Locatable {
+    const scoped_symbol = if (self.emit_reference) |emit_reference|
+        if (emit_reference.scope) |scope| scope.symbols.getPtr(key) else null else
+        null;
+    return scoped_symbol orelse self.symbols.getPtr(key);
 }
 
 const NumericResult = union(enum) {
@@ -1941,8 +2115,7 @@ test "instruction validation" {
     // fixme: get rid of generic errors
     // try testSemaErr("@section foo\nu8 256", &.{ error.ResultType, error.NoteCalledFromHere });
     try testSemaErr("@section foo\nfoo", &.{ error.UnknownInstruction });
-    // fixme: add headers
-    // try testSemaErr("@section foo\n@foo", &.{});
+    try testSemaErr("@header foo\n@end\n@section foo\n@foo", &.{});
 }
 
 // fixme: testing without token location
@@ -2125,16 +2298,6 @@ test "lowering @define symbols" {
     //     .{ .u16 = .{ 24 } }
     // });
 
-    // try testSemaErr(
-    //     \\@define foo, 256
-    //     \\@section foo
-    //     \\          u8 @foo
-    // , &.{
-    //     error.ResultType,
-    //     // error.NoteDefinedHere // fixme: add type-defined-here error
-    //     error.NoteCalledFromHere // fixme: only add this note when error is generated from @define
-    // });
-
     // fixme: represent/check values
     // try testSemaGen(
     //     \\@define foo, @bar
@@ -2146,6 +2309,32 @@ test "lowering @define symbols" {
     // });
 
     try testSemaErr(
+        \\@define foo, 0
+        \\@section foo
+        \\          u8 @foo
+    , &.{});
+
+    // fixme: numeric bounds checking are done at linktime
+    // try testSemaErr(
+    //     \\@define foo, 256
+    //     \\@section foo
+    //     \\          u8 @foo
+    // , &.{
+    //     error.ResultType,
+    //     // error.NoteDefinedHere // fixme: add type-defined-here error
+    //     error.NoteCalledFromHere // fixme: only add this note when error is generated from @define
+    // });
+
+    try testSemaErr(
+        \\@define foo, ra
+        \\@section foo
+        \\          u8 @foo
+    , &.{
+        error.UnlinkableToken,
+        error.NoteCalledFromHere
+    });
+
+    try testSemaErr(
         \\@header foo
         \\@end
         \\@section foo
@@ -2153,6 +2342,77 @@ test "lowering @define symbols" {
     , &.{
         error.HeaderResultType
     });
+}
+
+test "unrolling @header symbols" {
+    try testSemaErr(
+        \\@header foo
+        \\@end
+        \\@section text
+        \\          foo
+    , &.{
+        error.UnknownInstruction,
+        error.NoteDidYouMean
+    });
+
+    try testSemaErr(
+        \\@header foo
+        \\@end
+        \\@section text
+        \\          @foo
+    , &.{});
+
+    try testSemaErr(
+        \\@header foo, a
+        \\@end
+        \\@section text
+        \\          @foo
+    , &.{
+        error.ExpectedArgumentsLen,
+        error.NoteDefinedHere
+    });
+
+    try testSemaErr(
+        \\@header foo, a
+        \\          jmpr @a
+        \\@end
+        \\@section text
+        \\          @foo 5
+    , &.{});
+
+    try testSemaErr(
+        \\@header foo, a
+        \\          jmpr @a
+        \\@end
+        \\@section text
+        \\          @foo ra
+    , &.{
+        error.UnlinkableToken,
+        error.NoteCalledFromHere
+    });
+
+    try testSemaErr(
+        \\@header foo
+        \\          @bar 0xFF
+        \\@end
+        \\@header bar, a
+        \\          jmpr @a
+        \\@end
+        \\@section text
+        \\          @foo
+    , &.{});
+
+    try testSemaErr(
+        \\@header foo, a, b
+        \\          jmpr @b
+        \\          @a u24
+        \\@end
+        \\@header bar, a
+        \\          reserve @a, 4
+        \\@end
+        \\@section text
+        \\          @foo @bar, 0xFF
+    , &.{});
 }
 
 test "full fledge" {

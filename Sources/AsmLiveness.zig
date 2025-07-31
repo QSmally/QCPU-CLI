@@ -29,6 +29,7 @@ sections: *const SectionMap,
 /// Only populated in freestanding.
 errors: ErrorList,
 
+// fixme: liveness is not file-independent (tokens can be foreign)
 pub fn init(
     qcu: *Qcu.File,
     source: Source,

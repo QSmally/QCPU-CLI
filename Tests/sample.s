@@ -4,9 +4,13 @@
 @define roo, 0x05
 @define(expose) foo, @roo
 
+@header hdr, a
+                  rst @a
+@end
+
 @section text
 bar:              cli
-                  rst   @aaa.foo
+                  @hdr  @aaa.foo
                   jmpr  @foo
 
 @section data

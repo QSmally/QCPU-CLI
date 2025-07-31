@@ -147,8 +147,13 @@ pub const Node = struct {
     };
 
     pub const Operands = struct {
+
         lhs: Index = Null,
         rhs: Index = Null,
+
+        pub const zero = Operands {
+            .lhs = Null,
+            .rhs = Null };
     };
 };
 
@@ -456,11 +461,12 @@ const AstGen = struct {
 
             if (tag == .builtin_section or tag == .builtin_barrier)
                 break :blk payload;
-            if (self.source.tokens[self.next_token()].tag != .builtin_end) {
+            if (self.current_tag() != .builtin_end) {
                 try self.add_error_arg(error.Expected, Token.Tag.builtin_end);
                 try self.add_error_arg(error.NoteDefinedHere, self.source.tokens[token]);
             }
 
+            _ = self.next_token();
             _ = try self.expect_token(.newline);
             break :blk payload;
         } else Null;
@@ -1064,6 +1070,16 @@ test "barriers" {
         \\@section test
         \\          ast rb
     );
+
+    try testAstGenErr(
+        \\@header foo
+        \\          @barrier
+        \\@end
+    , &.{
+        error.Expected,
+        error.NoteDefinedHere,
+        error.ExtraEndScope
+    });
 }
 
 test "full fledge" {
