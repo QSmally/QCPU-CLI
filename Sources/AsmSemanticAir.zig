@@ -429,7 +429,7 @@ const SemanticError = error {
 };
 
 fn add_error(self: *AsmSemanticAir, comptime err: SemanticError, argument: anytype) !void {
-    @branchHint(.unlikely);
+    @branchHint(.cold);
 
     const message = switch (err) {
         error.Expected,
@@ -1622,7 +1622,10 @@ fn fetch_symbol_inner(self: *AsmSemanticAir, key: []const u8) ?*Symbol.Locatable
     const scoped_symbol = if (self.emit_reference) |emit_reference|
         if (emit_reference.scope) |scope| scope.symbols.getPtr(key) else null else
         null;
-    return scoped_symbol orelse self.symbols.getPtr(key);
+    return scoped_symbol orelse blk: {
+        @branchHint(.likely);
+        break :blk self.symbols.getPtr(key);
+    };
 }
 
 const NumericResult = union(enum) {
@@ -2353,6 +2356,15 @@ test "unrolling @header symbols" {
     , &.{
         error.UnknownInstruction,
         error.NoteDidYouMean
+    });
+
+    try testSemaErr(
+        \\@header foo
+        \\@end
+        \\@section text
+        \\          bar
+    , &.{
+        error.UnknownInstruction
     });
 
     try testSemaErr(
