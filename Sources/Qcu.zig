@@ -92,7 +92,8 @@ pub const File = struct {
     allocator: std.mem.Allocator,
     qcu: *Qcu,
     pwd: std.fs.Dir,
-    file_path: []const u8,
+    file_name: []const u8,
+    real_path: []const u8,
     buffer: [:0]const u8,
     sha256: [Sha256.digest_length]u8,
 
@@ -101,7 +102,7 @@ pub const File = struct {
     sema: ?AsmSemanticAir = null,
 
     pub fn init_work(qcu: *Qcu, cwd: std.fs.Dir, file_path: []const u8) !*File {
-        const file = try File.init(qcu, cwd, file_path);
+        const file = try File.init(qcu, cwd, ".", file_path);
         errdefer file.deinit();
 
         try qcu.work_queue.ensureUnusedCapacity(4);
@@ -114,10 +115,19 @@ pub const File = struct {
         return file;
     }
 
-    pub fn init(qcu: *Qcu, cwd: std.fs.Dir, file_path: []const u8) !*File {
+    fn init_from(self: *Qcu.File, file_path: []const u8) !*File {
+        const base_name = std.fs.path.dirname(self.real_path) orelse ".";
+        return try File.init(self.qcu, self.pwd, base_name, file_path);
+    }
+
+    pub fn init(qcu: *Qcu, cwd: std.fs.Dir, from_path: []const u8, file_path: []const u8) !*File {
         const base_name = std.fs.path.dirname(file_path) orelse ".";
         var pwd = try cwd.openDir(base_name, .{});
         errdefer pwd.close();
+
+        const file_name = std.fs.path.basename(file_path);
+        const real_path = try std.fs.path.resolve(qcu.allocator, &.{ from_path, base_name, file_name });
+        errdefer qcu.allocator.free(real_path);
 
         const file = try qcu.allocator.create(File);
         errdefer qcu.allocator.destroy(file);
@@ -126,7 +136,8 @@ pub const File = struct {
             .allocator = qcu.allocator,
             .qcu = qcu,
             .pwd = pwd,
-            .file_path = file_path,
+            .file_name = file_name,
+            .real_path = real_path,
             .buffer = undefined,
             .sha256 = undefined };
         file.buffer = try file.get_source();
@@ -159,12 +170,13 @@ pub const File = struct {
 
         self.pwd.close();
         self.free_temporary();
+        self.allocator.free(self.real_path);
         self.allocator.free(self.buffer);
         self.allocator.destroy(self);
     }
 
     fn dump(self: *File, tag: []const u8, thing: anytype) !void {
-        try stderr.print("{s} ({s}):\n", .{ tag, self.file_path });
+        try stderr.print("{s} ({s}):\n", .{ tag, self.real_path });
         try thing.dump(stderr);
     }
 
@@ -175,7 +187,7 @@ pub const File = struct {
     pub fn resolve(self: *File, file_path: []const u8) !*?AsmSemanticAir {
         try self.qcu.work_queue.ensureUnusedCapacity(2);
         try self.qcu.files.ensureUnusedCapacity(self.qcu.allocator, 1);
-        const file = try File.init(self.qcu, self.pwd, file_path);
+        const file = try File.init_from(self, file_path);
         errdefer file.deinit();
 
         // fixme: is this really the best way of knowing that two files are the same?
@@ -270,8 +282,7 @@ pub const File = struct {
 
     /// Memory returned is owned by caller.
     fn get_source(self: *File) ![:0]const u8 {
-        const file_name = std.fs.path.basename(self.file_path);
-        var file = try self.pwd.openFile(file_name, .{});
+        var file = try self.pwd.openFile(self.file_name, .{});
         defer file.close();
         const stat = try file.stat();
 
@@ -305,7 +316,7 @@ pub const LocatableError = struct {
     file: *const File,
 
     pub fn write(self: *const LocatableError, writer: anytype) !void {
-        try self.err.write(self.file.file_path, self.file.source.?.buffer, writer);
+        try self.err.write(self.file.real_path, self.file.source.?.buffer, writer);
     }
 };
 
