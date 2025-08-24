@@ -269,14 +269,14 @@ test "identifiers" {
     try testTokenise("ascii", &.{ .pseudo_instruction, .eof });
     try testTokenise("ast, ascii", &.{ .instruction, .comma, .pseudo_instruction, .eof });
 
-    try testTokenise("@symbols", &.{ .builtin_symbols, .eof });
+    try testTokenise("@import", &.{ .builtin_import, .eof });
     try testTokenise("@define(expose) boob", &.{ .builtin_define, .l_paran, .option, .r_paran, .identifier, .eof });
     try testTokenise("@define(0x00) boob", &.{ .builtin_define, .l_paran, .numeric_literal, .r_paran, .identifier, .eof });
     try testTokenise("@define(.reference) boob", &.{ .builtin_define, .l_paran, .reference_label, .r_paran, .identifier, .eof });
     try testTokenise("@define(.label:) boob", &.{ .builtin_define, .l_paran, .private_label, .r_paran, .identifier, .eof });
     try testTokenise("@section", &.{ .builtin_section, .eof });
     try testTokenise("@section foo", &.{ .builtin_section, .identifier, .eof });
-    try testTokenise("@symbols&", &.{ .builtin_symbols, .invalid, .eof });
+    try testTokenise("@import&", &.{ .builtin_import, .invalid, .eof });
     try testTokenise("@nevergonnagiveyouup", &.{ .identifier, .eof });
 
     // validated at a later stage
@@ -381,7 +381,7 @@ test "char literals" {
 test "full fledge" {
     try testTokeniseSlices(
         \\
-        \\@symbols not_implemented_yet
+        \\@import not_implemented_yet
         \\
         \\ascii "foo bar roo" 0x00 // comment
         \\
@@ -391,7 +391,7 @@ test "full fledge" {
         \\0xZZ        ast
     , &.{
         .{ .newline, "" },
-        .{ .builtin_symbols, "@symbols" },
+        .{ .builtin_import, "@import" },
         .{ .identifier, "not_implemented_yet" },
         .{ .newline, "" },
         .{ .newline, "" },

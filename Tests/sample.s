@@ -1,5 +1,5 @@
 
-@symbols aaa, "Library.s"
+@import aaa, "Library.s"
 
 @define roo, 0x05
 @define(expose) foo, @roo

@@ -639,12 +639,12 @@ fn prepare_opaque_container(self: *AsmSemanticAir, parent_node: AsmAst.Node, sym
                 switch (token.tag) {
                     .builtin_define,
                     .builtin_header,
-                    .builtin_symbols => {
+                    .builtin_import => {
                         const symbol = switch (token.tag) {
                             .builtin_define => try self.prepare_define(node),
                             // header content not prepared yet
                             .builtin_header => try self.prepare_header(node),
-                            .builtin_symbols => try self.prepare_symbols(node),
+                            .builtin_import => try self.prepare_import(node),
                             else => unreachable
                         } orelse continue;
 
@@ -839,12 +839,12 @@ fn prepare_header(self: *AsmSemanticAir, node: AsmAst.Node) !?NamedSymbol {
         .symbol = .{ .header = header } };
 }
 
-fn prepare_symbols(self: *AsmSemanticAir, node: AsmAst.Node) !?NamedSymbol {
+fn prepare_import(self: *AsmSemanticAir, node: AsmAst.Node) !?NamedSymbol {
     const composite = self.nodes[node.operands.rhs];
     if (self.node_unwrap(composite.operands.lhs)) |options_|
         _ = try self.parse_options(options_, &.{});
-    const symbols_token = self.source.tokens[node.token];
-    var arguments = ContainerIterator.init_index_context(self, node.operands.lhs, symbols_token);
+    const import_token = self.source.tokens[node.token];
+    var arguments = ContainerIterator.init_index_context(self, node.operands.lhs, import_token);
 
     const namespace_node = try arguments.expect(.identifier) orelse return null;
     const namespace = self.source.tokens[namespace_node.token].location.slice(self.source.buffer);
@@ -871,7 +871,7 @@ fn prepare_symbols(self: *AsmSemanticAir, node: AsmAst.Node) !?NamedSymbol {
         .sema = sema };
     return .{
         .name = namespace,
-        .token = symbols_token,
+        .token = import_token,
         .symbol = .{ .file = file } };
 }
 
@@ -1052,8 +1052,8 @@ fn analyse_container(self: *AsmSemanticAir, lhs: AsmAst.Index, rhs: AsmAst.Index
                 // nothing to do here
                 .builtin_define,
                 .builtin_header,
-                .builtin_linkinfo,
-                .builtin_symbols => {},
+                .builtin_import,
+                .builtin_linkinfo => {},
 
                 // transparent in the AST
                 .builtin_end => astgen_failure(),
@@ -2250,17 +2250,17 @@ test "@header" {
     });
 }
 
-test "@symbols" {
-    try testSemaErr("@symbols", &.{ error.ExpectedContext });
-    try testSemaErr("@symbols foo", &.{ error.ExpectedContext });
-    try testSemaErr("@symbols 5", &.{ error.Expected });
-    try testSemaErr("@symbols bar, \"foo\"", &.{});
-    try testSemaErr("@symbols \"foo\"", &.{ error.Expected });
-    try testSemaErr("@symbols \"foo\" 0", &.{ error.Expected });
-    try testSemaErr("@symbols foo, \"foo\" 0", &.{ error.UselessSentinel});
+test "@import" {
+    try testSemaErr("@import", &.{ error.ExpectedContext });
+    try testSemaErr("@import foo", &.{ error.ExpectedContext });
+    try testSemaErr("@import 5", &.{ error.Expected });
+    try testSemaErr("@import bar, \"foo\"", &.{});
+    try testSemaErr("@import \"foo\"", &.{ error.Expected });
+    try testSemaErr("@import \"foo\" 0", &.{ error.Expected });
+    try testSemaErr("@import foo, \"foo\" 0", &.{ error.UselessSentinel});
     // fixme: adds additional unexpected error instead of moving on
-    // try testSemaErr("@symbols \"foo\", 0", &.{ error.Expected, error.Unexpected });
-    try testSemaErr("@symbols foo, \"foo\", foo", &.{ error.Unexpected });
+    // try testSemaErr("@import \"foo\", 0", &.{ error.Expected, error.Unexpected });
+    try testSemaErr("@import foo, \"foo\", foo", &.{ error.Unexpected });
 }
 
 test "@section" {
@@ -2749,7 +2749,7 @@ test "unrolling @header symbols" {
 
 test "full fledge" {
     try testSema1(
-        \\@symbols foo, "foo"
+        \\@import foo, "foo"
         \\@define doo, rz
         \\@define(expose) bar, @doo
         \\@header roo

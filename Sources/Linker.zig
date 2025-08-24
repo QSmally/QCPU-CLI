@@ -72,7 +72,7 @@ pub fn append(self: *Linker, file: *Qcu.File) !void {
 const LinkError = error {
     DuplicateGlobalSection,
     MissingGlobalSection,
-    UndefinedSymbol,
+    DuplicateLinkingInfo,
     NoteDefinedHere,
     NoteNotLinked
 };
@@ -83,7 +83,7 @@ fn add_error(self: *Linker, comptime err: LinkError, target: *Qcu.File, argument
     const message = switch (err) {
         error.DuplicateGlobalSection => "duplicate global section '{s}' (no stable memory layout)",
         error.MissingGlobalSection => "missing global section '{s}'",
-        error.UndefinedSymbol => "undefined symbol '{s}'",
+        error.DuplicateLinkingInfo => "multiply defined linking info",
         error.NoteDefinedHere => "{s} defined here",
         error.NoteNotLinked => "symbol defined here not linked"
     };
@@ -97,8 +97,8 @@ fn add_error(self: *Linker, comptime err: LinkError, target: *Qcu.File, argument
     const token: ?Token = switch (err) {
         error.DuplicateGlobalSection => argument[1],
         error.MissingGlobalSection => null,
-        error.UndefinedSymbol,
         error.NoteDefinedHere => argument[1],
+        error.DuplicateLinkingInfo,
         error.NoteNotLinked => argument
     };
     const token_location = if (token) |token_|
@@ -108,9 +108,9 @@ fn add_error(self: *Linker, comptime err: LinkError, target: *Qcu.File, argument
         token_.location.slice(target.source.?.buffer) else
         null;
     const arguments = switch (err) {
-        error.DuplicateGlobalSection,
-        error.UndefinedSymbol => .{ argument[0] },
+        error.DuplicateGlobalSection => .{ argument[0] },
         error.MissingGlobalSection => .{ argument },
+        error.DuplicateLinkingInfo => .{},
         error.NoteDefinedHere => .{ argument[0].fmt() },
         error.NoteNotLinked => .{ token_slice.? }
     };
@@ -178,15 +178,8 @@ fn poke_section_tree(self: *Linker, section: *Section) !void {
                     if (!@hasField(@TypeOf(operand), "result") or !@hasField(@TypeOf(operand.result), "linktime_label"))
                         continue :oper;
                     if (operand.result.linktime_label) |linktime_label| {
-                        // reference not found means semantic analysis was not
-                        // triggered, otherwise semantic analysis verified that
-                        // the label exists
-                        const foreign_reference = linktime_label.sema.references.get(linktime_label.name) orelse {
-                            try self.add_error(error.UndefinedSymbol, section.file, .{ linktime_label.name, operand.token.token });
-                            // fixme: reference Qcu.File error.NoteNotLinked like 'defined here'
-                            continue :loop;
-                        };
-
+                        // semantic analysis verifies that the imported reference exists
+                        const foreign_reference = linktime_label.sema.references.get(linktime_label.name) orelse unreachable;
                         const linker_section = self.find_linker_section(foreign_reference.section) orelse unreachable;
                         try self.poke_section_tree(linker_section);
                     }
@@ -208,12 +201,8 @@ fn find_linker_section(self: *Linker, sema_section: *AsmSemanticAir.Section) ?*S
 fn remove_unpoked_inplace(self: *Linker) void {
     var index: usize = 0;
 
-    while (true) {
-        if (index >= self.link_list.items.len)
-            break;
-        const section = self.link_list.items[index];
-
-        if (!section.is_poked) {
+    while (index < self.link_list.items.len) {
+        if (!self.link_list.items[index].is_poked) {
             _ = self.link_list.swapRemove(index);
             // new element possibly at this index, so no increment
         } else {
@@ -223,7 +212,33 @@ fn remove_unpoked_inplace(self: *Linker) void {
 }
 
 pub fn generate(self: *Linker) !void {
-    _ = self;
+    for (try self.find_single_linkinfo() orelse return) |link_node| {
+        std.debug.print("{s} ({s}) = {}\n", .{ link_node.key, link_node.subject orelse "?", link_node.value });
+    }
+}
+
+fn find_single_linkinfo(self: *Linker) !?[]const AsmSemanticAir.LinkInfo {
+    var result: ?*const AsmSemanticAir = null;
+
+    for (self.link_list.items) |section| {
+        const sema = &section.file.sema.?;
+
+        if (result == sema or sema.link_info.items.len == 0)
+            continue;
+        if (result) |existing_result| {
+            const first_info_token = sema.link_info.items[0].token;
+            const existing_info_token = existing_result.link_info.items[0].token;
+            try self.add_error(error.DuplicateLinkingInfo, section.file, first_info_token);
+            try self.add_error(error.NoteDefinedHere, existing_result.qcu.?, .{ existing_info_token.tag, existing_info_token });
+            continue;
+        }
+
+        result = sema;
+    }
+
+    return if (result) |result_|
+        result_.link_info.items else
+        null;
 }
 
 // Tests

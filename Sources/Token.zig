@@ -39,18 +39,18 @@ pub const Tag = enum {
     builtin_define,
     builtin_end,
     builtin_header,
+    builtin_import,
     builtin_linkinfo,
     builtin_region,
     builtin_section,
-    builtin_symbols,
 
     pub fn builtin_opaque(self: Tag) bool {
         return switch (self) {
             .builtin_align,
             .builtin_define,
             .builtin_end,
-            .builtin_linkinfo,
-            .builtin_symbols => false,
+            .builtin_import,
+            .builtin_linkinfo => false,
 
             .builtin_header,
             .builtin_region,
@@ -68,10 +68,10 @@ pub const Tag = enum {
             .builtin_define,
             .builtin_end,
             .builtin_header,
+            .builtin_import,
             .builtin_linkinfo,
             .builtin_region,
-            .builtin_section,
-            .builtin_symbols => true,
+            .builtin_section => true,
 
             else => false
         };
@@ -113,10 +113,10 @@ pub const Tag = enum {
             .builtin_define => "@define",
             .builtin_end => "@end",
             .builtin_header => "@header",
+            .builtin_import => "@import",
             .builtin_linkinfo => "@linkinfo",
             .builtin_region => "@region",
-            .builtin_section => "@section",
-            .builtin_symbols => "@symbols"
+            .builtin_section => "@section"
         };
     }
 };
@@ -164,10 +164,10 @@ const keywords = std.StaticStringMap(Tag).initComptime(.{
     .{ "@define", .builtin_define },
     .{ "@end", .builtin_end },
     .{ "@header", .builtin_header },
+    .{ "@import", .builtin_import },
     .{ "@linkinfo", .builtin_linkinfo },
     .{ "@region", .builtin_region },
     .{ "@section", .builtin_section },
-    .{ "@symbols", .builtin_symbols },
 
     .{ "expose", .option },
     .{ "noelimination", .option },

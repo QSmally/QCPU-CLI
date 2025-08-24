@@ -385,9 +385,9 @@ const AstGen = struct {
                 .builtin_barrier,
                 .builtin_define,
                 .builtin_header,
+                .builtin_import,
                 .builtin_linkinfo,
-                .builtin_section,
-                .builtin_symbols => {
+                .builtin_section => {
                     const builtin = try self.parse_builtin();
                     try self.add_frame_node(builtin);
                 },
@@ -444,7 +444,7 @@ const AstGen = struct {
     // SimpleBuiltin <- SimpleBuiltinIdentifier (LParan OptionList RParan)? ArgumentList Eol
     // IndentedBuiltin <- IndentedBuiltinIdentifier (LParan OptionList RParan)? ArgumentList Eol Opaque End Eol
     // Section <- SectionBuiltinIdentifier Identifier Eol Opaque [^Section]
-    // SimpleBuiltinIdentifier <- '@barrier' / '@define' / '@linkinfo' / '@symbols'
+    // SimpleBuiltinIdentifier <- '@barrier' / '@define' / '@import' / '@linkinfo'
     // IndentedBuiltin <- '@align' / '@header' / '@region'
     // SectionBuiltinIdentifier <- '@section'
     // End <- '@end'
@@ -721,7 +721,7 @@ const AstGen = struct {
                 },
 
                 .builtin_header,
-                .builtin_symbols => {
+                .builtin_import => {
                     try self.add_error(error.BuiltinRootLevel);
                     // recover by parsing the rest so the Ast reports other
                     // possible errors.
@@ -1113,7 +1113,7 @@ test "full fledge" {
 
     try testAstGen(
         \\
-        \\@symbols "awd/space @symbols test.s"
+        \\@import "awd/space @import test.s"
         \\@define foo, bar
         \\@define(expose) aaa
         \\

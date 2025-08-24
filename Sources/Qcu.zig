@@ -111,10 +111,9 @@ pub const File = struct {
         const file = try File.init(qcu, cwd, ".", file_path);
         errdefer file.deinit();
 
-        try qcu.work_queue.ensureUnusedCapacity(4);
+        try qcu.work_queue.ensureUnusedCapacity(3);
         qcu.work_queue.add(.{ .static_analysis = file }) catch unreachable;
         qcu.work_queue.add(.{ .semantic_analysis = file }) catch unreachable;
-        qcu.work_queue.add(.{ .free_temporary = file }) catch unreachable;
 
         if (!qcu.options.noliveness)
             qcu.work_queue.add(.{ .liveness = file }) catch unreachable;
@@ -157,17 +156,14 @@ pub const File = struct {
         return file;
     }
 
-    pub fn free_temporary(self: *File) void {
-        if (self.ast) |*ast| {
-            self.allocator.free(ast.nodes);
-            self.ast = null;
-        }
-    }
-
     pub fn deinit(self: *File) void {
         if (self.source) |*source| {
             source.deinit();
             self.source = null;
+        }
+        if (self.ast) |*ast| {
+            self.allocator.free(ast.nodes);
+            self.ast = null;
         }
         if (self.sema) |*sema| {
             sema.deinit();
@@ -175,7 +171,6 @@ pub const File = struct {
         }
 
         self.pwd.close();
-        self.free_temporary();
         self.allocator.free(self.real_path);
         self.allocator.free(self.buffer);
         self.allocator.destroy(self);
@@ -191,7 +186,7 @@ pub const File = struct {
     /// From this file's parent directory, resolves a file path and - if
     /// necessary - adds a static analysis job to the Qcu's work queue.
     pub fn resolve(self: *File, file_path: []const u8) !*?AsmSemanticAir {
-        try self.qcu.work_queue.ensureUnusedCapacity(2);
+        try self.qcu.work_queue.ensureUnusedCapacity(3);
         try self.qcu.files.ensureUnusedCapacity(self.qcu.allocator, 1);
         const file = try File.init_from(self, file_path);
         errdefer file.deinit();
@@ -206,7 +201,9 @@ pub const File = struct {
         }
 
         self.qcu.work_queue.add(.{ .static_analysis = file }) catch unreachable;
-        self.qcu.work_queue.add(.{ .free_temporary = file }) catch unreachable;
+        self.qcu.work_queue.add(.{ .semantic_analysis = file }) catch unreachable;
+        if (!self.qcu.options.noliveness)
+            self.qcu.work_queue.add(.{ .liveness = file }) catch unreachable;
         self.qcu.files.appendAssumeCapacity(file);
         return &file.sema;
     }
@@ -336,7 +333,6 @@ pub const JobType = union(enum) {
     /// buffer + symbols -> sections
     /// - second pass semantic analysis
     semantic_analysis: *File,
-    free_temporary: *File,
     liveness: *File,
     link_tree_elimination: *Qcu,
     /// sections + sections -> sections
@@ -358,7 +354,6 @@ pub const JobType = union(enum) {
         return switch (self) {
             .static_analysis => |file| try file.static_analysis(),
             .semantic_analysis => |file| try file.semantic_analysis(),
-            .free_temporary => |file| file.free_temporary(),
             .liveness => |file| try file.liveness(),
             .link_tree_elimination => |qcu| {
                 std.debug.assert(qcu.errors.items.len == 0);
@@ -422,9 +417,6 @@ test "work queue dependency order" {
     try std.testing.expectEqual(@as(?JobTypeTag, .semantic_analysis), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
     try std.testing.expectEqual(@as(?JobTypeTag, .semantic_analysis), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
     try std.testing.expectEqual(@as(?JobTypeTag, .semantic_analysis), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
-    try std.testing.expectEqual(@as(?JobTypeTag, .free_temporary), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
-    try std.testing.expectEqual(@as(?JobTypeTag, .free_temporary), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
-    try std.testing.expectEqual(@as(?JobTypeTag, .free_temporary), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
     try std.testing.expectEqual(@as(?JobTypeTag, .liveness), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
     try std.testing.expectEqual(@as(?JobTypeTag, .liveness), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
     try std.testing.expectEqual(@as(?JobTypeTag, .liveness), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
@@ -446,9 +438,8 @@ test "full fledge" {
         .static_analysis,
         .semantic_analysis,
         .semantic_analysis,
-        .free_temporary,
-        .free_temporary,
-        .free_temporary,
+        .semantic_analysis,
+        .liveness,
         .liveness,
         .liveness,
         .link_tree_elimination,

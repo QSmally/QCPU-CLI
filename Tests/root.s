@@ -1,5 +1,5 @@
 
-@symbols main, "sample.s"
+@import main, "sample.s"
 
 @section root
 @region 256
