@@ -39,6 +39,7 @@ pub const Tag = enum {
     builtin_define,
     builtin_end,
     builtin_header,
+    builtin_linkinfo,
     builtin_region,
     builtin_section,
     builtin_symbols,
@@ -48,6 +49,7 @@ pub const Tag = enum {
             .builtin_align,
             .builtin_define,
             .builtin_end,
+            .builtin_linkinfo,
             .builtin_symbols => false,
 
             .builtin_header,
@@ -66,6 +68,7 @@ pub const Tag = enum {
             .builtin_define,
             .builtin_end,
             .builtin_header,
+            .builtin_linkinfo,
             .builtin_region,
             .builtin_section,
             .builtin_symbols => true,
@@ -110,6 +113,7 @@ pub const Tag = enum {
             .builtin_define => "@define",
             .builtin_end => "@end",
             .builtin_header => "@header",
+            .builtin_linkinfo => "@linkinfo",
             .builtin_region => "@region",
             .builtin_section => "@section",
             .builtin_symbols => "@symbols"
@@ -142,6 +146,10 @@ pub fn content_slice(self: Token, from_buffer: [:0]const u8) []const u8 {
         .private_label,                                 // remove punctuation
         .char_literal,                                  // remove quotes
         .string_literal => slice[1..(slice.len - 1)],   // remove quotes
+        .reference_label => blk: {                      // remove dots/namespace
+            const last_index = std.mem.lastIndexOfScalar(u8, slice, '.') orelse unreachable;
+            break :blk slice[(last_index + 1)..];
+        },
         else => slice
     };
 }
@@ -156,12 +164,15 @@ const keywords = std.StaticStringMap(Tag).initComptime(.{
     .{ "@define", .builtin_define },
     .{ "@end", .builtin_end },
     .{ "@header", .builtin_header },
+    .{ "@linkinfo", .builtin_linkinfo },
     .{ "@region", .builtin_region },
     .{ "@section", .builtin_section },
     .{ "@symbols", .builtin_symbols },
 
     .{ "expose", .option },
     .{ "noelimination", .option },
+    .{ "origin", .option },
+    .{ "align", .option },
 
     // Instructions
     .{ "ast", .instruction },

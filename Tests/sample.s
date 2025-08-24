@@ -9,7 +9,7 @@
 @end
 
 @section text
-bar:              cli
+start:            cli
                   @hdr  @aaa.foo
                   jmpr  @foo
 

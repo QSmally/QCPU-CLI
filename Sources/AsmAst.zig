@@ -382,10 +382,11 @@ const AstGen = struct {
 
         while (self.current_tag() != .eof) {
             switch (self.current_tag()) {
+                .builtin_barrier,
                 .builtin_define,
                 .builtin_header,
+                .builtin_linkinfo,
                 .builtin_section,
-                .builtin_barrier,
                 .builtin_symbols => {
                     const builtin = try self.parse_builtin();
                     try self.add_frame_node(builtin);
@@ -443,7 +444,7 @@ const AstGen = struct {
     // SimpleBuiltin <- SimpleBuiltinIdentifier (LParan OptionList RParan)? ArgumentList Eol
     // IndentedBuiltin <- IndentedBuiltinIdentifier (LParan OptionList RParan)? ArgumentList Eol Opaque End Eol
     // Section <- SectionBuiltinIdentifier Identifier Eol Opaque [^Section]
-    // SimpleBuiltinIdentifier <- '@barrier' / '@define' / '@symbols'
+    // SimpleBuiltinIdentifier <- '@barrier' / '@define' / '@linkinfo' / '@symbols'
     // IndentedBuiltin <- '@align' / '@header' / '@region'
     // SectionBuiltinIdentifier <- '@section'
     // End <- '@end'
@@ -713,6 +714,7 @@ const AstGen = struct {
             switch (self.current_tag()) {
                 .builtin_align,
                 .builtin_define,
+                .builtin_linkinfo,
                 .builtin_region => {
                     const builtin = try self.parse_builtin();
                     try self.add_frame_node(builtin);

@@ -9,7 +9,8 @@
 //  - exchange imports
 //  - semantic analysis                 -> sections
 //  - liveness
-//  - link sections
+//  - reference tree elimination
+//  - link sections                     -> blocks
 
 const std = @import("std");
 const AsmAst = @import("AsmAst.zig");
@@ -18,6 +19,7 @@ const AsmSemanticAir = @import("AsmSemanticAir.zig");
 const AsmTokeniser = @import("AsmTokeniser.zig");
 const Error = @import("Error.zig");
 const Source = @import("Source.zig");
+const Linker = @import("Linker.zig");
 
 const Qcu = @This();
 
@@ -32,6 +34,7 @@ link_list: FileList,
 options: Options,
 work_queue: JobQueue,
 errors: ErrorList,
+linker: Linker,
 
 /// Each run of QCPU-CLI contains exactly one Qcu. From a list of input files,
 /// it performs tokenisation, AstGen, and lastly, both passes of semantic
@@ -52,16 +55,17 @@ pub fn init(
         .link_list = .empty,
         .options = options,
         .work_queue = .init(allocator, {}),
-        .errors = .empty };
+        .errors = .empty,
+        .linker = .init(allocator, options) };
     errdefer qcu.deinit();
 
     try qcu.files.ensureUnusedCapacity(allocator, file_paths.len);
     for (file_paths) |file_path|
         qcu.files.appendAssumeCapacity(try File.init_work(qcu, cwd, file_path));
-    try qcu.work_queue.add(.{ .link = qcu });
-
     if (!options.noelimination)
-        try qcu.work_queue.add(.{ .tree_elimination = qcu });
+        try qcu.work_queue.add(.{ .link_tree_elimination = qcu });
+    try qcu.work_queue.add(.{ .link_generate = qcu });
+
     return qcu;
 }
 
@@ -74,6 +78,7 @@ pub fn deinit(self: *Qcu) void {
     for (self.errors.items) |lerr|
         self.allocator.free(lerr.err.message);
     self.errors.deinit(self.allocator);
+    self.linker.deinit();
     self.allocator.destroy(self);
 }
 
@@ -82,9 +87,10 @@ pub const Options = struct {
     dtokens: bool = false,
     dast: bool = false,
     dair: bool = false,
+    dlinker: bool = false,
     noliveness: bool = false,
     noelimination: bool = false,
-    origin: u16 = 0
+    rootsection: []const u8 = "root"
 };
 
 pub const File = struct {
@@ -238,7 +244,7 @@ pub const File = struct {
 
         self.sema = try AsmSemanticAir.init(self, self.source.?, self.ast.?.nodes);
         std.debug.assert(self.sema.?.errors.items.len == 0);
-        try self.verify_errorless_or(error.StaticAnalysis);
+        try self.qcu.verify_errorless_or(error.StaticAnalysis);
         std.debug.assert(self.qcu.errors.items.len == 0);
     }
 
@@ -254,12 +260,12 @@ pub const File = struct {
         if (self.qcu.options.dair) try self.dump("AIR", &self.sema.?);
 
         std.debug.assert(self.sema.?.errors.items.len == 0);
-        try self.verify_errorless_or(error.SemanticAnalysis);
+        try self.qcu.verify_errorless_or(error.SemanticAnalysis);
         std.debug.assert(self.qcu.errors.items.len == 0);
 
         // imports aren't added to the link list as they're not being
         // semantically analysed
-        try self.qcu.link_list.append(self.qcu.allocator, self);
+        try self.qcu.linker.append(self);
     }
 
     /// Liveness pass. Illegal to call when both passes of semantic analysis
@@ -276,7 +282,7 @@ pub const File = struct {
         defer liveness_pass.deinit();
 
         std.debug.assert(liveness_pass.errors.items.len == 0);
-        try self.verify_errorless_or(error.Liveness);
+        try self.qcu.verify_errorless_or(error.Liveness);
         std.debug.assert(self.qcu.errors.items.len == 0);
     }
 
@@ -303,12 +309,12 @@ pub const File = struct {
         result.update(self.buffer);
         return result.finalResult();
     }
-
-    fn verify_errorless_or(self: *File, throw_error: anyerror) !void {
-        if (self.qcu.errors.items.len > 0)
-            return throw_error;
-    }
 };
+
+fn verify_errorless_or(self: *Qcu, throw_error: anyerror) !void {
+    if (self.errors.items.len > 0)
+        return throw_error;
+}
 
 pub const LocatableError = struct {
 
@@ -332,9 +338,9 @@ pub const JobType = union(enum) {
     semantic_analysis: *File,
     free_temporary: *File,
     liveness: *File,
+    link_tree_elimination: *Qcu,
     /// sections + sections -> sections
-    link: *Qcu,
-    tree_elimination: *Qcu,
+    link_generate: *Qcu,
 
     /// Jobs higher in the list are performed earlier and at the same time as
     /// each other.
@@ -354,8 +360,21 @@ pub const JobType = union(enum) {
             .semantic_analysis => |file| try file.semantic_analysis(),
             .free_temporary => |file| file.free_temporary(),
             .liveness => |file| try file.liveness(),
-            .link => |qcu| try qcu.link_sema_units(),
-            .tree_elimination => |qcu| try qcu.tree_optimise()
+            .link_tree_elimination => |qcu| {
+                std.debug.assert(qcu.errors.items.len == 0);
+                try qcu.linker.tree_elimination();
+                try qcu.verify_errorless_or(error.TreeElimination);
+            },
+            .link_generate => |qcu| {
+                std.debug.assert(qcu.errors.items.len == 0);
+                try qcu.linker.generate();
+                try qcu.verify_errorless_or(error.Linker);
+
+                if (qcu.options.dlinker) {
+                    _ = try stderr.writeAll("Linker:\n");
+                    try qcu.linker.dump(stderr);
+                }
+            }
         };
     }
 };
@@ -365,16 +384,6 @@ const JobQueue = std.PriorityQueue(JobType, void, JobType.before);
 const SymbolMap = std.StringHashMapUnmanaged(*AsmSemanticAir.Symbol.Locatable);
 const SectionMap = std.StringArrayHashMapUnmanaged(*AsmSemanticAir.Section);
 const ErrorList = std.ArrayListUnmanaged(LocatableError);
-
-fn link_sema_units(self: *Qcu) !void {
-    // fixme: add linker
-    _ = self;
-}
-
-fn tree_optimise(self: *Qcu) !void {
-    // fixme: tree elimination passes on linked binary
-    _ = self;
-}
 
 // Tests
 
@@ -402,31 +411,55 @@ fn testJob(qcu: *Qcu, job: JobType) !void {
 
 test "work queue dependency order" {
     const cwd = std.fs.cwd(); // QCPU-CLI/
-    const files = &[_][]const u8 { "Tests/sample.s", "Tests/Library.s" };
+    const files = &[_][]const u8 { "Tests/root.s", "Tests/sample.s", "Tests/Library.s" };
     const options = Options {};
     const qcu = try Qcu.init(std.testing.allocator, cwd, files, options);
     defer qcu.deinit();
 
     try std.testing.expectEqual(@as(?JobTypeTag, .static_analysis), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
     try std.testing.expectEqual(@as(?JobTypeTag, .static_analysis), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
+    try std.testing.expectEqual(@as(?JobTypeTag, .static_analysis), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
+    try std.testing.expectEqual(@as(?JobTypeTag, .semantic_analysis), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
     try std.testing.expectEqual(@as(?JobTypeTag, .semantic_analysis), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
     try std.testing.expectEqual(@as(?JobTypeTag, .semantic_analysis), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
     try std.testing.expectEqual(@as(?JobTypeTag, .free_temporary), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
     try std.testing.expectEqual(@as(?JobTypeTag, .free_temporary), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
+    try std.testing.expectEqual(@as(?JobTypeTag, .free_temporary), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
     try std.testing.expectEqual(@as(?JobTypeTag, .liveness), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
     try std.testing.expectEqual(@as(?JobTypeTag, .liveness), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
-    try std.testing.expectEqual(@as(?JobTypeTag, .link), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
-    try std.testing.expectEqual(@as(?JobTypeTag, .tree_elimination), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
+    try std.testing.expectEqual(@as(?JobTypeTag, .liveness), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
+    try std.testing.expectEqual(@as(?JobTypeTag, .link_tree_elimination), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
+    try std.testing.expectEqual(@as(?JobTypeTag, .link_generate), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
     try std.testing.expectEqual(@as(?JobTypeTag, null), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
 }
 
 test "full fledge" {
     const cwd = std.fs.cwd(); // QCPU-CLI/
-    const files = &[_][]const u8 { "Tests/sample.s" };
+    const files = &[_][]const u8 { "Tests/root.s", "Tests/sample.s" };
     const options = Options {};
     const qcu = try Qcu.init(std.testing.allocator, cwd, files, options);
     defer qcu.deinit();
 
-    while (qcu.work_queue.removeOrNull()) |job|
+    const jobs = [_]JobTypeTag {
+        .static_analysis,
+        .static_analysis,
+        .static_analysis,
+        .semantic_analysis,
+        .semantic_analysis,
+        .free_temporary,
+        .free_temporary,
+        .free_temporary,
+        .liveness,
+        .liveness,
+        .link_tree_elimination,
+        .link_generate };
+    var i: usize = 0;
+
+    while (qcu.work_queue.removeOrNull()) |job| {
+        try std.testing.expectEqual(jobs[i], std.meta.activeTag(job));
         try testJob(qcu, job);
+        i += 1;
+    }
+
+    try std.testing.expectEqual(@as(usize, 0), qcu.work_queue.count());
 }

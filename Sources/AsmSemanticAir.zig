@@ -21,8 +21,14 @@ nodes: []const AsmAst.Node,
 /// imports. May not be modified during semantic analysis.
 symbols: SymbolMap,
 sections: SectionMap,
+/// Reference locations defined in the section's opaque. Their index refers to
+/// the instruction location inside `content`, and not the final byte offset of
+/// the section. Other semas can refence this. External references (from other
+/// sections) are counted to perform dead code elimination.
+references: ReferenceMap,
 current_section: ?*Section,
 emit_reference: ?*EmitReference,
+link_info: LinkInfoList,
 /// Only populated in freestanding.
 errors: ErrorList,
 
@@ -38,8 +44,10 @@ pub fn init(qcu: *Qcu.File, source: Source, nodes: []const AsmAst.Node) !AsmSema
         .nodes = nodes,
         .symbols = .empty,
         .sections = .empty,
+        .references = .empty,
         .current_section = null,
         .emit_reference = null,
+        .link_info = .empty,
         .errors = .empty };
     errdefer self.deinit();
     try self.prepare_root();
@@ -54,29 +62,26 @@ pub fn init_freestanding(allocator: std.mem.Allocator, source: Source, nodes: []
         .nodes = nodes,
         .symbols = .empty,
         .sections = .empty,
+        .references = .empty,
         .current_section = null,
         .emit_reference = null,
+        .link_info = .empty,
         .errors = .empty };
     errdefer self.deinit();
     try self.prepare_root();
     return self;
 }
 
-fn destroy_section(self: *AsmSemanticAir, section: *Section) void {
-    if (section.next) |next|
-        self.destroy_section(next);
-    section.content.deinit(self.allocator);
-    self.allocator.destroy(section);
-}
-
 pub fn deinit(self: *AsmSemanticAir) void {
     self.symbols.deinit(self.allocator);
-
     for (self.sections.values()) |section|
-        self.destroy_section(section);
+        section.destroy_tree(self.allocator);
     self.sections.deinit(self.allocator);
+    for (self.references.values()) |*reference|
+        reference.deinit(self.allocator);
+    self.references.deinit(self.allocator);
     self.current_section = null;
-
+    self.link_info.deinit(self.allocator);
     for (self.errors.items) |err|
         self.allocator.free(err.message);
     self.errors.deinit(self.allocator);
@@ -161,12 +166,18 @@ pub const Section = struct {
     /// A boolean to indicate whether this section is allowed to be removed by
     /// unreachable-code-elimination.
     is_removable: bool = true,
-    /// Opaque list of (pseudo)instructions. All addresses during assembletime
-    /// are relative to the start of the section.
+    /// Opaque list of (pseudo)instructions.
     content: InstructionList = .empty,
     /// A section is allowed to be split by @barrier or duplicate @section
     /// tags, which links to a new, unnamed section.
     next: ?*Section = null,
+
+    pub fn destroy_tree(self: *Section, allocator: std.mem.Allocator) void {
+        if (self.next) |next|
+            next.destroy_tree(allocator);
+        self.content.deinit(allocator);
+        allocator.destroy(self);
+    }
 
     pub fn append(self: *Section, new_section: *Section) void {
         if (self.next) |next_section|
@@ -179,6 +190,28 @@ pub const Section = struct {
         for (self.content.items(.instruction)) |instruction|
             address += instruction.size();
         return address;
+    }
+};
+
+pub const Reference = struct {
+
+    pub const ReferenceTrack = struct {
+        instruction_index: u32,
+        /// From which section this reference is tracking from. If it's the
+        /// same as the reference itself, it's disregarded from
+        /// unreachable-code-elimination.
+        section: *Section
+    };
+
+    /// Index of section opaque's instruction this reference references. If
+    /// undefined, it hasn't been indexed yet by the sema.
+    instruction_index: u32 = undefined,
+    section: *Section = undefined,
+    references: ReferenceTrackList = .empty,
+    // fixme: certain labels are noelimination specific, just like sections blocks are
+
+    pub fn deinit(self: *Reference, allocator: std.mem.Allocator) void {
+        self.references.deinit(allocator);
     }
 };
 
@@ -221,10 +254,24 @@ pub const EmitReference = struct {
     }
 };
 
+/// @linkinfo(key) subject, value
+/// @linkinfo key, value
+pub const LinkInfo = struct {
+
+    token: Token,
+    /// Key-subject must be unique, even if subject is null
+    key: []const u8,
+    subject: ?[]const u8 = null,
+    value: u32
+};
+
 const SymbolMap = std.StringArrayHashMapUnmanaged(Symbol.Locatable);
 const SectionMap = std.StringArrayHashMapUnmanaged(*Section);
 const InstructionList = std.MultiArrayList(Instruction.Locatable);
+const ReferenceMap = std.StringArrayHashMapUnmanaged(Reference);
+const ReferenceTrackList = std.ArrayListUnmanaged(Reference.ReferenceTrack);
 const ErrorList = std.ArrayListUnmanaged(Error);
+const LinkInfoList = std.ArrayListUnmanaged(LinkInfo);
 const SemanticAirMap = std.StringArrayHashMapUnmanaged(*AsmSemanticAir);
 
 /// SemanticAir will assume certain state generated by AstGen, and asserts them
@@ -277,7 +324,9 @@ fn node_unwrap(self: *AsmSemanticAir, index: AsmAst.Index) ?AsmAst.Node {
 
 fn is_valid_symbol(self: *AsmSemanticAir, string: []const u8) bool {
     _ = self;
-    return std.mem.startsWith(u8, string, "@") and string.len > 1;
+    const is_define_or_header = std.mem.startsWith(u8, string, "@");
+    const is_label = std.mem.startsWith(u8, string, ".");
+    return (is_define_or_header or is_label) and string.len > 1;
 }
 
 const ContainerIterator = struct {
@@ -413,6 +462,7 @@ const SemanticError = error {
     UnknownSymbol,
     Namespace,
     NamespacePrivateSymbol,
+    NonConformingSymbol,
     ImportNotFound,
     IllegalUnaryOp,
     UnlinkableToken,
@@ -451,6 +501,7 @@ fn add_error(self: *AsmSemanticAir, comptime err: SemanticError, argument: anyty
         error.UnknownSymbol => "unknown symbol '{s}'",
         error.Namespace => "namespace '{s}' cannot be expanded",
         error.NamespacePrivateSymbol => "symbol is marked private in its namespace",
+        error.NonConformingSymbol => "{s} is not of type similar to {s}",
         error.ImportNotFound => "file to import not found",
         error.IllegalUnaryOp => "illegal {s} operation with {s}",
         error.UnlinkableToken => "{s} is not supported in a linkable result type",
@@ -474,7 +525,8 @@ fn add_error(self: *AsmSemanticAir, comptime err: SemanticError, argument: anyty
     };
 
     const token: ?Token = switch (err) {
-        error.ExpectedArgumentsLen => argument[0],
+        error.ExpectedArgumentsLen,
+        error.NonConformingSymbol => argument[0],
         error.Expected,
         error.ExpectedContext,
         error.DuplicateSymbol,
@@ -534,6 +586,7 @@ fn add_error(self: *AsmSemanticAir, comptime err: SemanticError, argument: anyty
         error.UnlinkableExpression,
         error.HeaderResultType,
         error.NoteCalledFromHere => .{},
+        error.NonConformingSymbol => .{ argument[0].tag.fmt(), argument[1].tag.fmt() },
         error.DuplicateSymbol,
         error.AlignPowerTwo,
         error.NonEmptyModifier,
@@ -607,6 +660,8 @@ fn prepare_opaque_container(self: *AsmSemanticAir, parent_node: AsmAst.Node, sym
                         if (self.node_unwrap(composite.operands.rhs)) |opaque_|
                             try self.prepare_opaque_container(opaque_, symbol_map);
                     },
+
+                    .builtin_linkinfo => try self.emit_prepare_linkinfo(node),
 
                     // nothing to do here
                     .builtin_align => {},
@@ -741,6 +796,7 @@ fn prepare_define(self: *AsmSemanticAir, node: AsmAst.Node) !?NamedSymbol {
     const name = name_token.location.slice(self.source.buffer);
 
     const value_node = try arguments.expect_any() orelse return null;
+
     try arguments.expect_end();
     astgen_assert(self.is_null(composite.operands.rhs));
 
@@ -819,14 +875,56 @@ fn prepare_symbols(self: *AsmSemanticAir, node: AsmAst.Node) !?NamedSymbol {
         .symbol = .{ .file = file } };
 }
 
+const linkinfo_subject_options = [_]Option { .origin, .@"align" };
+
+fn emit_prepare_linkinfo(self: *AsmSemanticAir, node: AsmAst.Node) !void {
+    const composite = self.nodes[node.operands.rhs];
+    const options_ = if (self.node_unwrap(composite.operands.lhs)) |options_|
+        try self.parse_options(options_, &linkinfo_subject_options) else
+        null;
+    defer self.free_options(options_);
+    const linkinfo_token = self.source.tokens[node.token];
+    var arguments = ContainerIterator.init_index_context(self, node.operands.lhs, linkinfo_token);
+
+    const name_node = try arguments.expect(.identifier) orelse return;
+    const name_token = self.source.tokens[name_node.token];
+    const name = name_token.location.slice(self.source.buffer);
+
+    const value_node = try arguments.expect(.integer) orelse return;
+    const value = try self.cast_numeric_literal(u32, value_node) orelse return;
+
+    try arguments.expect_end();
+    astgen_assert(self.is_null(composite.operands.rhs));
+
+    if (options_) |the_options| {
+        try self.link_info.ensureUnusedCapacity(self.allocator, the_options.len);
+
+        for (the_options) |the_option|
+            self.link_info.appendAssumeCapacity(.{
+                .token = linkinfo_token,
+                .key = @tagName(the_option),
+                .subject = name,
+                .value = value });
+    } else {
+        try self.link_info.append(self.allocator, .{
+            .token = linkinfo_token,
+            .key = name,
+            .value = value });
+    }
+}
+
 const Option = enum {
     expose,
-    noelimination
+    noelimination,
+    origin,
+    @"align"
 };
 
 const options_map = std.StaticStringMap(Option).initComptime(.{
     .{ "expose", .expose },
-    .{ "noelimination", .noelimination }
+    .{ "noelimination", .noelimination },
+    .{ "origin", .origin },
+    .{ "align", .@"align" }
 });
 
 /// If the allow list is empty, it's guaranteed that there's no need to call
@@ -954,6 +1052,7 @@ fn analyse_container(self: *AsmSemanticAir, lhs: AsmAst.Index, rhs: AsmAst.Index
                 // nothing to do here
                 .builtin_define,
                 .builtin_header,
+                .builtin_linkinfo,
                 .builtin_symbols => {},
 
                 // transparent in the AST
@@ -1299,22 +1398,43 @@ fn emit_addressable(self: *AsmSemanticAir, index: AsmAst.Index) !void {
         break :blk .{ label_range, modifier_token != null };
     } else .{ .{}, false };
 
-    const section = self.current_emitting_section();
-    try self.emit_labels(section, labels);
+    const is_labeled = (labels.rhs - labels.lhs) > 0;
+    try self.emit_labels(labels);
 
     const arguments = if (self.node_unwrap(node.operands.lhs)) |arguments_node|
         arguments_node.operands else
         null;
-    const is_labeled = (labels.rhs - labels.lhs) > 0;
     try self.emit_instructions(node, is_modified, is_labeled, arguments);
 }
 
-fn emit_labels(self: *AsmSemanticAir, section: *Section, labels: AsmAst.IndexRange) !void {
-    // fixme: for all labels, append to symbol table
-    const current_address = section.size();
-    _ = current_address;
-    _ = self;
-    _ = labels;
+fn emit_labels(self: *AsmSemanticAir, labels: AsmAst.IndexRange) !void {
+    const section = self.current_emitting_section();
+    try self.references.ensureUnusedCapacity(self.allocator, labels.rhs - labels.lhs);
+
+    for (labels.lhs..labels.rhs) |label_idx| {
+        self.emit_label(self.nodes[label_idx], section);
+    }
+}
+
+fn emit_label(
+    self: *AsmSemanticAir,
+    label: AsmAst.Node,
+    section: *Section
+) void {
+    astgen_assert(label.tag == .label);
+    const current_index: u32 = @intCast(section.content.len);
+    const token = self.source.tokens[label.token];
+    const name = token.content_slice(self.source.buffer);
+
+    if (self.references.getPtr(name)) |backpatch_reference| {
+        backpatch_reference.instruction_index = current_index;
+        backpatch_reference.section = section;
+    } else {
+        const new_reference = Reference {
+            .instruction_index = current_index,
+            .section = section };
+        self.references.putAssumeCapacity(name, new_reference);
+    }
 }
 
 fn emit_instructions(
@@ -1557,7 +1677,7 @@ fn cast_numeric_literal(self: *AsmSemanticAir, comptime T: type, node: AsmAst.No
 }
 
 const ForeignToken = struct {
-    // fixme: location eql has an edge case
+    // fixme: token location eql has an edge case when working in different files
     sema: *AsmSemanticAir,
     token: Token
 };
@@ -1574,6 +1694,7 @@ fn fetch_symbol(self: *AsmSemanticAir, path: []const u8, origin_token: ForeignTo
 
     var components = std.mem.splitScalar(u8, path[1..], '.');
     const namespace = components.next() orelse unreachable;
+    const is_label = std.mem.startsWith(u8, path, ".");
 
     if (namespace.len == 0) {
         try self.emit_resolved_error(error.AmbiguousIdentifier, origin_token, token, token);
@@ -1585,11 +1706,13 @@ fn fetch_symbol(self: *AsmSemanticAir, path: []const u8, origin_token: ForeignTo
         return null;
     };
 
-    return switch (own_symbol.symbol) {
+    const result_sema,
+    const result_symbol,
+    const result_namespace = switch (own_symbol.symbol) {
         .file => |file| blk: {
             const symbol_name = components.next() orelse {
                 try self.emit_resolved_error(error.Namespace, origin_token, token, token);
-                break :blk null;
+                return null;
             };
 
             // fixme: sema unit not available error
@@ -1609,12 +1732,22 @@ fn fetch_symbol(self: *AsmSemanticAir, path: []const u8, origin_token: ForeignTo
         else => blk: {
             if (components.next() != null) {
                 try self.emit_resolved_error(error.AmbiguousIdentifier, origin_token, token, token);
-                break :blk null;
+                return null;
             }
 
             break :blk .{ self, own_symbol, null };
         }
     };
+
+    const is_result_label = result_symbol.symbol == .label;
+
+    if (is_label != is_result_label) {
+        try self.emit_resolved_error(error.NonConformingSymbol, origin_token, token, .{ token, result_symbol.token });
+        try result_sema.add_error(error.NoteDefinedHere, .{ result_symbol.token.tag, result_symbol.token });
+        return null;
+    }
+
+    return .{ result_sema, result_symbol, result_namespace };
 }
 
 // fixme: add foreign symbols because of mapping
@@ -1636,15 +1769,19 @@ const NumericResult = union(enum) {
 };
 
 fn Numeric(comptime Type: NumericResult) type {
-    _ = Type;
-
     return struct {
 
         const NumericType = @This();
         const ExpressionType = Expression(NumericType);
+        pub const ResultType = Type;
+
+        const LinkLabel = struct {
+            sema: *AsmSemanticAir,
+            name: []const u8
+        };
 
         tag: AsmAst.Node.Tag,
-        linktime_label: ?AsmAst.Node = null,
+        linktime_label: ?LinkLabel = null,
         assembletime_offset: ?i32 = null,
 
         pub fn analyse(sema: *AsmSemanticAir, node: AsmAst.Node, origin_token: ForeignToken) !?NumericType {
@@ -1682,20 +1819,38 @@ fn Numeric(comptime Type: NumericResult) type {
                                 return null;
                             }
 
-                            if (lhs.result.assembletime_offset != null and rhs.result.linktime_label != null)
+                            if (lhs.result.assembletime_offset != null and rhs.result.linktime_label != null) {
+                                const evaluation = try math(
+                                    node.tag,
+                                    lhs.result.assembletime_offset.?,
+                                    rhs.result.assembletime_offset orelse 0);
                                 break :expr .{
                                     .tag = node.tag,
                                     .linktime_label = rhs.result.linktime_label,
-                                    .assembletime_offset = try math(node.tag, lhs.result.assembletime_offset.?, rhs.result.assembletime_offset orelse 0) };
-                            if (lhs.result.linktime_label != null and rhs.result.assembletime_offset != null)
+                                    .assembletime_offset = evaluation };
+                            }
+
+                            if (lhs.result.linktime_label != null and rhs.result.assembletime_offset != null) {
+                                const evaluation = try math(
+                                    node.tag,
+                                    lhs.result.assembletime_offset orelse 0,
+                                    rhs.result.assembletime_offset.?);
                                 break :expr .{
                                     .tag = node.tag,
                                     .linktime_label = lhs.result.linktime_label,
-                                    .assembletime_offset = try math(node.tag, lhs.result.assembletime_offset orelse 0, rhs.result.assembletime_offset.?) };
-                            if (lhs.result.assembletime_offset != null and rhs.result.assembletime_offset != null)
+                                    .assembletime_offset = evaluation };
+                            }
+
+                            if (lhs.result.assembletime_offset != null and rhs.result.assembletime_offset != null) {
+                                const evaluation = try math(
+                                    node.tag,
+                                    lhs.result.assembletime_offset.?,
+                                    rhs.result.assembletime_offset.?);
                                 break :expr .{
                                     .tag = node.tag,
-                                    .assembletime_offset = try math(node.tag, lhs.result.assembletime_offset.?, rhs.result.assembletime_offset.?) };
+                                    .assembletime_offset = evaluation };
+                            }
+
                             unreachable;
                         },
 
@@ -1709,19 +1864,33 @@ fn Numeric(comptime Type: NumericResult) type {
                                 return null;
                             }
 
-                            if (lhs.result.linktime_label != null and rhs.result.linktime_label != null)
+                            if (lhs.result.linktime_label != null and rhs.result.linktime_label != null) {
                                 break :expr .{
                                     .tag = node.tag, // fixme: relative diff
                                     .assembletime_offset = 0 }; // + offsets on either side
-                            if (lhs.result.linktime_label != null and rhs.result.assembletime_offset != null)
+                            }
+
+                            if (lhs.result.linktime_label != null and rhs.result.assembletime_offset != null) {
+                                const evaluation = try math(
+                                    node.tag,
+                                    lhs.result.assembletime_offset orelse 0,
+                                    rhs.result.assembletime_offset.?);
                                 break :expr .{
                                     .tag = node.tag,
                                     .linktime_label = lhs.result.linktime_label,
-                                    .assembletime_offset = try math(node.tag, lhs.result.assembletime_offset orelse 0, rhs.result.assembletime_offset.?) };
-                            if (lhs.result.assembletime_offset != null and rhs.result.assembletime_offset != null)
+                                    .assembletime_offset = evaluation };
+                            }
+
+                            if (lhs.result.assembletime_offset != null and rhs.result.assembletime_offset != null) {
+                                const evaluation = try math(
+                                    node.tag,
+                                    lhs.result.assembletime_offset.?,
+                                    rhs.result.assembletime_offset.?);
                                 break :expr .{
                                     .tag = node.tag,
-                                    .assembletime_offset = try math(node.tag, lhs.result.assembletime_offset.?, rhs.result.assembletime_offset.?) };
+                                    .assembletime_offset = evaluation };
+                            }
+
                             unreachable;
                         },
 
@@ -1737,18 +1906,50 @@ fn Numeric(comptime Type: NumericResult) type {
                                 return null;
                             }
 
+                            const evaluation = try math(
+                                node.tag,
+                                lhs.result.assembletime_offset orelse 0,
+                                rhs.result.assembletime_offset orelse 0);
                             break :expr .{
                                 .tag = .integer,
-                                .assembletime_offset = try math(node.tag, lhs.result.assembletime_offset orelse 0, rhs.result.assembletime_offset orelse 0) };
+                                .assembletime_offset = evaluation };
                         },
 
                         else => unreachable
                     };
                 },
 
-                .reference => .{
-                    .tag = node.tag,
-                    .linktime_label = node },
+                .reference => blk: {
+                    const name = token.location.slice(sema.source.buffer);
+                    const qualified_name = token.content_slice(sema.source.buffer);
+
+                    const symbols_sema,
+                    const symbol,
+                    const namespace = try sema.fetch_symbol(name, origin_token, token) orelse return null;
+
+                    // for liveness pass
+                    if (namespace) |namespace_|
+                        namespace_.is_used = true;
+                    symbol.is_used = true;
+
+                    astgen_assert(symbol.symbol == .label);
+
+                    const reference = sema.references.getPtr(qualified_name) orelse create: {
+                        try sema.references.put(sema.allocator, qualified_name, .{});
+                        break :create sema.references.getPtr(qualified_name) orelse unreachable;
+                    };
+
+                    const section = sema.current_emitting_section();
+
+                    const track_reference = Reference.ReferenceTrack {
+                        .instruction_index = @intCast(section.content.len),
+                        .section = section };
+                    try reference.references.append(sema.allocator, track_reference);
+
+                    break :blk .{
+                        .tag = node.tag,
+                        .linktime_label = .{ .sema = symbols_sema, .name = qualified_name } };
+                },
 
                 .char => {
                     const ascii = token.location.slice(sema.source.buffer);
@@ -1981,7 +2182,11 @@ fn testSemaGen(input: [:0]const u8, output: []const Instruction) !void {
     }.run);
 }
 
-fn testSemaGenAnd(input: [:0]const u8, output: []const Instruction, func: anytype) !void {
+fn testSemaResult(input: [:0]const u8, func: anytype) !void {
+    try testSemaGenAnd(input, null, func);
+}
+
+fn testSemaGenAnd(input: [:0]const u8, output: ?[]const Instruction, func: anytype) !void {
     var ast, var sema = try testSema(input);
     defer testSemaFree(&ast, &sema);
     try sema.semantic_analyse();
@@ -1989,7 +2194,8 @@ fn testSemaGenAnd(input: [:0]const u8, output: []const Instruction, func: anytyp
     for (sema.errors.items) |err|
         try err.write("test.s", input, stderr);
     try std.testing.expect(sema.errors.items.len == 0);
-    try std.testing.expectEqualSlices(Instruction, sema.current_section.?.content.items(.instruction), output);
+    if (output) |output_|
+        try std.testing.expectEqualSlices(Instruction, sema.current_section.?.content.items(.instruction), output_);
     try func(&sema);
 }
 
@@ -2287,6 +2493,120 @@ test "@barrier" {
         fn run(sema: *AsmSemanticAir) !void {
             const section = sema.current_section.?;
             try std.testing.expect(!section.is_removable);
+        }
+    }.run);
+}
+
+test "linking .label symbols" {
+    try testSemaErr(
+        \\@define bar, .foo
+        \\@section foo
+        \\.foo: jmpr .bar
+    , &.{
+        error.NonConformingSymbol,
+        error.NoteDefinedHere
+    });
+
+    try testSemaErr(
+        \\@define bar, .foo
+        \\@define roo, .bar
+        \\@section foo
+        \\.foo: jmpr @roo
+    , &.{
+        error.NonConformingSymbol,
+        error.NoteCalledFromHere,
+        error.NoteDefinedHere
+    });
+
+    try testSemaErr(
+        \\@section foo
+        \\.foo: jmpr @foo
+    , &.{
+        error.NonConformingSymbol,
+        error.NoteDefinedHere
+    });
+
+    try testSemaErr(
+        \\@define bar, @foo
+        \\@section foo
+        \\.foo: jmpr @bar
+    , &.{
+        error.NonConformingSymbol,
+        error.NoteCalledFromHere,
+        error.NoteDefinedHere
+    });
+
+    try testSemaResult(
+        \\@section foo
+        \\.foo: jmpr .foo
+    , struct {
+        fn run(sema: *AsmSemanticAir) !void {
+            try std.testing.expectEqual(@as(usize, 1), sema.references.count());
+            const foo = sema.references.get("foo");
+            try std.testing.expect(foo != null);
+            try std.testing.expectEqual(@as(usize, 1), foo.?.references.items.len);
+            try std.testing.expectEqual(@as(usize, 0), foo.?.instruction_index);
+        }
+    }.run);
+
+    try testSemaResult(
+        \\@define bar, .foo
+        \\@section foo
+        \\      cli
+        \\      jmpr @bar
+        \\      cli
+        \\.foo: cli
+        \\      jmpr .foo
+    , struct {
+        fn run(sema: *AsmSemanticAir) !void {
+            try std.testing.expectEqual(@as(usize, 1), sema.references.count());
+            const foo = sema.references.get("foo");
+            try std.testing.expect(foo != null);
+            try std.testing.expectEqual(@as(usize, 2), foo.?.references.items.len);
+            try std.testing.expectEqual(@as(usize, 3), foo.?.instruction_index);
+        }
+    }.run);
+}
+
+test "@linkinfo" {
+    try testSemaErr(
+        \\@linkinfo(expose) text, 0
+        \\@linkinfo(noelimination) text, 0
+        \\@linkinfo(origin) text, 0
+        \\@linkinfo(align) text, 0
+    , &.{
+        error.UnsupportedOption,
+        error.UnsupportedOption
+    });
+
+    try testSemaErr(
+        \\@linkinfo(origin) text, "baaah"
+    , &.{
+        error.Expected
+    });
+
+    try testSemaResult(
+        \\@linkinfo foo, 5
+    , struct {
+        fn run(sema: *AsmSemanticAir) !void {
+            try std.testing.expectEqual(@as(usize, 1), sema.link_info.items.len);
+            const foo = sema.link_info.items[0];
+            try std.testing.expectEqualSlices(u8, "foo", foo.key);
+            try std.testing.expectEqual(@as(?[]const u8, null), foo.subject);
+            try std.testing.expectEqual(@as(u32, 5), foo.value);
+        }
+    }.run);
+
+    try testSemaResult(
+        \\@linkinfo(origin) text, 5
+    , struct {
+        fn run(sema: *AsmSemanticAir) !void {
+            try std.testing.expectEqual(@as(usize, 1), sema.link_info.items.len);
+            const foo = sema.link_info.items[0];
+            try std.testing.expectEqualSlices(u8, "origin", foo.key);
+            try std.testing.expect(foo.subject != null);
+            try std.testing.expectEqualSlices(u8, "text", foo.subject.?);
+            try std.testing.expectEqual(@as(u32, 5), foo.value);
         }
     }.run);
 }
