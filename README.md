@@ -30,6 +30,6 @@ $ zig build test -Ddump
 
 ## Contributing
 
-The assembler has a lot of quirks, mainly for cross-file references (`@symbols`) with header
+The assembler has a lot of quirks, mainly for cross-file references (`@import`) with header
 arguments and the Liveness pass. If you'd like to contribute to this project, you can take a look at
 all the `fixme` comments. Most of these TODOs reside in the semantic analysis unit.

@@ -77,8 +77,6 @@ pub fn deinit(self: *AsmSemanticAir) void {
     for (self.sections.values()) |section|
         section.destroy_tree(self.allocator);
     self.sections.deinit(self.allocator);
-    for (self.references.values()) |*reference|
-        reference.deinit(self.allocator);
     self.references.deinit(self.allocator);
     self.current_section = null;
     self.link_info.deinit(self.allocator);
@@ -115,9 +113,7 @@ pub const Symbol = union(enum) {
     pub const Locatable = struct {
         token: Token,
         symbol: Symbol,
-        // fixme: instead of a boolean, use a check for a resolved value at
-        // analysis time? inconsistencies with a @header due to args
-        is_used: bool = false
+        is_used: bool = false // to optimise liveness
     };
 
     label: Label,
@@ -195,24 +191,10 @@ pub const Section = struct {
 
 pub const Reference = struct {
 
-    pub const ReferenceTrack = struct {
-        instruction_index: u32,
-        /// From which section this reference is tracking from. If it's the
-        /// same as the reference itself, it's disregarded from
-        /// unreachable-code-elimination.
-        section: *Section
-    };
-
     /// Index of section opaque's instruction this reference references. If
     /// undefined, it hasn't been indexed yet by the sema.
     instruction_index: u32 = undefined,
-    section: *Section = undefined,
-    references: ReferenceTrackList = .empty,
-    // fixme: certain labels are noelimination specific, just like sections blocks are
-
-    pub fn deinit(self: *Reference, allocator: std.mem.Allocator) void {
-        self.references.deinit(allocator);
-    }
+    section: *Section = undefined
 };
 
 pub const EmitReference = struct {
@@ -258,11 +240,31 @@ pub const EmitReference = struct {
 /// @linkinfo key, value
 pub const LinkInfo = struct {
 
+    const Action = enum {
+        origin,
+        @"align"
+    };
+
+    const action_map = std.StaticStringMap(Action).initComptime(.{
+        .{ "origin", .origin },
+        .{ "align", .@"align" }
+    });
+
     token: Token,
-    /// Key-subject must be unique, even if subject is null
     key: []const u8,
     subject: ?[]const u8 = null,
-    value: u32
+    value: u32,
+
+    pub fn action(self: *const LinkInfo) ?Action {
+        return action_map.get(self.key);
+    }
+
+    pub fn is_valid(self: *const LinkInfo) bool {
+        return switch (self.action().?) {
+            .origin,
+            .@"align" => self.subject != null
+        };
+    }
 };
 
 const SymbolMap = std.StringArrayHashMapUnmanaged(Symbol.Locatable);
@@ -287,10 +289,8 @@ fn astgen_failure() noreturn {
 
 /// To calculate alignment.
 fn find_available_mask(from_address: usize, mask: usize) usize {
-    for (from_address..std.math.maxInt(usize)) |address|
-        if (address % mask == 0)
-            return address;
-    unreachable;
+    std.debug.assert(std.math.isPowerOfTwo(mask));
+    return (from_address + mask -% 1) & ~(mask -% 1);
 }
 
 fn node_is_null_or(self: *AsmSemanticAir, index: AsmAst.Index, tag: AsmAst.Node.Tag) bool {
@@ -308,18 +308,16 @@ fn node_len(self: *AsmSemanticAir, index: AsmAst.Index) ?u32 {
     return node.operands.rhs - node.operands.lhs;
 }
 
-fn not_null(self: *AsmSemanticAir, index: AsmAst.Index) bool {
-    _ = self;
+fn not_null(index: AsmAst.Index) bool {
     return index != AsmAst.Null;
 }
 
-fn is_null(self: *AsmSemanticAir, index: AsmAst.Index) bool {
-    _ = self;
+fn is_null(index: AsmAst.Index) bool {
     return index == AsmAst.Null;
 }
 
 fn node_unwrap(self: *AsmSemanticAir, index: AsmAst.Index) ?AsmAst.Node {
-    return if (self.not_null(index)) self.nodes[index] else null;
+    return if (not_null(index)) self.nodes[index] else null;
 }
 
 fn is_valid_symbol(self: *AsmSemanticAir, string: []const u8) bool {
@@ -678,20 +676,20 @@ fn prepare_opaque_container(self: *AsmSemanticAir, parent_node: AsmAst.Node, sym
                 astgen_assert(self.node_is_null_or(node.operands.lhs, .container));
                 astgen_assert(self.node_is_null_or(node.operands.rhs, .composite));
 
-                if (self.is_null(node.operands.rhs))
+                if (is_null(node.operands.rhs))
                     continue;
                 const composite = self.nodes[node.operands.rhs];
                 astgen_assert(self.node_is_null_or(composite.operands.lhs, .container));
                 astgen_assert(self.node_is_null_or(composite.operands.rhs, .modifier));
 
-                if (self.is_null(composite.operands.lhs))
+                if (is_null(composite.operands.lhs))
                     continue;
                 var labels = ContainerIterator.init_index(self, composite.operands.lhs);
 
                 // fixme: labels in headers are not supported
                 while (try labels.gracefully_expect(.label)) |label_node| {
-                    astgen_assert(self.is_null(label_node.operands.lhs));
-                    astgen_assert(self.is_null(label_node.operands.rhs));
+                    astgen_assert(is_null(label_node.operands.lhs));
+                    astgen_assert(is_null(label_node.operands.rhs));
 
                     const label = try self.prepare_label(label_node, @intCast(node_idx)) orelse continue;
                     try self.maybe_emit_duplicate_error(label);
@@ -798,7 +796,7 @@ fn prepare_define(self: *AsmSemanticAir, node: AsmAst.Node) !?NamedSymbol {
     const value_node = try arguments.expect_any() orelse return null;
 
     try arguments.expect_end();
-    astgen_assert(self.is_null(composite.operands.rhs));
+    astgen_assert(is_null(composite.operands.rhs));
 
     const define = Symbol.Define {
         .value_node = value_node,
@@ -829,7 +827,7 @@ fn prepare_header(self: *AsmSemanticAir, node: AsmAst.Node) !?NamedSymbol {
         .arguments = .{
             .lhs = arguments.start + 1, // skip name
             .rhs = arguments.end },
-        .content = if (self.not_null(composite.operands.rhs))
+        .content = if (not_null(composite.operands.rhs))
             self.nodes[composite.operands.rhs].operands else
             .{},
         .is_public = self.contains_option(options_, .expose) };
@@ -855,7 +853,7 @@ fn prepare_import(self: *AsmSemanticAir, node: AsmAst.Node) !?NamedSymbol {
     astgen_assert(path_string_token.tag == .string_literal);
     try self.maybe_emit_sentinel_error(path_string_node.operands.lhs);
 
-    astgen_assert(self.is_null(composite.operands.rhs));
+    astgen_assert(is_null(composite.operands.rhs));
     try arguments.expect_end();
 
     const sema = if (self.qcu) |qcu| qcu.resolve(path_string) catch |err| switch (err) {
@@ -894,7 +892,7 @@ fn emit_prepare_linkinfo(self: *AsmSemanticAir, node: AsmAst.Node) !void {
     const value = try self.cast_numeric_literal(u32, value_node) orelse return;
 
     try arguments.expect_end();
-    astgen_assert(self.is_null(composite.operands.rhs));
+    astgen_assert(is_null(composite.operands.rhs));
 
     if (options_) |the_options| {
         try self.link_info.ensureUnusedCapacity(self.allocator, the_options.len);
@@ -911,6 +909,9 @@ fn emit_prepare_linkinfo(self: *AsmSemanticAir, node: AsmAst.Node) !void {
             .key = name,
             .value = value });
     }
+
+    // fixme: return section symbol to allow .text and .globals references.
+    // allow them to be published with @define(expose) _text, .text
 }
 
 const Option = enum {
@@ -941,7 +942,7 @@ fn parse_options(self: *AsmSemanticAir, node: AsmAst.Node, allow_list: []const O
     for (node.operands.lhs..node.operands.rhs) |index| {
         astgen_assert(self.node_is(@intCast(index), .option));
         const option_node = self.nodes[index];
-        astgen_assert(self.not_null(option_node.token));
+        astgen_assert(not_null(option_node.token));
         const option_token = self.source.tokens[option_node.token];
         astgen_assert(option_token.tag == .option);
 
@@ -980,7 +981,7 @@ fn prepare_label(self: *AsmSemanticAir, node: AsmAst.Node, instr_index: AsmAst.I
 
     const is_public = label_token.tag == .label;
     const label_name = label_token.content_slice(self.source.buffer);
-    astgen_assert(self.is_null(node.operands.rhs));
+    astgen_assert(is_null(node.operands.rhs));
 
     const label = Symbol.Label {
         .instr_node = instr_index,
@@ -1201,7 +1202,7 @@ pub const Instruction = union(Tag) {
     i16: struct { Expression(Numeric(.{ .literal = i16 })) },
     i24: struct { Expression(Numeric(.{ .literal = i24 })) },
     ascii: struct { Expression(StringContent) },
-    reserve: struct { Expression(TypeSize), Expression(Numeric(.{ .literal = u16 })) }, // fixme: force constant
+    reserve: struct { Expression(TypeSize), Expression(Numeric(.{ .constant = u16 })) }, // fixme: force constant
 
     // adds fixed zero bytes
     ld_padding: struct { usize },
@@ -1399,6 +1400,8 @@ fn emit_addressable(self: *AsmSemanticAir, index: AsmAst.Index) !void {
     } else .{ .{}, false };
 
     const is_labeled = (labels.rhs - labels.lhs) > 0;
+    if ((labels.rhs - labels.lhs) > 1) // fixme: allow more than one label to be defined per instruction
+        try self.add_error(error.GenericToken, .{ "only one label is allowed to be defined per instruction;", " this is a bug in the QCPU linker", token });
     try self.emit_labels(labels);
 
     const arguments = if (self.node_unwrap(node.operands.lhs)) |arguments_node|
@@ -1410,10 +1413,7 @@ fn emit_addressable(self: *AsmSemanticAir, index: AsmAst.Index) !void {
 fn emit_labels(self: *AsmSemanticAir, labels: AsmAst.IndexRange) !void {
     const section = self.current_emitting_section();
     try self.references.ensureUnusedCapacity(self.allocator, labels.rhs - labels.lhs);
-
-    for (labels.lhs..labels.rhs) |label_idx| {
-        self.emit_label(self.nodes[label_idx], section);
-    }
+    for (labels.lhs..labels.rhs) |label_idx| self.emit_label(self.nodes[label_idx], section);
 }
 
 fn emit_label(
@@ -1426,15 +1426,12 @@ fn emit_label(
     const token = self.source.tokens[label.token];
     const name = token.content_slice(self.source.buffer);
 
-    if (self.references.getPtr(name)) |backpatch_reference| {
-        backpatch_reference.instruction_index = current_index;
-        backpatch_reference.section = section;
-    } else {
-        const new_reference = Reference {
-            .instruction_index = current_index,
-            .section = section };
-        self.references.putAssumeCapacity(name, new_reference);
-    }
+    std.debug.assert(!self.references.contains(name));
+
+    const new_reference = Reference {
+        .instruction_index = current_index,
+        .section = section };
+    self.references.putAssumeCapacity(name, new_reference);
 }
 
 fn emit_instructions(
@@ -1765,6 +1762,7 @@ const NumericResult = union(enum) {
     absolute,
     relative,
     agnostic,
+    constant: type,
     literal: type
 };
 
@@ -1777,7 +1775,8 @@ fn Numeric(comptime Type: NumericResult) type {
 
         const LinkLabel = struct {
             sema: *AsmSemanticAir,
-            name: []const u8
+            name: []const u8,
+            modifier: ?u8
         };
 
         tag: AsmAst.Node.Tag,
@@ -1934,27 +1933,25 @@ fn Numeric(comptime Type: NumericResult) type {
 
                     astgen_assert(symbol.symbol == .label);
 
-                    const reference = sema.references.getPtr(qualified_name) orelse create: {
-                        try sema.references.put(sema.allocator, qualified_name, .{});
-                        break :create sema.references.getPtr(qualified_name) orelse unreachable;
-                    };
+                    const modifier = if (sema.node_unwrap(node.operands.lhs)) |modifier_node| mbl: {
+                        const slice = sema.source.tokens[modifier_node.token].content_slice(sema.source.buffer);
+                        astgen_assert(slice.len <= 1);
+                        break :mbl if (slice.len == 0) 0 else slice[0];
+                    } else null;
 
-                    const section = sema.current_emitting_section();
-
-                    const track_reference = Reference.ReferenceTrack {
-                        .instruction_index = @intCast(section.content.len),
-                        .section = section };
-                    try reference.references.append(sema.allocator, track_reference);
-
+                    const label = LinkLabel {
+                        .sema = symbols_sema,
+                        .name = qualified_name,
+                        .modifier = modifier };
                     break :blk .{
                         .tag = node.tag,
-                        .linktime_label = .{ .sema = symbols_sema, .name = qualified_name } };
+                        .linktime_label = label };
                 },
 
                 .char => {
-                    const ascii = token.location.slice(sema.source.buffer);
-                    astgen_assert(ascii.len == 3); // 'a'
-                    break :result .{ .tag = node.tag, .assembletime_offset = @intCast(ascii[1]) };
+                    const ascii = token.content_slice(sema.source.buffer);
+                    astgen_assert(ascii.len == 1);
+                    break :result .{ .tag = node.tag, .assembletime_offset = @intCast(ascii[0]) };
                 },
 
                 .integer => .{
@@ -2091,6 +2088,15 @@ const TypeSize = struct {
         return .{ .size = @intCast(size) };
     }
 };
+
+pub fn unified_label(self: *AsmSemanticAir, allocator: std.mem.Allocator, label: []const u8) ![]const u8 {
+    if (self.qcu) |qcu| {
+        const file = std.fs.path.stem(qcu.file_name);
+        return try std.fmt.allocPrint(allocator, "{s}.{s}", .{ file, label });
+    } else {
+        return try allocator.dupe(u8, label);
+    }
+}
 
 // Tests
 
@@ -2544,7 +2550,6 @@ test "linking .label symbols" {
             try std.testing.expectEqual(@as(usize, 1), sema.references.count());
             const foo = sema.references.get("foo");
             try std.testing.expect(foo != null);
-            try std.testing.expectEqual(@as(usize, 1), foo.?.references.items.len);
             try std.testing.expectEqual(@as(usize, 0), foo.?.instruction_index);
         }
     }.run);
@@ -2562,7 +2567,6 @@ test "linking .label symbols" {
             try std.testing.expectEqual(@as(usize, 1), sema.references.count());
             const foo = sema.references.get("foo");
             try std.testing.expect(foo != null);
-            try std.testing.expectEqual(@as(usize, 2), foo.?.references.items.len);
             try std.testing.expectEqual(@as(usize, 3), foo.?.instruction_index);
         }
     }.run);

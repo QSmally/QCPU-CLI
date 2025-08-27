@@ -1,8 +1,8 @@
 
-@import aaa, "Library.s"
+@import library, "Library.s"
 
-@define roo, 0x05
-@define(expose) foo, @roo
+; @define roo, 0x05
+; @define(expose) foo, @roo
 
 @header hdr, a
                   rst @a
@@ -10,10 +10,10 @@
 
 @section text
 start:            cli
-                  @hdr  @aaa.foo
-                  jmpr  @foo
+                  @hdr  @library.foo
+                  jmpr  .library.spinlock
 
 @section data
-ccc:              u8 255
+dead:             u8 255
 @align 2
-bbb:              u16 @aaa.aaa
+beef:             u16 @library.bar

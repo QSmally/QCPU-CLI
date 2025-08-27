@@ -1,3 +1,11 @@
 
 @define(expose) foo, rb
-@define(expose) aaa, 0xFFFF
+@define(expose) bar, 0xFFFF
+
+@section text
+@align 32 // L1 cache line
+spinlock:               jmpr .baah
+
+@section text
+@align 8
+.baah: jmpr .spinlock

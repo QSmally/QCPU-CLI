@@ -146,6 +146,7 @@ pub fn content_slice(self: Token, from_buffer: [:0]const u8) []const u8 {
         .private_label,                                 // remove punctuation
         .char_literal,                                  // remove quotes
         .string_literal => slice[1..(slice.len - 1)],   // remove quotes
+        .modifier => slice[1..],                        // remove leading quote
         .reference_label => blk: {                      // remove dots/namespace
             const last_index = std.mem.lastIndexOfScalar(u8, slice, '.') orelse unreachable;
             break :blk slice[(last_index + 1)..];

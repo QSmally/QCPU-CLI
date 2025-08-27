@@ -62,8 +62,6 @@ pub fn init(
     try qcu.files.ensureUnusedCapacity(allocator, file_paths.len);
     for (file_paths) |file_path|
         qcu.files.appendAssumeCapacity(try File.init_work(qcu, cwd, file_path));
-    if (!options.noelimination)
-        try qcu.work_queue.add(.{ .link_tree_elimination = qcu });
     try qcu.work_queue.add(.{ .link_generate = qcu });
 
     return qcu;
@@ -90,6 +88,7 @@ pub const Options = struct {
     dlinker: bool = false,
     noliveness: bool = false,
     noelimination: bool = false,
+    nolinkwarnings: bool = false,
     rootsection: []const u8 = "root"
 };
 
@@ -334,7 +333,6 @@ pub const JobType = union(enum) {
     /// - second pass semantic analysis
     semantic_analysis: *File,
     liveness: *File,
-    link_tree_elimination: *Qcu,
     /// sections + sections -> sections
     link_generate: *Qcu,
 
@@ -355,11 +353,6 @@ pub const JobType = union(enum) {
             .static_analysis => |file| try file.static_analysis(),
             .semantic_analysis => |file| try file.semantic_analysis(),
             .liveness => |file| try file.liveness(),
-            .link_tree_elimination => |qcu| {
-                std.debug.assert(qcu.errors.items.len == 0);
-                try qcu.linker.tree_elimination();
-                try qcu.verify_errorless_or(error.TreeElimination);
-            },
             .link_generate => |qcu| {
                 std.debug.assert(qcu.errors.items.len == 0);
                 try qcu.linker.generate();
@@ -384,6 +377,8 @@ const ErrorList = std.ArrayListUnmanaged(LocatableError);
 
 const options_ = @import("options");
 
+const qcu_options = Options { .nolinkwarnings = true };
+
 const JobTypeTag = @typeInfo(JobType).@"union".tag_type.?;
 
 fn testUnwrapTag(comptime T: type, union_: ?T) ?@typeInfo(T).@"union".tag_type.? {
@@ -407,8 +402,7 @@ fn testJob(qcu: *Qcu, job: JobType) !void {
 test "work queue dependency order" {
     const cwd = std.fs.cwd(); // QCPU-CLI/
     const files = &[_][]const u8 { "Tests/root.s", "Tests/sample.s", "Tests/Library.s" };
-    const options = Options {};
-    const qcu = try Qcu.init(std.testing.allocator, cwd, files, options);
+    const qcu = try Qcu.init(std.testing.allocator, cwd, files, qcu_options);
     defer qcu.deinit();
 
     try std.testing.expectEqual(@as(?JobTypeTag, .static_analysis), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
@@ -420,7 +414,6 @@ test "work queue dependency order" {
     try std.testing.expectEqual(@as(?JobTypeTag, .liveness), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
     try std.testing.expectEqual(@as(?JobTypeTag, .liveness), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
     try std.testing.expectEqual(@as(?JobTypeTag, .liveness), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
-    try std.testing.expectEqual(@as(?JobTypeTag, .link_tree_elimination), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
     try std.testing.expectEqual(@as(?JobTypeTag, .link_generate), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
     try std.testing.expectEqual(@as(?JobTypeTag, null), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
 }
@@ -428,8 +421,7 @@ test "work queue dependency order" {
 test "full fledge" {
     const cwd = std.fs.cwd(); // QCPU-CLI/
     const files = &[_][]const u8 { "Tests/root.s", "Tests/sample.s" };
-    const options = Options {};
-    const qcu = try Qcu.init(std.testing.allocator, cwd, files, options);
+    const qcu = try Qcu.init(std.testing.allocator, cwd, files, qcu_options);
     defer qcu.deinit();
 
     const jobs = [_]JobTypeTag {
@@ -442,7 +434,6 @@ test "full fledge" {
         .liveness,
         .liveness,
         .liveness,
-        .link_tree_elimination,
         .link_generate };
     var i: usize = 0;
 
