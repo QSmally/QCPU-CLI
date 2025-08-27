@@ -88,6 +88,7 @@ pub const Options = struct {
     dlinker: bool = false,
     noliveness: bool = false,
     noelimination: bool = false,
+    noautoalign: bool = false,
     nolinkwarnings: bool = false,
     rootsection: []const u8 = "root"
 };

@@ -266,6 +266,8 @@ pub fn generate(self: *Linker) !void {
             std.debug.assert(referenced_section.is_poked);
     }
 
+    if (!self.options.noautoalign)
+        self.inject_optimised_alignment();
     const link = try self.find_single_linkinfo() orelse return;
 
     for (link.info) |link_node| {
@@ -378,6 +380,24 @@ fn remove_unpoked_inplace(self: *Linker) void {
             index += 1;
         }
     }
+}
+
+const l1_line = 32;
+
+fn inject_optimised_alignment(self: *Linker) void {
+    for (self.link_list.items) |*link_node| {
+        if (link_node.inner.alignment != 0)
+            continue; // don't want to do anything with custom alignment
+        link_node.inner.alignment = if (link_node.inner.size() >= l1_line)
+            l1_line else // the best we can do is align it on an L1 cache line
+            power_two_ceil(link_node.inner.size()); // for smaller sequences, make sure it's not overstepping L1 boundaries
+    }
+}
+
+fn power_two_ceil(size: usize) usize {
+    var power: usize = 1;
+    while (power < size) power *= 2;
+    return power;
 }
 
 fn find_single_linkinfo(self: *Linker) !?struct {
@@ -495,19 +515,10 @@ fn emit_section_block(self: *Linker, section: *const Section) !void {
         if (instr_size == 0)
             continue :unroll;
         const maybe_unified_reference = section.reference_map.get(@intCast(i));
-
-        // fixme: unroll class 1/x instructions into this byte
-        try self.current_block.content.append(self.allocator, .{
-            .raw_value = 0,
-            .label = maybe_unified_reference,
-            .long = instr });
-
-        // they're zero bytes for now, because the addresses are not known yet
-        for (0..(instr_size - 1)) |_|
-            try self.current_block.content.append(self.allocator, .pad);
+        try self.emit_instruction_bytes(instr, maybe_unified_reference);
         std.debug.assert(self.current_block.total_size() - initial_address == instr_size);
 
-        // there's a reference at this address, now its real address is known
+        // there's a reference at this index, now its real address is known
         if (maybe_unified_reference) |unified_reference| {
             if (self.unified_references.contains(unified_reference)) {
                 try self.add_error(error.DuplicateSymbolId, section.file, unified_reference);
@@ -515,6 +526,59 @@ fn emit_section_block(self: *Linker, section: *const Section) !void {
             }
 
             try self.unified_references.put(self.allocator, unified_reference, .{ .global_address = @intCast(initial_address) });
+        }
+    }
+}
+
+fn emit_instruction_bytes(
+    self: *Linker,
+    instruction: *const AsmSemanticAir.Instruction,
+    label: ?[]const u8
+) !void {
+    switch (instruction.*) {
+        .reserve, // fixme: force constant for reserve expression
+        .u8, .u16, .u24,
+        .i8, .i16, .i24 => {
+            const size = instruction.size();
+            if (size == 0) return;
+
+            try self.current_block.content.append(self.allocator, .{
+                .raw_value = 0,
+                .label = label,
+                .long = instruction });
+            for (0..(size - 1)) |_|
+                try self.current_block.content.append(self.allocator, .pad);
+        },
+
+        .ascii => |ascii| {
+            const string = ascii[0].result;
+            if (string.size() == 0) return;
+
+            try self.current_block.content.append(self.allocator, .{
+                .raw_value = string.memory[0],
+                .label = label,
+                .long = instruction });
+            for (string.memory[1..]) |byte|
+                try self.current_block.content.append(self.allocator, .{ .raw_value = byte });
+            if (string.sentinel) |sentinel|
+                try self.current_block.content.append(self.allocator, .{ .raw_value = sentinel.result });
+        },
+
+        .ld_padding => {
+            for (0..instruction.size()) |_|
+                try self.current_block.content.append(self.allocator, .pad);
+        },
+
+        else => {
+            // fixme: unroll class 1/x instructions into this byte
+            try self.current_block.content.append(self.allocator, .{
+                .raw_value = 0,
+                .label = label,
+                .long = instruction });
+
+            // they're zero bytes for now, because all the addresses are not known yet
+            for (0..(instruction.size() - 1)) |_|
+                try self.current_block.content.append(self.allocator, .pad);
         }
     }
 }

@@ -1183,16 +1183,13 @@ pub const Instruction = union(Tag) {
     jmpr: struct { Expression(Numeric(.relative)) },
     jmpd,
     mst: struct { Expression(SpRegister), Expression(Numeric(.absolute)) },
-    mst_: struct { Expression(SpRegister), Expression(Numeric(.absolute)) },
+    mstx: struct { Expression(SpRegister), Expression(Numeric(.absolute)) },
     mstw: struct { Expression(SpRegister), Expression(Numeric(.absolute)) },
-    mstw_: struct { Expression(SpRegister), Expression(Numeric(.absolute)) },
+    mstwx: struct { Expression(SpRegister), Expression(Numeric(.absolute)) },
     mld: struct { Expression(SpRegister), Expression(Numeric(.absolute)) },
-    mld_: struct { Expression(SpRegister), Expression(Numeric(.absolute)) },
+    mldx: struct { Expression(SpRegister), Expression(Numeric(.absolute)) },
     mldw: struct { Expression(SpRegister), Expression(Numeric(.absolute)) },
-    mldw_: struct { Expression(SpRegister), Expression(Numeric(.absolute)) },
-
-    // mst: struct { u1, u2, LinkNode },
-    // mstd: struct { u1, u2, LinkNode },
+    mldwx: struct { Expression(SpRegister), Expression(Numeric(.absolute)) },
 
     // pseudoinstructions
     u8: struct { Expression(Numeric(.{ .literal = u8 })) },
@@ -1202,15 +1199,10 @@ pub const Instruction = union(Tag) {
     i16: struct { Expression(Numeric(.{ .literal = i16 })) },
     i24: struct { Expression(Numeric(.{ .literal = i24 })) },
     ascii: struct { Expression(StringContent) },
-    reserve: struct { Expression(TypeSize), Expression(Numeric(.{ .constant = u16 })) }, // fixme: force constant
+    reserve: struct { Expression(TypeSize), Expression(Numeric(.{ .constant = u16 })) },
 
     // adds fixed zero bytes
     ld_padding: struct { usize },
-
-    // symbol reference during link time
-    // symbol address, section address, calculated offset from offset and
-    // name
-    // ld_symbol: LinkNode.Symbol,
 
     pub const Tag = enum {
 
@@ -1221,13 +1213,13 @@ pub const Instruction = union(Tag) {
         jmpr,
         jmpd,
         mst,
-        mst_,
+        mstx,
         mstw,
-        mstw_,
+        mstwx,
         mld,
-        mld_,
+        mldx,
         mldw,
-        mldw_,
+        mldwx,
         u8,
         u16,
         u24,
@@ -1299,13 +1291,13 @@ pub const Instruction = union(Tag) {
 
                 .jmp,
                 .mst,
-                .mst_,
+                .mstx,
                 .mstw,
-                .mstw_,
+                .mstwx,
                 .mld,
-                .mld_,
+                .mldx,
                 .mldw,
-                .mldw_ => 3,
+                .mldwx => 3,
 
                 .u8, .i8 => 1,
                 .u16, .i16 => 2,
@@ -1340,10 +1332,10 @@ pub const Instruction = union(Tag) {
     });
 
     pub const modifier_map = std.StaticStringMap(Tag).initComptime(.{
-        .{ "mst", .mst_ },
-        .{ "mstw", .mstw_ },
-        .{ "mld", .mst_ },
-        .{ "mldw", .mldw_ }
+        .{ "mst", .mstx },
+        .{ "mstw", .mstwx },
+        .{ "mld", .mstx },
+        .{ "mldw", .mldwx }
     });
 
     comptime {
@@ -1351,13 +1343,12 @@ pub const Instruction = union(Tag) {
         for (@typeInfo(Tag).@"enum".fields) |instruction_tag| {
             if (std.mem.startsWith(u8, instruction_tag.name, "ld_"))
                 continue;
-            const real_instruction = std.mem.trimRight(u8, instruction_tag.name, "_");
+            const real_instruction = std.mem.trimRight(u8, instruction_tag.name, "x");
             const mapping: ?Instruction.Tag = instruction_map.get(real_instruction) orelse
                 modifier_map.get(real_instruction);
-            if (mapping) |mapping_| {
-                const real_mapping = std.mem.trimRight(u8, instruction_tag.@"name", "_");
-                if (!std.mem.eql(u8, real_mapping, @tagName(mapping_)))
-                    @compileError("bug: mismatching mapping/instruction: " ++ @tagName(mapping_) ++ " / " ++ real_instruction);
+            if (mapping) |the_mapping| {
+                if (!std.mem.eql(u8, real_instruction, @tagName(the_mapping)))
+                    @compileError("bug: mismatching mapping/instruction: " ++ @tagName(the_mapping) ++ " / " ++ real_instruction);
             } else @compileError("bug: unmapped instruction: " ++ real_instruction);
         }
     }
