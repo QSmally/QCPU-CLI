@@ -14,8 +14,8 @@ pub fn main() u8 {
     const run_files,
     var run_options = arguments.parse(Options, arena.allocator()) catch |err| {
         _ = switch (err) {
-            // error.InvalidCharacter => stderr.print("error: {s}: invalid numeric '{s}'\n", .{ arguments.current_option, arguments.current_value }),
-            // error.Overflow => stderr.print("error: {s}: {s} doesn't fit in type {s}\n", .{ arguments.current_option, arguments.current_value, arguments.current_type }),
+            error.InvalidCharacter => stderr.print("error: {s}: invalid numeric '{s}'\n", .{ arguments.current_option, arguments.current_value }),
+            error.Overflow => stderr.print("error: {s}: {s} doesn't fit in type {s}\n", .{ arguments.current_option, arguments.current_value, arguments.current_type }),
             error.ArgumentExpected => stderr.print("error: {s}: expected option value\n", .{ arguments.current_option }),
             error.OptionNotFound => stderr.print("error: {s}: invalid option\n", .{  arguments.current_value }),
             error.OutOfMemory => stderr.print("error: out of memory\n", .{})

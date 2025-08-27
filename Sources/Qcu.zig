@@ -90,7 +90,9 @@ pub const Options = struct {
     noelimination: bool = false,
     noautoalign: bool = false,
     nolinkwarnings: bool = false,
-    rootsection: []const u8 = "root"
+    rootsection: []const u8 = "root",
+    l1: u16 = 32,
+    page: u16 = 256 // fixme: not used yet
 };
 
 pub const File = struct {

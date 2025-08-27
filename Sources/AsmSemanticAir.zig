@@ -1229,7 +1229,6 @@ pub const Instruction = union(Tag) {
         ascii,
         reserve,
         ld_padding,
-        // ld_symbol,
 
         /// Any unconditional jump which guarantees to divert control flow,
         /// used by Liveness to check unreachable instructions.
@@ -1977,7 +1976,7 @@ fn Numeric(comptime Type: NumericResult) type {
     };
 }
 
-const GpRegister = enum(u3) {
+pub const GpRegister = enum(u3) {
 
     zr,
     ra,
@@ -1999,7 +1998,7 @@ const GpRegister = enum(u3) {
     }
 };
 
-const SpRegister = enum(u2) {
+pub const SpRegister = enum(u2) {
 
     zr,
     sp,

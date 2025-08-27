@@ -114,7 +114,20 @@ const Block = struct {
 const Byte = struct {
 
     pub const Tag = union(enum) {
-        cli: struct { u2 }
+        cli,
+        ast: AsmSemanticAir.GpRegister,
+        rst: AsmSemanticAir.GpRegister,
+        jmp,
+        jmpr,
+        jmpd,
+        mst: AsmSemanticAir.SpRegister,
+        mstx: AsmSemanticAir.SpRegister,
+        mstw: AsmSemanticAir.SpRegister,
+        mstwx: AsmSemanticAir.SpRegister,
+        mld: AsmSemanticAir.SpRegister,
+        mldx: AsmSemanticAir.SpRegister,
+        mldw: AsmSemanticAir.SpRegister,
+        mldwx: AsmSemanticAir.SpRegister
     };
 
     pub const pad = Byte { .raw_value = 0 };
@@ -293,7 +306,7 @@ pub fn generate(self: *Linker) !void {
         return;
     }
 
-    // fixme: fill in addresses
+    // fixme: fill in addresses! last task for the linker
 }
 
 fn get_root_section(self: *Linker) !?*Section {
@@ -382,14 +395,12 @@ fn remove_unpoked_inplace(self: *Linker) void {
     }
 }
 
-const l1_line = 32;
-
 fn inject_optimised_alignment(self: *Linker) void {
     for (self.link_list.items) |*link_node| {
         if (link_node.inner.alignment != 0)
             continue; // don't want to do anything with custom alignment
-        link_node.inner.alignment = if (link_node.inner.size() >= l1_line)
-            l1_line else // the best we can do is align it on an L1 cache line
+        link_node.inner.alignment = if (link_node.inner.size() >= self.options.l1)
+            self.options.l1 else // the best we can do is align it on an L1 cache line
             power_two_ceil(link_node.inner.size()); // for smaller sequences, make sure it's not overstepping L1 boundaries
     }
 }
@@ -570,9 +581,60 @@ fn emit_instruction_bytes(
         },
 
         else => {
-            // fixme: unroll class 1/x instructions into this byte
+            const class_1: struct {
+                raw_value: u8,
+                compiled: Byte.Tag
+            } = map: switch (instruction.*) {
+                .u8, .u16, .u24,
+                .i8, .i16, .i24,
+                .ascii,
+                .reserve,
+                .ld_padding => unreachable,
+
+                inline else => |operands, tag| {
+                    inline for (@typeInfo(Byte.Tag).@"union".fields) |mapping| {
+                        // Zig should eagerly evaluate this at comptime! but still cool
+                        if (comptime std.mem.eql(u8, mapping.name, @tagName(tag))) {
+                            const opcode: u8 = switch (tag) {
+                                .cli => 0b0_0000_000,
+                                .ast => 0b0_0001_000,
+                                .rst => 0b0_0100_000,
+                                .jmp => 0b1_1010_0_00,
+                                .jmpr => 0b1_1010_0_01,
+                                .jmpd => 0b1_1010_0_10,
+                                .mst => 0b1_1100_0_00,
+                                .mstx => 0b1_1100_1_00,
+                                .mstw => 0b1_1101_0_00,
+                                .mstwx => 0b1_1101_1_00,
+                                .mld => 0b1_1110_0_00,
+                                .mldx => 0b1_1110_1_00,
+                                .mldw => 0b1_1111_0_00,
+                                .mldwx => 0b1_1111_1_00,
+                                else => @compileError("bug: unmapped binary representation in linker")
+                            };
+
+                            const is_operand = mapping.@"type" != void;
+
+                            const binary = opcode | if (is_operand)
+                                @as(u8, @intCast(@intFromEnum(operands[0].result))) else
+                                0;
+                            const compiled = if (is_operand)
+                                @unionInit(Byte.Tag, mapping.name, operands[0].result) else
+                                @unionInit(Byte.Tag, mapping.name, {});
+
+                            break :map .{
+                                .raw_value = binary,
+                                .compiled = compiled };
+                        }
+                    }
+
+                    comptime unreachable;
+                }
+            };
+
             try self.current_block.content.append(self.allocator, .{
-                .raw_value = 0,
+                .raw_value = class_1.raw_value,
+                .compiled = class_1.compiled,
                 .label = label,
                 .long = instruction });
 
