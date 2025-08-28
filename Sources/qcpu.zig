@@ -2,6 +2,21 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const Qcu = @import("Qcu.zig");
+const Virtualiser = @import("Virtualiser.zig");
+
+fn version(writer: anytype) !void {
+    try writer.print("QCPU-CLI v{s} (Zig {s}) ({s}, {s})", .{
+        "0.0.0",
+        builtin.zig_version_string,
+        @tagName(builtin.os.tag),
+        @tagName(builtin.cpu.arch) });
+    defer writer.print("\n", .{}) catch {};
+
+    if (builtin.link_mode == .dynamic)
+        try writer.print(" dynamically linked", .{});
+    if (builtin.mode == .Debug)
+        try writer.print(" in debug mode", .{});
+}
 
 pub fn main() u8 {
     var gpa = std.heap.GeneralPurposeAllocator(.{}) {};
@@ -17,6 +32,7 @@ pub fn main() u8 {
             error.InvalidCharacter => stderr.print("error: {s}: invalid numeric '{s}'\n", .{ arguments.current_option, arguments.current_value }),
             error.Overflow => stderr.print("error: {s}: {s} doesn't fit in type {s}\n", .{ arguments.current_option, arguments.current_value, arguments.current_type }),
             error.ArgumentExpected => stderr.print("error: {s}: expected option value\n", .{ arguments.current_option }),
+            error.SelectionNotFound => stderr.print("error: {s}: value '{s}' is invalid\n", .{ arguments.current_option, arguments.current_value }),
             error.OptionNotFound => stderr.print("error: {s}: invalid option\n", .{  arguments.current_value }),
             error.OutOfMemory => stderr.print("error: out of memory\n", .{})
         } catch return 255;
@@ -30,7 +46,6 @@ pub fn main() u8 {
         run_options.dast = true;        // dump abstract syntax tree
         run_options.dair = true;        // dump analysed intermediate representation
         run_options.dlinker = true;     // dump linker sections and symbols
-        run_options.dtrace = true;      // dump trace on some errors
     }
 
     if (run_options.doptions)
@@ -56,22 +71,30 @@ pub fn main() u8 {
         job.execute() catch {
             for (qcu.errors.items) |err|
                 err.write(stderr) catch return 255;
-            if (qcu.options.dtrace)
+            if (!qcu.options.dnotrace)
                 qcu.linker.dump_last_block_trace(stderr) catch return 255;
             return 1;
         };
     }
 
-    if (!run_options.dry) {
-        // if (run_options.output) |file|
-        //     try qcu.output_file(file);
-        // if (run_options.virtualise)
-        //     try qcpuv.begin(&qcu, unmerge(qcpuv.Options, run_options));
-        // if (run_options.output == null and run_options.virtualise == null)
-        //     qcu.output_file("binary");
-    }
+    if (run_options.dry)
+        return 0;
+
+    post_assemble_task(gpa.allocator(), qcu, run_options) catch |err| {
+        stderr.print("{}\n", .{ err }) catch return 255;
+        return 1;
+    };
 
     return 0;
+}
+
+fn post_assemble_task(allocator: std.mem.Allocator, qcu: *Qcu, run_options: Options) !void {
+    // if (run_options.output) |file|
+    //     try qcu.output_file(file);
+    if (run_options.virtualise)
+        try Virtualiser.begin(allocator, qcu, unmerge(Virtualiser.Options, run_options));
+    // if (run_options.output == null and run_options.virtualise == null)
+    //     qcu.output_file("binary");
 }
 
 const stdout = std.io
@@ -80,20 +103,6 @@ const stdout = std.io
 const stderr = std.io
     .getStdErr()
     .writer();
-
-fn version(writer: anytype) !void {
-    try writer.print("QCPU-CLI v{s} (Zig {s}) ({s}, {s})", .{
-        "0.0.0",
-        builtin.zig_version_string,
-        @tagName(builtin.os.tag),
-        @tagName(builtin.cpu.arch) });
-    defer writer.print("\n", .{}) catch {};
-
-    if (builtin.link_mode == .dynamic)
-        try writer.print(" dynamically linked", .{});
-    if (builtin.mode == .Debug)
-        try writer.print(" in debug mode", .{});
-}
 
 const CliOptions = struct {
     version: bool = false,
@@ -107,11 +116,12 @@ const CliOptions = struct {
 const Options = blk: {
     const cli = @typeInfo(CliOptions).@"struct";
     const qcu = @typeInfo(Qcu.Options).@"struct";
+    const virt = @typeInfo(Virtualiser.Options).@"struct";
 
     // Merging structs at compile-time? Hell yeah!
     break :blk @Type(.{ .@"struct" = .{
         .layout = .auto,
-        .fields = cli.fields ++ qcu.fields,
+        .fields = cli.fields ++ qcu.fields ++ virt.fields,
         .is_tuple = false,
         .decls = &.{} } });
 };
@@ -173,6 +183,12 @@ fn Arguments(comptime T: type) type {
                     self.current_type = @typeName(Type);
 
                     if (std.mem.eql(u8, name, argument)) {
+                        if (@typeInfo(Type) == .@"enum") {
+                            const value = std.meta.stringToEnum(Type, try self.expect()) orelse return error.SelectionNotFound;
+                            @field(run_options, option.name) = value;
+                            continue :arg;
+                        }
+
                         const value = val: switch (Type) {
                             bool => true,
 

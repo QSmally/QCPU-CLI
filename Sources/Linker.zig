@@ -1,8 +1,8 @@
 
 // Linker
 
-const std = @import("std");
 const builtin = @import("builtin");
+const std = @import("std");
 const AsmSemanticAir = @import("AsmSemanticAir.zig");
 const Error = @import("Error.zig");
 const Qcu = @import("Qcu.zig");
@@ -97,9 +97,10 @@ const Block = struct {
     }
 };
 
-const Byte = struct {
+pub const Byte = struct {
 
     pub const Tag = union(enum) {
+
         cli,
         ast: AsmSemanticAir.GpRegister,
         rst: AsmSemanticAir.GpRegister,
@@ -113,7 +114,15 @@ const Byte = struct {
         mld: AsmSemanticAir.SpRegister,
         mldx: AsmSemanticAir.SpRegister,
         mldw: AsmSemanticAir.SpRegister,
-        mldwx: AsmSemanticAir.SpRegister
+        mldwx: AsmSemanticAir.SpRegister,
+
+        pub fn size(self: Tag) usize {
+            @setEvalBranchQuota(999_999);
+            inline for (@typeInfo(AsmSemanticAir.Instruction.Tag).@"enum".fields) |tag|
+                if (std.mem.eql(u8, @tagName(self), tag.name))
+                    return (comptime std.meta.stringToEnum(AsmSemanticAir.Instruction.Tag, tag.name).?).basic_size();
+            unreachable;
+        }
     };
 
     pub const pad = Byte {
@@ -460,7 +469,7 @@ fn emit_link_maxlen(self: *Linker, file: *Qcu.File, link_node: AsmSemanticAir.Li
     if (block.content.len > link_node.value) {
         try self.add_error(error.MaximumSizeExceeded, file, .{ section_name, link_node.value, link_node.token });
         try self.add_error(error.NoteSizeDefinedHere, file, .{ block.origin, block.content.len, block.token });
-        if (self.options.dtrace) self.dump_section_name = section_name;
+        if (!self.options.dnotrace) self.dump_section_name = section_name;
     }
 }
 
@@ -471,7 +480,7 @@ fn emit_link_maxaddr(self: *Linker, file: *Qcu.File, link_node: AsmSemanticAir.L
     if (block.absolute_size() > link_node.value) {
         try self.add_error(error.MaximumAddressExceeded, file, .{ section_name, link_node.value, link_node.token });
         try self.add_error(error.NoteAddressDefinedHere, file, .{ block.origin, block.absolute_size(), block.token });
-        if (self.options.dtrace) self.dump_section_name = section_name;
+        if (!self.options.dnotrace) self.dump_section_name = section_name;
     }
 }
 
@@ -539,6 +548,15 @@ fn emit_section_blocks(self: *Linker, section_name: []const u8) !void {
         self.last_emitted_section.?.is_emitted = true;
         try self.emit_section_padding(least_padding);
         try self.emit_section_block(self.last_emitted_section.?);
+
+        const next_address = self.current_block.absolute_size();
+        const max_memory = self.options.page * self.options.pagelen;
+
+        if (next_address >= max_memory) {
+            try self.add_error(error.MaximumMemoryExceeded, self.link_list.items[0].file, max_memory);
+            if (!self.options.dnotrace) self.dump_section_name = self.last_emitted_section.?.identifier;
+            break;
+        }
     }
 }
 
@@ -554,14 +572,6 @@ fn emit_section_block(self: *Linker, section: *const Section) !void {
 
         if (instr_size == 0)
             continue;
-        const last_address = initial_address + instr_size - 1;
-        const max_memory = self.options.page * self.options.pagelen;
-
-        if (last_address > max_memory) {
-            try self.add_error(error.MaximumMemoryExceeded, self.link_list.items[0].file, max_memory);
-            break;
-        }
-
         const maybe_unified_reference = section.reference_map.get(@intCast(i));
         try self.emit_instruction_bytes(instr, maybe_unified_reference);
         std.debug.assert(self.current_block.absolute_size() - initial_address == instr_size);
@@ -742,26 +752,73 @@ fn address_resolution(self: *Linker, block: *Block) !void {
     }
 }
 
-pub fn dump_last_block_trace(self: *Linker, writer: anytype) !void {
+pub fn dump_last_block_trace(self: *const Linker, writer: anytype) !void {
     const section_name = self.dump_section_name orelse return;
     try self.dump_block_trace(section_name, writer);
 }
 
-fn dump_block_trace(self: *Linker, section_name: []const u8, writer: anytype) !void {
+pub fn dump_block_trace(self: *const Linker, section_name: []const u8, writer: anytype) !void {
     const block = self.blocks.get(section_name) orelse unreachable;
+    try self.dump_block_trace_range(section_name, block, .{ .min = 0, .max = null }, null, writer);
+}
 
+pub fn dump_block_trace_near(self: *const Linker, note: Note, writer: anytype) !void {
+    var section_name: ?[]const u8 = null;
+    var block: *const Block = undefined;
+
+    for (self.blocks.keys(), self.blocks.values()) |name, section| {
+        if (note.address < section.origin or note.address > section.origin + section.content.len)
+            continue;
+        section_name = name;
+        block = section;
+    }
+
+    if (section_name) |the_section_name| {
+        const offset: isize = @intCast(note.address - block.origin);
+        try self.dump_block_trace_range(the_section_name, block, .{ .min = @intCast(@max(0, offset - 10)), .max = @intCast(@min(@as(isize, @intCast(block.content.len)), offset + 10)) }, note, writer);
+    } else {
+        try writer.print(
+            \\@section unknown
+            \\"... unknown section mapped near address {}
+            \\"... {s}
+            \\
+        , .{ note.address, note.message });
+    }
+}
+
+const Range = struct {
+    min: usize,
+    max: ?usize
+};
+
+const Note = struct {
+    address: usize,
+    message: []const u8
+};
+
+pub fn dump_block_trace_range(
+    self: *const Linker,
+    section_name: []const u8,
+    block: *const Block,
+    range: Range,
+    note: ?Note,
+    writer: anytype
+) !void {
     try writer.print("@section {s} (size {})\n", .{
         section_name,
         block.content.len });
+    if (range.min != 0)
+        try writer.writeAll("... (omitted)\n");
     const content = block.content.slice();
+    const len = if (range.max) |m| m else block.content.len;
 
     for (
-        content.items(.raw_value),
-        content.items(.compiled),
-        content.items(.address_hint),
-        content.items(.label),
-        content.items(.is_padding),
-        0..
+        content.items(.raw_value)[range.min..len],
+        content.items(.compiled)[range.min..len],
+        content.items(.address_hint)[range.min..len],
+        content.items(.label)[range.min..len],
+        content.items(.is_padding)[range.min..len],
+        range.min..
     ) |raw_value, compiled, address_hint, label, is_padding, i| {
         const absolute_address = block.origin + i;
 
@@ -783,9 +840,19 @@ fn dump_block_trace(self: *Linker, section_name: []const u8, writer: anytype) !v
                 try writer.print(" {s}", .{ @tagName(tag) })
         };
 
-        if (address_hint) |note|
-            try writer.print(" ({})", .{ note });
+        if (address_hint) |hint|
+            try writer.print(" ({})", .{ hint });
+
+        // this dump can only be shown if it was generated by this fault anyway
+        if (absolute_address == self.options.page * self.options.pagelen)
+            try writer.print("    <-- address exceeds limit here", .{});
+
+        if (note) |the_note| if (the_note.address == absolute_address)
+            try writer.print("    <-- {s}", .{ the_note.message });
     }
+
+    if (len != block.content.len)
+        try writer.writeAll("... (omitted)\n");
 }
 
 // Tests

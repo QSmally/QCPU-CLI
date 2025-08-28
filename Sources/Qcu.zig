@@ -86,7 +86,7 @@ pub const Options = struct {
     dast: bool = false,
     dair: bool = false,
     dlinker: bool = false,
-    dtrace: bool = false,
+    dnotrace: bool = false,
     noliveness: bool = false,
     noelimination: bool = false,
     noautoalign: bool = false,
@@ -401,7 +401,7 @@ fn testJob(qcu: *Qcu, job: JobType) !void {
         std.debug.print("failed on job {s} with {}\n", .{ tag, err });
         for (qcu.errors.items) |the_err|
             try the_err.write(stderr);
-        if (qcu.options.dtrace)
+        if (!qcu.options.dnotrace)
             try qcu.linker.dump_last_block_trace(stderr);
         return err;
     };
