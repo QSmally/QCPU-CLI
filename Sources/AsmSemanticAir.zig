@@ -246,12 +246,16 @@ pub const LinkInfo = struct {
 
     const Action = enum {
         origin,
-        @"align"
+        @"align",
+        maxlen,
+        maxaddr
     };
 
     const action_map = std.StaticStringMap(Action).initComptime(.{
         .{ "origin", .origin },
-        .{ "align", .@"align" }
+        .{ "align", .@"align" },
+        .{ "maxlen", .maxlen },
+        .{ "maxaddr", .maxaddr }
     });
 
     token: Token,
@@ -266,7 +270,9 @@ pub const LinkInfo = struct {
     pub fn is_valid(self: *const LinkInfo) bool {
         return switch (self.action().?) {
             .origin,
-            .@"align" => self.subject != null
+            .@"align",
+            .maxlen,
+            .maxaddr => self.subject != null
         };
     }
 };
@@ -885,7 +891,7 @@ fn prepare_import(self: *AsmSemanticAir, node: AsmAst.Node) !?NamedSymbol {
         .symbol = .{ .file = file } };
 }
 
-const linkinfo_subject_options = [_]Option { .origin, .@"align" };
+const linkinfo_subject_options = [_]Option { .origin, .@"align", .maxlen, .maxaddr };
 
 fn emit_prepare_linkinfo(self: *AsmSemanticAir, node: AsmAst.Node) !void {
     const composite = self.nodes[node.operands.rhs];
@@ -930,14 +936,18 @@ const Option = enum {
     expose,
     noelimination,
     origin,
-    @"align"
+    @"align",
+    maxlen,
+    maxaddr
 };
 
 const options_map = std.StaticStringMap(Option).initComptime(.{
     .{ "expose", .expose },
     .{ "noelimination", .noelimination },
     .{ "origin", .origin },
-    .{ "align", .@"align" }
+    .{ "align", .@"align" },
+    .{ "maxlen", .maxlen },
+    .{ "maxaddr", .maxaddr }
 });
 
 /// If the allow list is empty, it's guaranteed that there's no need to call
@@ -1250,6 +1260,13 @@ pub const Instruction = union(Tag) {
                 .jmpr,
                 .jmpd => true,
 
+                else => false
+            };
+        }
+
+        pub fn is_relative(self: Tag) bool {
+            return switch (self) {
+                .jmpr => true,
                 else => false
             };
         }

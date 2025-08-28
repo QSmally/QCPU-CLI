@@ -86,13 +86,16 @@ pub const Options = struct {
     dast: bool = false,
     dair: bool = false,
     dlinker: bool = false,
+    dtrace: bool = false,
     noliveness: bool = false,
     noelimination: bool = false,
     noautoalign: bool = false,
+    nodepthoptimisation: bool = false,
     nolinkwarnings: bool = false,
     rootsection: []const u8 = "root",
-    l1: u16 = 32,
-    page: u16 = 256 // fixme: not used yet
+    l1: u32 = 32,
+    page: u32 = 256,
+    pagelen: u32 = 256
 };
 
 pub const File = struct {
@@ -398,6 +401,8 @@ fn testJob(qcu: *Qcu, job: JobType) !void {
         std.debug.print("failed on job {s} with {}\n", .{ tag, err });
         for (qcu.errors.items) |the_err|
             try the_err.write(stderr);
+        if (qcu.options.dtrace)
+            try qcu.linker.dump_last_block_trace(stderr);
         return err;
     };
 }

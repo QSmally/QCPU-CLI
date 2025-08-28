@@ -29,6 +29,8 @@ pub fn main() u8 {
         run_options.dtokens = true;     // dump tokens
         run_options.dast = true;        // dump abstract syntax tree
         run_options.dair = true;        // dump analysed intermediate representation
+        run_options.dlinker = true;     // dump linker sections and symbols
+        run_options.dtrace = true;      // dump trace on some errors
     }
 
     if (run_options.doptions)
@@ -54,6 +56,8 @@ pub fn main() u8 {
         job.execute() catch {
             for (qcu.errors.items) |err|
                 err.write(stderr) catch return 255;
+            if (qcu.options.dtrace)
+                qcu.linker.dump_last_block_trace(stderr) catch return 255;
             return 1;
         };
     }

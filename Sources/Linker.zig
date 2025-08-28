@@ -16,6 +16,8 @@ link_list: SectionLinkList,
 blocks: BlockMap, 
 current_block: *Block,
 unified_references: ReferenceMap,
+last_emitted_section: ?*Section,
+dump_section_name: ?[]const u8,
 
 pub fn init(allocator: std.mem.Allocator, options: Qcu.Options) Linker {
     return .{
@@ -24,7 +26,9 @@ pub fn init(allocator: std.mem.Allocator, options: Qcu.Options) Linker {
         .link_list = .empty,
         .blocks = .empty,
         .current_block = undefined,
-        .unified_references = .empty };
+        .unified_references = .empty,
+        .last_emitted_section = null,
+        .dump_section_name = null };
 }
 
 pub fn deinit(self: *Linker) void {
@@ -39,40 +43,8 @@ pub fn deinit(self: *Linker) void {
 }
 
 pub fn dump(self: *Linker, writer: anytype) !void {
-    for (self.link_list.items) |section| {
-        try writer.print("@section {s} (align {}, {s})\n", .{
-            section.identifier,
-            section.inner.alignment,
-            if (section.is_poked) "referenced" else "not referenced" });
-        for (section.reference_map.keys()) |idx| {
-            const unified_reference = section.reference_map.get(idx) orelse unreachable;
-            try writer.print("  - {} -> {s}\n", .{ idx, unified_reference });
-        }
-    }
-
-    for (self.blocks.keys()) |section_name| {
-        const block = self.blocks.get(section_name) orelse unreachable;
-        try writer.print("block @section {s} (origin {} size {})\n", .{
-            section_name,
-            block.origin,
-            block.content.len });
-        for (
-            block.content.items(.raw_value),
-            block.content.items(.address_hint),
-            block.content.items(.long),
-            0..
-        ) |raw_value, address_hint, long, i| {
-            try writer.print("   {}: {b} {} {any}\n", .{ block.origin + i, raw_value, address_hint orelse 0, long });
-        }
-    }
-
-    if (self.unified_references.count() > 0) {
-        _ = try writer.writeAll("Symbols\n");
-        for (self.unified_references.keys()) |unified_reference| {
-            const reference = self.unified_references.get(unified_reference) orelse unreachable;
-            try writer.print("    {s} -> {}\n", .{ unified_reference, reference.global_address });
-        }
-    }
+    for (self.blocks.keys()) |section_name|
+        try self.dump_block_trace(section_name, writer);
 }
 
 const Section = struct {
@@ -82,13 +54,21 @@ const Section = struct {
     inner: *AsmSemanticAir.Section,
     is_poked: bool,
     is_emitted: bool = false,
+    depth_sequence: i32 = std.math.maxInt(i32),
     // fixme: multiple labels per instruction. currently semantics rejects them
     reference_map: std.AutoArrayHashMapUnmanaged(u32, []const u8) = .empty, // address : unified_label
-    
+
     pub fn deinit(self: *Section, allocator: std.mem.Allocator) void {
         for (self.reference_map.values()) |str|
             allocator.free(str);
         self.reference_map.deinit(allocator);
+    }
+
+    pub fn contains_relativity(self: *Section) bool {
+        for (self.inner.content.items(.instruction)) |instruction|
+            if (std.meta.activeTag(instruction).is_relative())
+                return true;
+        return false;
     }
 };
 
@@ -103,7 +83,7 @@ const Block = struct {
         allocator.destroy(self);
     }
 
-    pub fn total_size(self: *Block) usize {
+    pub fn absolute_size(self: *Block) usize {
         return self.origin + self.content.len;
     }
 
@@ -136,25 +116,23 @@ const Byte = struct {
         mldwx: AsmSemanticAir.SpRegister
     };
 
-    pub const pad = Byte { .raw_value = 0 };
+    pub const pad = Byte {
+        .raw_value = 0,
+        .is_padding = true };
 
     raw_value: u8,
 
     compiled: ?Tag = null,
     address_hint: ?i32 = null,
     label: ?[]const u8 = null,
-    long: ?*const AsmSemanticAir.Instruction = null
-};
-
-const Reference = struct {
-
-    global_address: u32
+    long: ?*const AsmSemanticAir.Instruction = null,
+    is_padding: bool = false
 };
 
 const SectionLinkList = std.ArrayListUnmanaged(Section);
 const BlockMap = std.StringArrayHashMapUnmanaged(*Block);
 const ByteList = std.MultiArrayList(Byte);
-const ReferenceMap = std.StringArrayHashMapUnmanaged(Reference);
+const ReferenceMap = std.StringArrayHashMapUnmanaged(u32);
 
 /// To calculate alignment.
 fn find_available_mask(from_address: usize, mask: usize) usize {
@@ -190,10 +168,13 @@ const LinkError = error {
     DescendingSectionMapping,
     AlignPowerTwo,
     EmptyLinkSections,
+    MaximumMemoryExceeded,
+    MaximumSizeExceeded,
+    MaximumAddressExceeded,
     NoteDefinedHere,
     NotePreviouslyDefinedHere,
     NoteAddressDefinedHere,
-    NoteNotLinked
+    NoteSizeDefinedHere
 };
 
 fn add_error(self: *Linker, comptime err: LinkError, target: *Qcu.File, argument: anytype) !void {
@@ -210,17 +191,20 @@ fn add_error(self: *Linker, comptime err: LinkError, target: *Qcu.File, argument
         error.DescendingSectionMapping => "section '{s}' mapping with origin {} is less than cumulative size {}",
         error.AlignPowerTwo => "alignment of {} is not a power of two",
         error.EmptyLinkSections => "nothing to link; are you missing @linkinfo definitions?",
+        error.MaximumMemoryExceeded => "memory exceeds maximum total size of {} bytes",
+        error.MaximumSizeExceeded => "memory of section '{s}' exceeds set size of {} bytes",
+        error.MaximumAddressExceeded => "memory of section '{s}' exceeds set address {}",
         error.NoteDefinedHere => "{s} defined here",
         error.NotePreviouslyDefinedHere => "previously defined here",
         error.NoteAddressDefinedHere => "address range {}..{} mapped here",
-        error.NoteNotLinked => "symbol defined here not linked"
+        error.NoteSizeDefinedHere => "address {} -> {} mapped here"
     };
 
     const is_note = switch (err) {
         error.NoteDefinedHere,
         error.NotePreviouslyDefinedHere,
         error.NoteAddressDefinedHere,
-        error.NoteNotLinked => true,
+        error.NoteSizeDefinedHere => true,
         else => false
     };
 
@@ -232,19 +216,19 @@ fn add_error(self: *Linker, comptime err: LinkError, target: *Qcu.File, argument
         error.NoteDefinedHere => argument[1],
         error.DuplicateSymbolId,
         error.MissingGlobalSection,
+        error.MaximumMemoryExceeded,
         error.EmptyLinkSections => null,
         error.DuplicateLinkingInfo,
         error.InvalidLinkInfo,
-        error.NotePreviouslyDefinedHere,
-        error.NoteNotLinked => argument,
+        error.NotePreviouslyDefinedHere => argument,
         error.DescendingSectionMapping => argument[3],
-        error.NoteAddressDefinedHere => argument[2]
+        error.MaximumSizeExceeded,
+        error.MaximumAddressExceeded,
+        error.NoteAddressDefinedHere,
+        error.NoteSizeDefinedHere => argument[2]
     };
     const token_location = if (token) |token_|
         target.source.?.location_of(token_.location) else
-        null;
-    const token_slice = if (token) |token_|
-        token_.location.slice(target.source.?.buffer) else
         null;
     const arguments = switch (err) {
         error.DuplicateGlobalSection,
@@ -252,15 +236,18 @@ fn add_error(self: *Linker, comptime err: LinkError, target: *Qcu.File, argument
         error.AlignPowerTwo,
         error.UnknownLinkInfo => .{ argument[0] },
         error.DuplicateSymbolId,
-        error.MissingGlobalSection => .{ argument },
+        error.MissingGlobalSection,
+        error.MaximumMemoryExceeded => .{ argument },
         error.DuplicateLinkingInfo,
         error.InvalidLinkInfo,
         error.EmptyLinkSections,
         error.NotePreviouslyDefinedHere => .{},
         error.NoteDefinedHere => .{ argument[0].fmt() },
-        error.NoteNotLinked => .{ token_slice.? },
         error.DescendingSectionMapping => .{ argument[0], argument[1], argument[2] },
-        error.NoteAddressDefinedHere => .{ argument[0], argument[1] }
+        error.MaximumSizeExceeded,
+        error.MaximumAddressExceeded,
+        error.NoteAddressDefinedHere,
+        error.NoteSizeDefinedHere => .{ argument[0], argument[1] }
     };
 
     const format = try std.fmt.allocPrint(self.allocator, message, arguments);
@@ -277,7 +264,7 @@ fn add_error(self: *Linker, comptime err: LinkError, target: *Qcu.File, argument
 
 pub fn generate(self: *Linker) !void {
     const root_section = try self.get_root_section() orelse return;
-    try self.poke_section_tree(root_section); // generates address map
+    try self.poke_section_tree(root_section, 0); // generates address map
 
     if (!self.options.noelimination)
         self.remove_unpoked_inplace();
@@ -299,7 +286,9 @@ pub fn generate(self: *Linker) !void {
 
         switch (action) {
             .origin => try self.emit_link_origin(link.file, link_node),
-            .@"align" => try self.emit_link_align(link.file, link_node)
+            .@"align" => try self.emit_link_align(link.file, link_node),
+            .maxlen => try self.emit_link_maxlen(link.file, link_node),
+            .maxaddr => try self.emit_link_maxaddr(link.file, link_node)
         }
     }
 
@@ -337,10 +326,11 @@ fn find_single_section(self: *Linker, name: []const u8) !?*Section {
     return result;
 }
 
-fn poke_section_tree(self: *Linker, section: *Section) !void {
+fn poke_section_tree(self: *Linker, section: *Section, depth_sequence: i32) !void {
     if (section.is_poked)
         return;
     section.is_poked = true;
+    section.depth_sequence = depth_sequence;
 
     loop: for (section.inner.content.items(.instruction)) |instruction| {
         switch (instruction) {
@@ -367,7 +357,7 @@ fn poke_section_tree(self: *Linker, section: *Section) !void {
                         }
 
                         // poke outgoing reference to section
-                        try self.poke_section_tree(linker_section);
+                        try self.poke_section_tree(linker_section, depth_sequence + 1);
                     }
                 }
             }
@@ -457,10 +447,32 @@ fn emit_link_align(self: *Linker, file: *Qcu.File, link_node: AsmSemanticAir.Lin
         return try self.add_error(error.AlignPowerTwo, file, .{ link_node.value, link_node.token });
     const section_name = link_node.subject.?;
     const aligned_origin = if (self.blocks.count() > 0)
-        find_available_mask(self.current_block.total_size(), link_node.value) else
+        find_available_mask(self.current_block.absolute_size(), link_node.value) else
         0;
     try self.new_block(file, section_name, .{ .token = link_node.token, .origin = @intCast(aligned_origin) });
     try self.emit_section_blocks(section_name);
+}
+
+fn emit_link_maxlen(self: *Linker, file: *Qcu.File, link_node: AsmSemanticAir.LinkInfo) !void {
+    const section_name = link_node.subject.?;
+    const block = self.blocks.get(section_name) orelse return;
+
+    if (block.content.len > link_node.value) {
+        try self.add_error(error.MaximumSizeExceeded, file, .{ section_name, link_node.value, link_node.token });
+        try self.add_error(error.NoteSizeDefinedHere, file, .{ block.origin, block.content.len, block.token });
+        if (self.options.dtrace) self.dump_section_name = section_name;
+    }
+}
+
+fn emit_link_maxaddr(self: *Linker, file: *Qcu.File, link_node: AsmSemanticAir.LinkInfo) !void {
+    const section_name = link_node.subject.?;
+    const block = self.blocks.get(section_name) orelse return;
+
+    if (block.absolute_size() > link_node.value) {
+        try self.add_error(error.MaximumAddressExceeded, file, .{ section_name, link_node.value, link_node.token });
+        try self.add_error(error.NoteAddressDefinedHere, file, .{ block.origin, block.absolute_size(), block.token });
+        if (self.options.dtrace) self.dump_section_name = section_name;
+    }
 }
 
 fn new_block(self: *Linker, file: *Qcu.File, name: []const u8, block: Block) !void {
@@ -471,7 +483,7 @@ fn new_block(self: *Linker, file: *Qcu.File, name: []const u8, block: Block) !vo
     }
 
     if (self.blocks.count() > 0) blk: {
-        const last_address = self.current_block.total_size();
+        const last_address = self.current_block.absolute_size();
         if (block.origin >= last_address)
             break :blk;
         try self.add_error(error.DescendingSectionMapping, file, .{ name, block.origin, last_address, block.token });
@@ -490,7 +502,6 @@ fn new_block(self: *Linker, file: *Qcu.File, name: []const u8, block: Block) !vo
 fn emit_section_blocks(self: *Linker, section_name: []const u8) !void {
     while (true) {
         // fixme: add most optimal size for further padding optimisation?
-        // fixme: jmpr/brh should hint that the referencing sections should be close by
         var least_padding_section: ?*Section = null;
         var least_padding: usize = undefined;
 
@@ -503,19 +514,31 @@ fn emit_section_blocks(self: *Linker, section_name: []const u8) !void {
                 break :search;
             }
 
-            const current_address = self.current_block.total_size();
+            const current_address = self.current_block.absolute_size();
             const section_padding = find_available_mask(current_address, section.inner.alignment) - current_address;
 
             if (least_padding_section == null or section_padding < least_padding) {
+                if (self.last_emitted_section) |last_section| blk: {
+                    if (!last_section.contains_relativity() or self.options.nodepthoptimisation)
+                        break :blk;
+                    const selected_section = least_padding_section orelse break :blk;
+
+                    // if this section depends on relative addressing,
+                    // prioritise depth sequences as close to current one
+                    const selected_depth = selected_section.depth_sequence - last_section.depth_sequence;
+                    const new_depth = section.depth_sequence - last_section.depth_sequence;
+                    if (@abs(new_depth) > @abs(selected_depth)) continue :search;
+                }
+
                 least_padding_section = section;
                 least_padding = section_padding;
             }
         }
 
-        var section = least_padding_section orelse break;
-        section.is_emitted = true;
+        self.last_emitted_section = least_padding_section orelse break;
+        self.last_emitted_section.?.is_emitted = true;
         try self.emit_section_padding(least_padding);
-        try self.emit_section_block(section);
+        try self.emit_section_block(self.last_emitted_section.?);
     }
 }
 
@@ -525,24 +548,32 @@ fn emit_section_padding(self: *Linker, padding: usize) !void {
 }
 
 fn emit_section_block(self: *Linker, section: *const Section) !void {
-    unroll: for (section.inner.content.items(.instruction), 0..) |*instr, i| {
-        const initial_address = self.current_block.total_size();
+    for (section.inner.content.items(.instruction), 0..) |*instr, i| {
+        const initial_address = self.current_block.absolute_size();
         const instr_size = instr.size();
 
         if (instr_size == 0)
-            continue :unroll;
+            continue;
+        const last_address = initial_address + instr_size - 1;
+        const max_memory = self.options.page * self.options.pagelen;
+
+        if (last_address > max_memory) {
+            try self.add_error(error.MaximumMemoryExceeded, self.link_list.items[0].file, max_memory);
+            break;
+        }
+
         const maybe_unified_reference = section.reference_map.get(@intCast(i));
         try self.emit_instruction_bytes(instr, maybe_unified_reference);
-        std.debug.assert(self.current_block.total_size() - initial_address == instr_size);
+        std.debug.assert(self.current_block.absolute_size() - initial_address == instr_size);
 
         // there's a reference at this index, now its real address is known
         if (maybe_unified_reference) |unified_reference| {
             if (self.unified_references.contains(unified_reference)) {
                 try self.add_error(error.DuplicateSymbolId, section.file, unified_reference);
-                continue :unroll;
+                continue;
             }
 
-            try self.unified_references.put(self.allocator, unified_reference, .{ .global_address = @intCast(initial_address) });
+            try self.unified_references.put(self.allocator, unified_reference, @intCast(initial_address));
         }
     }
 }
@@ -677,7 +708,7 @@ fn address_resolution(self: *Linker, block: *Block) !void {
                 if (!@hasField(@TypeOf(operand), "result") or !@hasField(@TypeOf(operand.result), "linktime_label"))
                     break :blk;
                 const label_address = if (operand.result.linktime_label) |lbl|
-                    (self.unified_references.get(lbl.unified_name) orelse unreachable).global_address else
+                    self.unified_references.get(lbl.unified_name) orelse unreachable else
                     0;
                 const resolved_address = try operand.result.resolve(
                     operand.token,
@@ -708,6 +739,52 @@ fn address_resolution(self: *Linker, block: *Block) !void {
                 }
             }
         }
+    }
+}
+
+pub fn dump_last_block_trace(self: *Linker, writer: anytype) !void {
+    const section_name = self.dump_section_name orelse return;
+    try self.dump_block_trace(section_name, writer);
+}
+
+fn dump_block_trace(self: *Linker, section_name: []const u8, writer: anytype) !void {
+    const block = self.blocks.get(section_name) orelse unreachable;
+
+    try writer.print("@section {s} (size {})\n", .{
+        section_name,
+        block.content.len });
+    const content = block.content.slice();
+
+    for (
+        content.items(.raw_value),
+        content.items(.compiled),
+        content.items(.address_hint),
+        content.items(.label),
+        content.items(.is_padding),
+        0..
+    ) |raw_value, compiled, address_hint, label, is_padding, i| {
+        const absolute_address = block.origin + i;
+
+        if (i != 0 and absolute_address % self.options.page == 0)
+            try writer.print("Page ({})\n", .{ self.options.page })
+        else if (i != 0 and absolute_address % self.options.l1 == 0)
+            try writer.print("L1 ({})\n", .{ self.options.l1 });
+
+        try writer.print("{s: <23} {: >8}:{s}0b{b:0<8}   ", .{
+            label orelse "",
+            absolute_address,
+            if (is_padding) " * " else " ",
+            raw_value });
+        defer writer.writeAll("\n") catch {};
+
+        if (compiled) |instruction| switch (instruction) {
+            inline else => |operand, tag| if (@TypeOf(operand) != void)
+                try writer.print(" {s} {s}", .{ @tagName(tag), @tagName(operand) }) else
+                try writer.print(" {s}", .{ @tagName(tag) })
+        };
+
+        if (address_hint) |note|
+            try writer.print(" ({})", .{ note });
     }
 }
 

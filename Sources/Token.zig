@@ -174,6 +174,8 @@ const keywords = std.StaticStringMap(Tag).initComptime(.{
     .{ "noelimination", .option },
     .{ "origin", .option },
     .{ "align", .option },
+    .{ "maxlen", .option },
+    .{ "maxaddr", .option },
 
     // Instructions
     .{ "ast", .instruction },
