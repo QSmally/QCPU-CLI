@@ -2,6 +2,7 @@
 // Linker
 
 const std = @import("std");
+const builtin = @import("builtin");
 const AsmSemanticAir = @import("AsmSemanticAir.zig");
 const Error = @import("Error.zig");
 const Qcu = @import("Qcu.zig");
@@ -55,8 +56,13 @@ pub fn dump(self: *Linker, writer: anytype) !void {
             section_name,
             block.origin,
             block.content.len });
-        for (block.content.items(.raw_value), block.content.items(.long), 0..) |raw_value, long, i| {
-            try writer.print("   {}: {b} {any}\n", .{ block.origin + i, raw_value, long });
+        for (
+            block.content.items(.raw_value),
+            block.content.items(.address_hint),
+            block.content.items(.long),
+            0..
+        ) |raw_value, address_hint, long, i| {
+            try writer.print("   {}: {b} {} {any}\n", .{ block.origin + i, raw_value, address_hint orelse 0, long });
         }
     }
 
@@ -76,7 +82,7 @@ const Section = struct {
     inner: *AsmSemanticAir.Section,
     is_poked: bool,
     is_emitted: bool = false,
-    // fixme: multiple labels per instruction. currently the linker rejects them
+    // fixme: multiple labels per instruction. currently semantics rejects them
     reference_map: std.AutoArrayHashMapUnmanaged(u32, []const u8) = .empty, // address : unified_label
     
     pub fn deinit(self: *Section, allocator: std.mem.Allocator) void {
@@ -135,6 +141,7 @@ const Byte = struct {
     raw_value: u8,
 
     compiled: ?Tag = null,
+    address_hint: ?i32 = null,
     label: ?[]const u8 = null,
     long: ?*const AsmSemanticAir.Instruction = null
 };
@@ -270,15 +277,10 @@ fn add_error(self: *Linker, comptime err: LinkError, target: *Qcu.File, argument
 
 pub fn generate(self: *Linker) !void {
     const root_section = try self.get_root_section() orelse return;
-    try self.poke_section_tree(root_section);
+    try self.poke_section_tree(root_section); // generates address map
 
-    if (!self.options.noelimination) {
+    if (!self.options.noelimination)
         self.remove_unpoked_inplace();
-
-        for (self.link_list.items) |referenced_section|
-            std.debug.assert(referenced_section.is_poked);
-    }
-
     if (!self.options.noautoalign)
         self.inject_optimised_alignment();
     const link = try self.find_single_linkinfo() orelse return;
@@ -306,7 +308,8 @@ pub fn generate(self: *Linker) !void {
         return;
     }
 
-    // fixme: fill in addresses! last task for the linker
+    for (self.blocks.values()) |block|
+        try self.address_resolution(block);
 }
 
 fn get_root_section(self: *Linker) !?*Section {
@@ -393,6 +396,9 @@ fn remove_unpoked_inplace(self: *Linker) void {
             index += 1;
         }
     }
+
+    for (self.link_list.items) |referenced_section|
+        std.debug.assert(referenced_section.is_poked);
 }
 
 fn inject_optimised_alignment(self: *Linker) void {
@@ -546,13 +552,13 @@ fn emit_instruction_bytes(
     instruction: *const AsmSemanticAir.Instruction,
     label: ?[]const u8
 ) !void {
+    const size = instruction.size();
+    if (size == 0) return;
+
     switch (instruction.*) {
         .reserve, // fixme: force constant for reserve expression
         .u8, .u16, .u24,
         .i8, .i16, .i24 => {
-            const size = instruction.size();
-            if (size == 0) return;
-
             try self.current_block.content.append(self.allocator, .{
                 .raw_value = 0,
                 .label = label,
@@ -563,21 +569,29 @@ fn emit_instruction_bytes(
 
         .ascii => |ascii| {
             const string = ascii[0].result;
-            if (string.size() == 0) return;
 
-            try self.current_block.content.append(self.allocator, .{
-                .raw_value = string.memory[0],
-                .label = label,
-                .long = instruction });
-            for (string.memory[1..]) |byte|
-                try self.current_block.content.append(self.allocator, .{ .raw_value = byte });
-            if (string.sentinel) |sentinel|
-                try self.current_block.content.append(self.allocator, .{ .raw_value = sentinel.result });
+            if (string.memory.len > 0) {
+                try self.current_block.content.append(self.allocator, .{
+                    .raw_value = string.memory[0],
+                    .label = label,
+                    .long = instruction });
+                for (string.memory[1..]) |byte|
+                    try self.current_block.content.append(self.allocator, .{ .raw_value = byte });
+            }
+
+            if (string.sentinel) |sentinel| {
+                if (string.memory.len > 0)
+                    try self.current_block.content.append(self.allocator, .{
+                        .raw_value = sentinel.result }) else
+                    try self.current_block.content.append(self.allocator, .{
+                        .raw_value = sentinel.result,
+                        .label = label,
+                        .long = instruction });
+            }
         },
 
         .ld_padding => {
-            for (0..instruction.size()) |_|
-                try self.current_block.content.append(self.allocator, .pad);
+            for (0..size) |_| try self.current_block.content.append(self.allocator, .pad);
         },
 
         else => {
@@ -639,8 +653,60 @@ fn emit_instruction_bytes(
                 .long = instruction });
 
             // they're zero bytes for now, because all the addresses are not known yet
-            for (0..(instruction.size() - 1)) |_|
-                try self.current_block.content.append(self.allocator, .pad);
+            for (0..(size - 1)) |_| try self.current_block.content.append(self.allocator, .pad);
+        }
+    }
+}
+
+fn address_resolution(self: *Linker, block: *Block) !void {
+    const instructions = block.content.items(.long);
+
+    for (instructions, 0..) |instruction, i| {
+        switch ((instruction orelse continue).*) {
+            // only constant
+            .ascii,
+            .reserve,
+            .ld_padding => {},
+
+            // free game
+            inline else => |operands, tag| blk: {
+                if (@TypeOf(operands) == void)
+                    break :blk;
+                const operand = operands[operands.len - 1];
+
+                if (!@hasField(@TypeOf(operand), "result") or !@hasField(@TypeOf(operand.result), "linktime_label"))
+                    break :blk;
+                const label_address = if (operand.result.linktime_label) |lbl|
+                    (self.unified_references.get(lbl.unified_name) orelse unreachable).global_address else
+                    0;
+                const resolved_address = try operand.result.resolve(
+                    operand.token,
+                    operand.executed_token,
+                    @as(i32, @intCast(block.origin)) + @as(i32, @intCast(i)),
+                    @intCast(label_address)) orelse break :blk;
+                // https://ziglang.org/documentation/master/#byteSwap for u24
+                const little_endian: @TypeOf(resolved_address.result) = switch (builtin.cpu.arch.endian()) {
+                    .big => @byteSwap(resolved_address.result),
+                    .little => resolved_address.result
+                };
+                const bytes = std.mem.asBytes(&little_endian);
+
+                // instructions skip one byte for address insertion,
+                // pseudoinstructions are completely overwritten
+                @setEvalBranchQuota(9999);
+                const ByteTag = @typeInfo(Byte.Tag).@"union".tag_type.?;
+                const offset = if (comptime std.meta.stringToEnum(ByteTag, @tagName(tag)) != null) 1 else 0;
+
+                for (bytes, 0..) |byte, idx| {
+                    const byte_address = i + offset + idx; // block addr + instr. byte offset + byte index
+                    std.debug.assert(block.content.get(byte_address).compiled == null);
+
+                    block.content.set(byte_address, .{
+                        .raw_value = byte,
+                        .address_hint = if (idx == 0) resolved_address.real_address else null,
+                        .long = instructions[byte_address] });
+                }
+            }
         }
     }
 }

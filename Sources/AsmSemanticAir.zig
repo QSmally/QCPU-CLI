@@ -15,6 +15,7 @@ const AsmSemanticAir = @This();
 /// QCPU compilation unit.
 qcu: ?*Qcu.File,
 allocator: std.mem.Allocator,
+arena: std.heap.ArenaAllocator,
 source: Source,
 nodes: []const AsmAst.Node,
 /// Any symbol in the current unit, which includes namespaces for symbol
@@ -40,6 +41,7 @@ pub fn init(qcu: *Qcu.File, source: Source, nodes: []const AsmAst.Node) !AsmSema
     var self = AsmSemanticAir {
         .qcu = qcu,
         .allocator = qcu.allocator,
+        .arena = std.heap.ArenaAllocator.init(qcu.allocator),
         .source = source,
         .nodes = nodes,
         .symbols = .empty,
@@ -58,6 +60,7 @@ pub fn init_freestanding(allocator: std.mem.Allocator, source: Source, nodes: []
     var self = AsmSemanticAir {
         .qcu = null,
         .allocator = allocator,
+        .arena = std.heap.ArenaAllocator.init(allocator),
         .source = source,
         .nodes = nodes,
         .symbols = .empty,
@@ -83,6 +86,7 @@ pub fn deinit(self: *AsmSemanticAir) void {
     for (self.errors.items) |err|
         self.allocator.free(err.message);
     self.errors.deinit(self.allocator);
+    self.arena.deinit();
 }
 
 pub fn dump(self: *AsmSemanticAir, writer: anytype) !void {
@@ -469,6 +473,8 @@ const SemanticError = error {
     HeaderResultType,
     HeaderContextIllegal,
     HeaderDuplicateParameter,
+    AddressResolutionUnsigned,
+    AddressResolutionOverflow,
     NoteDefinedHere,
     NoteCalledFromHere,
     NoteDidYouMean,
@@ -508,6 +514,8 @@ fn add_error(self: *AsmSemanticAir, comptime err: SemanticError, argument: anyty
         error.HeaderResultType => "a @header call isn't supported in result type",
         error.HeaderContextIllegal => "{s} in a header context is considered illegal",
         error.HeaderDuplicateParameter => "duplicate header argument '{s}'",
+        error.AddressResolutionUnsigned => "address resolved to {} but instruction doens't permit signed addresses",
+        error.AddressResolutionOverflow => "resolved address of {} doesn't fit in {s} type",
         error.NoteDefinedHere => "{s} defined here",
         error.NoteCalledFromHere => "called from here",
         error.NoteDidYouMean => "did you mean to {s}{s}?",
@@ -532,9 +540,11 @@ fn add_error(self: *AsmSemanticAir, comptime err: SemanticError, argument: anyty
         error.NonEmptyModifier,
         error.ResultType,
         error.IllegalUnaryOp,
+        error.AddressResolutionUnsigned,
         error.NoteDefinedHere => argument[1],
         error.ExpectedElsewhere,
         error.RegionExceedsSize,
+        error.AddressResolutionOverflow,
         error.NoteDidYouMean,
         error.GenericToken => argument[2],
         error.Unexpected,
@@ -588,10 +598,12 @@ fn add_error(self: *AsmSemanticAir, comptime err: SemanticError, argument: anyty
         error.DuplicateSymbol,
         error.AlignPowerTwo,
         error.NonEmptyModifier,
-        error.ResultType => .{ argument[0] },
+        error.ResultType,
+        error.AddressResolutionUnsigned => .{ argument[0] },
         error.RegionExceedsSize,
         error.NoteDidYouMean,
-        error.GenericToken => .{ argument[0], argument[1] },
+        error.GenericToken,
+        error.AddressResolutionOverflow => .{ argument[0], argument[1] },
         error.ExpectedArgumentsLen => blk: {
             const plural = if (argument[1] != 1) "arguments" else "argument";
             break :blk .{ argument[1], plural, token_slice.?, argument[2] };
@@ -1179,17 +1191,17 @@ pub const Instruction = union(Tag) {
     cli,
     ast: struct { Expression(GpRegister) },
     rst: struct { Expression(GpRegister) },
-    jmp: struct { Expression(Numeric(.absolute)) },
+    jmp: struct { Expression(Numeric(.{ .literal = u16 })) },
     jmpr: struct { Expression(Numeric(.relative)) },
     jmpd,
-    mst: struct { Expression(SpRegister), Expression(Numeric(.absolute)) },
-    mstx: struct { Expression(SpRegister), Expression(Numeric(.absolute)) },
-    mstw: struct { Expression(SpRegister), Expression(Numeric(.absolute)) },
-    mstwx: struct { Expression(SpRegister), Expression(Numeric(.absolute)) },
-    mld: struct { Expression(SpRegister), Expression(Numeric(.absolute)) },
-    mldx: struct { Expression(SpRegister), Expression(Numeric(.absolute)) },
-    mldw: struct { Expression(SpRegister), Expression(Numeric(.absolute)) },
-    mldwx: struct { Expression(SpRegister), Expression(Numeric(.absolute)) },
+    mst: struct { Expression(SpRegister), Expression(Numeric(.{ .literal = u16 })) },
+    mstx: struct { Expression(SpRegister), Expression(Numeric(.{ .literal = u16 })) },
+    mstw: struct { Expression(SpRegister), Expression(Numeric(.{ .literal = u16 })) },
+    mstwx: struct { Expression(SpRegister), Expression(Numeric(.{ .literal = u16 })) },
+    mld: struct { Expression(SpRegister), Expression(Numeric(.{ .literal = u16 })) },
+    mldx: struct { Expression(SpRegister), Expression(Numeric(.{ .literal = u16 })) },
+    mldw: struct { Expression(SpRegister), Expression(Numeric(.{ .literal = u16 })) },
+    mldwx: struct { Expression(SpRegister), Expression(Numeric(.{ .literal = u16 })) },
 
     // pseudoinstructions
     u8: struct { Expression(Numeric(.{ .literal = u8 })) },
@@ -1199,7 +1211,7 @@ pub const Instruction = union(Tag) {
     i16: struct { Expression(Numeric(.{ .literal = i16 })) },
     i24: struct { Expression(Numeric(.{ .literal = i24 })) },
     ascii: struct { Expression(StringContent) },
-    reserve: struct { Expression(TypeSize), Expression(Numeric(.{ .constant = u16 })) },
+    reserve: struct { Expression(TypeSize), Expression(Numeric(.constant)) },
 
     // adds fixed zero bytes
     ld_padding: struct { usize },
@@ -1749,11 +1761,33 @@ fn fetch_symbol_inner(self: *AsmSemanticAir, key: []const u8) ?*Symbol.Locatable
 }
 
 const NumericResult = union(enum) {
-    absolute,
+
     relative,
-    agnostic,
-    constant: type,
-    literal: type
+    agnostic, // i8 or u8
+    constant,
+    literal: type, // eval as type
+
+    pub fn FittingType(self: NumericResult) type {
+        return switch (self) {
+            .relative => i8,
+            .agnostic => u8, // @bitCast
+            .constant => u16,
+            .literal => |the_type| the_type
+        };
+    }
+
+    pub fn bytes(self: NumericResult) usize {
+        return @sizeOf(self.FittingType());
+    }
+
+    pub fn is_signed(self: NumericResult) bool {
+        return switch (self) {
+            .relative,
+            .agnostic => true,
+            .constant => false,
+            .literal => |the_type| @typeInfo(the_type).@"int".signedness == .signed
+        };
+    }
 };
 
 fn Numeric(comptime Type: NumericResult) type {
@@ -1766,6 +1800,7 @@ fn Numeric(comptime Type: NumericResult) type {
         const LinkLabel = struct {
             sema: *AsmSemanticAir,
             name: []const u8,
+            unified_name: []const u8, // arena allocated
             modifier: ?u8
         };
 
@@ -1932,6 +1967,7 @@ fn Numeric(comptime Type: NumericResult) type {
                     const label = LinkLabel {
                         .sema = symbols_sema,
                         .name = qualified_name,
+                        .unified_name = try symbols_sema.unified_label(sema.arena.allocator(), qualified_name),
                         .modifier = modifier };
                     break :blk .{
                         .tag = node.tag,
@@ -1972,6 +2008,53 @@ fn Numeric(comptime Type: NumericResult) type {
 
                 else => unreachable
             };
+        }
+
+        const AddressResolution = struct {
+            absolute_address: i32,
+            real_address: i32,
+            result: ResultType.FittingType()
+        };
+
+        pub fn resolve(
+            self: *const NumericType,
+            origin_token: ForeignToken,
+            token: ForeignToken,
+            current_address: i32,
+            label_address: i32
+        ) !?AddressResolution {
+            const absolute_address = (self.assembletime_offset orelse 0) + label_address;
+
+            const real_address: i32 = switch (ResultType) {
+                // only perform relative offset if a label was used
+                .relative => if (self.linktime_label != null)
+                    absolute_address - current_address else
+                    absolute_address,
+                else => absolute_address
+            };
+
+            if (!ResultType.is_signed() and real_address < 0) {
+                try token.sema.emit_resolved_error(error.AddressResolutionUnsigned, origin_token, token.token, .{ real_address, token.token });
+                return null;
+            }
+
+            const ResolutionType = ResultType.FittingType();
+
+            if (real_address > std.math.maxInt(ResolutionType) or real_address < std.math.minInt(ResolutionType)) {
+                try token.sema.emit_resolved_error(error.AddressResolutionOverflow, origin_token, token.token, .{ real_address, @typeName(ResolutionType), token.token });
+                return null;
+            }
+
+            const intermediate_type = @Type(.{ .@"int" = .{
+                .signedness = if (comptime ResultType.is_signed()) .signed else .unsigned,
+                .bits = @bitSizeOf(i32) } });
+            // we already did the validation, so truncate doesn't lose any info
+            const result: ResolutionType = @truncate(@as(intermediate_type, @bitCast(real_address)));
+
+            return .{
+                .absolute_address = absolute_address,
+                .real_address = real_address,
+                .result = result };
         }
     };
 }
