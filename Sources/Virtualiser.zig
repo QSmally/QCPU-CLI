@@ -79,7 +79,7 @@ pub fn begin(allocator: std.mem.Allocator, qcu: *const Qcu, options: Options) !v
     try virtualiser.run();
 }
 
-const ExecutionMode = enum {
+pub const ExecutionMode = enum {
     direct,
     exec
 };

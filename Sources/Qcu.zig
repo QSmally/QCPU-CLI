@@ -5,12 +5,17 @@
 //  - allocate/read file                -> buffer
 //  - tokenisation                      -> tokens
 //  - abstract syntax tree              -> nodes
+//    - recursive descent parser
 //  - static analysis                   -> symbols
-//  - exchange imports
+//    - prepare symbols
+//    - exchange imports
 //  - semantic analysis                 -> sections
+//    - <3 of the assembler
 //  - liveness
-//  - reference tree elimination
 //  - link sections                     -> blocks
+//    - reference tree elimination
+//    - block and byte generation
+//    - address resolution
 
 const std = @import("std");
 const AsmAst = @import("AsmAst.zig");
@@ -30,7 +35,6 @@ const stderr = std.io
 allocator: std.mem.Allocator,
 cwd: std.fs.Dir,
 files: FileList,
-link_list: FileList,
 options: Options,
 work_queue: JobQueue,
 errors: ErrorList,
@@ -38,7 +42,8 @@ linker: Linker,
 
 /// Each run of QCPU-CLI contains exactly one Qcu. From a list of input files,
 /// it performs tokenisation, AstGen, and lastly, both passes of semantic
-/// analysis. Filepaths and cwd are borrowed until deinit.
+/// analysis on each file. Finally, linking is performed. Filepaths and cwd are
+/// borrowed until deinit.
 pub fn init(
     allocator: std.mem.Allocator,
     cwd: std.fs.Dir,
@@ -52,7 +57,6 @@ pub fn init(
         .allocator = allocator,
         .cwd = cwd,
         .files = .empty,
-        .link_list = .empty,
         .options = options,
         .work_queue = .init(allocator, {}),
         .errors = .empty,
@@ -71,7 +75,6 @@ pub fn deinit(self: *Qcu) void {
     for (self.files.items) |file|
         file.deinit();
     self.files.deinit(self.allocator);
-    self.link_list.deinit(self.allocator);
     self.work_queue.deinit();
     for (self.errors.items) |lerr|
         self.allocator.free(lerr.err.message);

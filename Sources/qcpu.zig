@@ -18,6 +18,45 @@ fn version(writer: anytype) !void {
         try writer.print(" in debug mode", .{});
 }
 
+fn help(raw_writer: anytype) !void {
+    var buffer = std.io.bufferedWriter(raw_writer);
+    defer buffer.flush() catch {};
+    var writer = buffer.writer();
+
+    try writer.writeAll(
+        \\
+        \\    QCPU CLI
+        \\    qcpu [option ...] file ...
+        \\
+        \\
+    );
+
+    inline for (&[_]struct { []const u8, type } {
+        .{ "general options", CliOptions },
+        .{ "compilation unit options", Qcu.Options },
+        .{ "virtualiser options", Virtualiser.Options }
+    }) |category| {
+        try writer.print("{s}\n", .{ category[0] });
+
+        inline for (@typeInfo(category[1]).@"struct".fields) |field| {
+            const fancy_type = switch (field.@"type") {
+                []const u8 => "string (default " ++ field.defaultValue().? ++ ")",
+                ?[]const u8 => "string (default none)",
+                bool => "",
+                Virtualiser.ExecutionMode => "mode (default " ++ @tagName(field.defaultValue().?) ++ ")",
+                u32, u64 => @typeName(field.@"type") ++ " (default " ++ std.fmt.comptimePrint("{}", .{ field.defaultValue().? }) ++ ")",
+                else => @typeName(field.@"type")
+            };
+
+            try writer.print("    --{s} {s}\n", .{ field.name, fancy_type });
+        }
+
+        try writer.writeAll("\n");
+    }
+
+    try version(writer);
+}
+
 pub fn main() !u8 {
     var gpa = std.heap.GeneralPurposeAllocator(.{}) {};
     defer _ = gpa.deinit();
@@ -58,6 +97,11 @@ pub fn main() !u8 {
 
     if (run_options.version) {
         try version(stdout);
+        return 0;
+    }
+
+    if (run_options.help) {
+        try help(stdout);
         return 0;
     }
 
@@ -111,6 +155,7 @@ const stderr = std.io
 
 const CliOptions = struct {
     version: bool = false,
+    help: bool = false,
     doptions: bool = false,
     verbose: bool = false,
     dry: bool = false,
@@ -277,7 +322,7 @@ test "arguments parser simple correctly" {
 }
 
 test "arguments parser advanced correctly" {
-    const foo = std.mem.splitScalar(u8, "--roo bbb --loo 5 aaa", ' ');
+    const foo = std.mem.splitScalar(u8, "--roo bbb --loo 8 aaa", ' ');
     var iterator = Arguments(@TypeOf(foo)).init(foo);
     const positional, const tagged = try iterator.parse(TestOptions, std.testing.allocator);
     defer std.testing.allocator.free(positional);
@@ -286,7 +331,7 @@ test "arguments parser advanced correctly" {
     try std.testing.expectEqual(false, tagged.bar);
     try std.testing.expectEqualSlices(u8, "bbb", tagged.roo.?);
     try std.testing.expectEqual(false, tagged.doo);
-    try std.testing.expectEqual(@as(u16, 5), tagged.loo);
+    try std.testing.expectEqual(@as(u16, 8), tagged.loo);
 
     try std.testing.expect(positional.len == 1);
     try std.testing.expectEqualSlices(u8, "aaa", positional[0]);
