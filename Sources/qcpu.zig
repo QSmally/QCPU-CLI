@@ -18,7 +18,7 @@ fn version(writer: anytype) !void {
         try writer.print(" in debug mode", .{});
 }
 
-pub fn main() u8 {
+pub fn main() !u8 {
     var gpa = std.heap.GeneralPurposeAllocator(.{}) {};
     defer _ = gpa.deinit();
     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
@@ -32,8 +32,10 @@ pub fn main() u8 {
             error.InvalidCharacter => stderr.print("error: {s}: invalid numeric '{s}'\n", .{ arguments.current_option, arguments.current_value }),
             error.Overflow => stderr.print("error: {s}: {s} doesn't fit in type {s}\n", .{ arguments.current_option, arguments.current_value, arguments.current_type }),
             error.ArgumentExpected => stderr.print("error: {s}: expected option value\n", .{ arguments.current_option }),
+            error.NotPowerOfTwo => stderr.print("error: {s}: numeric options must be powers of two ({s})\n", .{ arguments.current_option, arguments.current_value }),
+            error.Zero => stderr.print("error: {s}: numeric options must be non-zero\n", .{ arguments.current_option }),
             error.SelectionNotFound => stderr.print("error: {s}: value '{s}' is invalid\n", .{ arguments.current_option, arguments.current_value }),
-            error.OptionNotFound => stderr.print("error: {s}: invalid option\n", .{  arguments.current_value }),
+            error.OptionNotFound => stderr.print("error: {s}: unknown option\n", .{  arguments.current_value }),
             error.OutOfMemory => stderr.print("error: out of memory\n", .{})
         } catch return 255;
         return 1;
@@ -48,31 +50,34 @@ pub fn main() u8 {
         run_options.dlinker = true;     // dump linker sections and symbols
     }
 
+    if (run_options.l1 > run_options.page)
+        return error.CachePageHierarchy;
+
     if (run_options.doptions)
-        stderr.print("{any}\n", .{ run_options }) catch return 255;
+        try stderr.print("{any}\n", .{ run_options });
 
     if (run_options.version) {
-        version(stdout) catch return 255;
+        try version(stdout);
         return 0;
     }
 
     if (run_files.len == 0) {
-        stderr.print("error: no input files; nothing to do\n", .{}) catch return 255;
+        try stderr.print("error: no input files; nothing to do\n", .{});
         return 1;
     }
 
     // fixme: deinit with gpa on error gives segfault/double panic
     const qcu = Qcu.init(arena.allocator(), std.fs.cwd(), run_files, unmerge(Qcu.Options, run_options)) catch |err| {
-        stderr.print("error: unhandled {}\n", .{ err }) catch return 255;
+        try stderr.print("error: unhandled {}\n", .{ err });
         return 1;
     };
 
     while (qcu.work_queue.removeOrNull()) |job| {
         job.execute() catch {
             for (qcu.errors.items) |err|
-                err.write(stderr) catch return 255;
+                try err.write(stderr);
             if (!qcu.options.dnotrace)
-                qcu.linker.dump_last_block_trace(stderr) catch return 255;
+                try qcu.linker.dump_last_block_trace(stderr);
             return 1;
         };
     }
@@ -81,7 +86,7 @@ pub fn main() u8 {
         return 0;
 
     post_assemble_task(gpa.allocator(), qcu, run_options) catch |err| {
-        stderr.print("{}\n", .{ err }) catch return 255;
+        try stderr.print("{}\n", .{ err });
         return 1;
     };
 
@@ -189,13 +194,15 @@ fn Arguments(comptime T: type) type {
                             continue :arg;
                         }
 
-                        const value = val: switch (Type) {
+                        const value = switch (Type) {
                             bool => true,
 
-                            u16, u24, u32, u64 => {
+                            u16, u24, u32, u64 => val: {
                                 const inherit = 0;
-                                const input = try self.expect();
-                                break :val try std.fmt.parseInt(Type, input, inherit);
+                                const parsed_value = try std.fmt.parseInt(Type, try self.expect(), inherit);
+                                if (parsed_value == 0) return error.Zero;
+                                if (!std.math.isPowerOfTwo(parsed_value)) return error.NotPowerOfTwo;
+                                break :val parsed_value;
                             },
 
                             []const u8,

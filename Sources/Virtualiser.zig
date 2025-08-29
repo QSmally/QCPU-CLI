@@ -14,12 +14,14 @@ allocator: std.mem.Allocator,
 qcu: *const Qcu,
 options: Options,
 physical_memory: Memory,
+// fixme: add virtual memory and exec mode support
 // virtual_memory: MappedMemory,
 instruction_ptr: u16,
 total_cycles: u64,
 accumulator: u8,
 flags: Flags,
 registers: [registers_len]u8,
+last_memory_addr: ?u16,
 
 const Root = struct {
     entrypoint: u16,
@@ -53,7 +55,8 @@ pub fn init(allocator: std.mem.Allocator, qcu: *const Qcu, options: Options) !Vi
         .total_cycles = 0,
         .accumulator = 0,
         .flags = .{},
-        .registers = @splat(0) };
+        .registers = @splat(0),
+        .last_memory_addr = null };
 }
 
 pub fn deinit(self: *Virtualiser) void {
@@ -166,20 +169,25 @@ fn ast(self: *Virtualiser, value: u8, flags: ResultFlags) void {
 }
 
 fn rst(self: *Virtualiser, reg: AsmSemanticAir.GpRegister, value: u8) void {
-    self.registers[@intFromEnum(reg)] = value;
+    if (reg != .zr) self.registers[@intFromEnum(reg) - 1] = value;
 }
 
 fn register(self: *Virtualiser, reg: AsmSemanticAir.GpRegister) u8 {
-    return self.registers[@intFromEnum(reg)];
+    return if (reg != .zr)
+        self.registers[@intFromEnum(reg) - 1] else
+        0;
 }
 
 fn addr(self: *Virtualiser, vm: anytype, reg: AsmSemanticAir.SpRegister) !u16 {
     const absolute = vm.read_type(u16, self.instruction_ptr + 1);
 
-    return switch (reg) {
+    const address = switch (reg) {
         .zr => absolute,
         else => return error.AddressModeNotSupported
     };
+
+    self.last_memory_addr = address;
+    return address;
 }
 
 fn jit(self: *Virtualiser, location: Linker.Byte) !Linker.Byte.Tag {
@@ -193,16 +201,119 @@ fn jit(self: *Virtualiser, location: Linker.Byte) !Linker.Byte.Tag {
 const stderr = std.io
     .getStdErr()
     .writer();
+const Buffer = std.io.BufferedWriter(8192, @TypeOf(stderr));
+const TermWriter = term.TermColumnWriter(Buffer.Writer);
 
 fn render_terminal(self: *Virtualiser) !void {
-    var buffer = std.io.bufferedWriter(stderr);
+    var buffer = Buffer { .unbuffered_writer = stderr };
     defer buffer.flush() catch {};
     const writer = buffer.writer();
 
     try term.clear_termio(writer);
-    try term.move_termio(writer, 0, 0);
 
-    try writer.print("ip: {}\n", .{ self.instruction_ptr });
+    for (&[_]*const fn (*Virtualiser, TermWriter.Writer) TermWriter.Error!void {
+        render_col_instructions,
+        render_col_data,
+        render_col_stats
+    }, 0..) |render_col, i| {
+        var column = TermWriter {
+            .underlying_writer = writer,
+            .col = i * 80 + 2,
+            .row = 2 };
+        try render_col(self, column.writer());
+    }
+}
+
+fn render_col_instructions(self: *Virtualiser, writer: TermWriter.Writer) !void {
+    try writer.writeAll("Instruction\n");
+    const l1_len = self.qcu.linker.options.l1;
+    const l1_line = self.instruction_ptr & ~(l1_len - 1); // aligns downwards
+    try self.render_memory_page(l1_line, l1_len, self.instruction_ptr, true, writer);
+}
+
+fn render_col_data(self: *Virtualiser, writer: TermWriter.Writer) !void {
+    try writer.writeAll("Data\n");
+    const l1_len = self.qcu.linker.options.l1;
+    const l1_line = self.last_memory_addr orelse 0 & ~(l1_len - 1); // aligns downwards
+    try self.render_memory_page(l1_line, l1_len, self.last_memory_addr orelse 0, false, writer);
+}
+
+fn render_memory_page(
+    self: *Virtualiser,
+    address: usize,
+    len: usize,
+    accessing_address: usize,
+    render_jit: bool,
+    writer: anytype
+) !void {
+    for (address..(address + len)) |absolute_addr| {
+        const instr = self.physical_memory.read(@intCast(absolute_addr)) orelse Linker.Byte.pad;
+
+        try writer.print("{s: <23}{s} {x:0>4}:{s}0b{b:0>8}    ", .{
+            instr.label orelse "",
+            if (absolute_addr == accessing_address) ">" else " ",
+            absolute_addr,
+            if (instr.is_padding) " * " else " ",
+            instr.raw_value });
+        defer writer.writeAll("\n") catch {};
+
+        if (render_jit) {
+            if (instr.compiled) |instruction| switch (instruction) {
+                inline else => |operand, tag| if (@TypeOf(operand) != void)
+                    try writer.print(" {s} {s}", .{ @tagName(tag), @tagName(operand) }) else
+                    try writer.print(" {s}", .{ @tagName(tag) })
+            };
+
+            // what in the hell is this kind of if-chain?
+            if (instr.long) |instruction| if (get_instr_address(instruction)) |operand| if (operand.label) |label|
+                if (operand.offset == 0)
+                    try writer.print(" .{s}", .{ label }) else
+                    try writer.print(" .{s} + {}", .{ label, operand.offset }) else
+                try writer.print(" {}", .{ operand.offset });
+        }
+
+        if (instr.address_hint) |hint|
+            try writer.print(" ({})", .{ hint });
+    }
+}
+
+fn get_instr_address(instruction: *const AsmSemanticAir.Instruction) ?struct {
+    label: ?[]const u8,
+    offset: i32
+} {
+    return switch (instruction.*) {
+        // only constant
+        .ascii,
+        .reserve,
+        .ld_padding => null,
+
+        // free game
+        inline else => |operands| blk: {
+            if (@TypeOf(operands) == void)
+                break :blk null;
+            const operand = operands[operands.len - 1];
+
+            if (!@hasField(@TypeOf(operand), "result") or !@hasField(@TypeOf(operand.result), "linktime_label"))
+                break :blk null;
+            return .{
+                .label = if (operand.result.linktime_label) |lbl| lbl.unified_name else null,
+                .offset = operand.result.assembletime_offset orelse 0 };
+        }
+    };
+}
+
+fn render_col_stats(self: *Virtualiser, writer: TermWriter.Writer) !void {
+    try writer.print("instr. ptr: {}\n", .{ self.instruction_ptr });
+    try writer.print("total cycles: {}\n", .{ self.total_cycles });
+    try writer.print("mem addr.: {}\n", .{ self.last_memory_addr orelse 0 });
+    try writer.print("mode {s}\n", .{ @tagName(self.options.mode) });
+    try writer.writeAll("\n");
+
+    try writer.writeAll("Registers\n");
+    try writer.print("acc 0b{b:0>8} ({})\n", .{ self.accumulator, self.accumulator });
+
+    for (&self.registers, 0..) |value, reg|
+        try writer.print("r{c}: 0b{b:0>8} ({})\n", .{ @as(u8, @truncate('a' + reg)), value, value });
 }
 
 fn dump_interesting_trace(self: *Virtualiser) !void {

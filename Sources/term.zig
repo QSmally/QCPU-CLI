@@ -36,3 +36,37 @@ pub fn clear_termio(io: anytype) !void {
 pub fn move_termio(io: anytype, col: usize, row: usize) !void {
     try io.print("\x1B[{};{}H", .{ row + 1, col + 1 });
 }
+
+pub fn TermColumnWriter(comptime WriterType: type) type {
+    return struct {
+
+        const TermColumnWriterType = @This();
+
+        pub const Error = WriterType.Error;
+        pub const Writer = std.io.Writer(*TermColumnWriterType, Error, write);
+
+        underlying_writer: WriterType,
+        col: usize,
+        row: usize = 0,
+        is_flush: bool = true,
+
+        // Writer
+
+        pub fn writer(self: *TermColumnWriterType) Writer {
+            return .{ .context = self };
+        }
+
+        pub fn write(self: *TermColumnWriterType, bytes: []const u8) Error!usize {
+            if (self.is_flush)
+                try move_termio(self.underlying_writer, self.col, self.row);
+            self.is_flush = false;
+
+            if (bytes.len > 0 and bytes[bytes.len - 1] == '\n') {
+                self.row += 1;
+                self.is_flush = true;
+            }
+
+            return try self.underlying_writer.write(bytes);
+        }
+    };
+}

@@ -701,6 +701,7 @@ fn emit_instruction_bytes(
 
 fn address_resolution(self: *Linker, block: *Block) !void {
     const instructions = block.content.items(.long);
+    const labels = block.content.items(.label);
 
     for (instructions, 0..) |instruction, i| {
         switch ((instruction orelse continue).*) {
@@ -744,6 +745,7 @@ fn address_resolution(self: *Linker, block: *Block) !void {
 
                     block.content.set(byte_address, .{
                         .raw_value = byte,
+                        .label = labels[byte_address],
                         .address_hint = if (idx == 0) resolved_address.real_address else null,
                         .long = instructions[byte_address] });
                 }
@@ -775,7 +777,10 @@ pub fn dump_block_trace_near(self: *const Linker, note: Note, writer: anytype) !
 
     if (section_name) |the_section_name| {
         const offset: isize = @intCast(note.address - block.origin);
-        try self.dump_block_trace_range(the_section_name, block, .{ .min = @intCast(@max(0, offset - 10)), .max = @intCast(@min(@as(isize, @intCast(block.content.len)), offset + 10)) }, note, writer);
+        const range = Range {
+            .min = @intCast(@max(0, offset - 10)),
+            .max = @intCast(@min(@as(isize, @intCast(block.content.len)), offset + 10)) };
+        try self.dump_block_trace_range(the_section_name, block, range, note, writer);
     } else {
         try writer.print(
             \\@section unknown
@@ -827,7 +832,7 @@ pub fn dump_block_trace_range(
         else if (i != 0 and absolute_address % self.options.l1 == 0)
             try writer.print("L1 ({})\n", .{ self.options.l1 });
 
-        try writer.print("{s: <23} {: >8}:{s}0b{b:0<8}   ", .{
+        try writer.print("{s: <23} {x:0>4}:{s}0b{b:0>8}   ", .{
             label orelse "",
             absolute_address,
             if (is_padding) " * " else " ",
