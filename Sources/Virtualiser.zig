@@ -20,7 +20,8 @@ instruction_ptr: u16,
 total_cycles: u64,
 accumulator: u8,
 flags: Flags,
-registers: [registers_len]u8,
+gpr: [7]u8,
+spr: [4]u16,
 last_memory_addr: ?u16,
 
 const Root = struct {
@@ -42,9 +43,6 @@ const Flags = struct {
     sign: bool = false
 };
 
-const RegisterAddress = @typeInfo(AsmSemanticAir.GpRegister).@"enum".tag_type;
-const registers_len = std.math.maxInt(RegisterAddress);
-
 pub fn init(allocator: std.mem.Allocator, qcu: *const Qcu, options: Options) !Virtualiser {
     return .{
         .allocator = allocator,
@@ -55,7 +53,8 @@ pub fn init(allocator: std.mem.Allocator, qcu: *const Qcu, options: Options) !Vi
         .total_cycles = 0,
         .accumulator = 0,
         .flags = .{},
-        .registers = @splat(0),
+        .gpr = @splat(0),
+        .spr = @splat(0),
         .last_memory_addr = null };
 }
 
@@ -125,26 +124,72 @@ fn single_step(self: *Virtualiser) !u16 {
     const location = vm.read(self.instruction_ptr) orelse Linker.Byte.pad;
     const instruction = location.compiled orelse try self.jit(location);
 
-    switch (instruction) {
-        .cli => self.rst(.ra, 0),
+    impl: switch (instruction) {
+        .sysc => return error.InstructionNotSupported,
+        .ret => return error.InstructionNotSupported,
+        .msp => return error.InstructionNotSupported,
+        .nta => return error.InstructionNotSupported,
+        .bmr => return error.InstructionNotSupported,
+        .bms => return error.InstructionNotSupported,
         .ast => |gpr| self.ast(self.register(gpr), .{}),
+        .clr => self.rst(.ra, 0),
+        .xch => |gpr| {
+            const acc = self.accumulator;
+            self.ast(self.register(gpr), .{});
+            self.rst(gpr, acc);
+        },
+        .stg => return error.InstructionNotSupported,
         .rst => |gpr| self.rst(gpr, self.accumulator),
-
+        .inc => |gpr| self.alu(gpr, @addWithOverflow(self.register_acc(gpr), 1)),
+        .dec => |gpr| self.alu(gpr, @subWithOverflow(self.register_acc(gpr), 1)),
+        .neg => |gpr| self.alu(gpr, @subWithOverflow(0, self.register_acc(gpr))),
+        .rsh => |gpr| {
+            const value = self.register_acc(gpr);
+            const is_underflow = value & 0x01 > 0;
+            self.ast(value >> 1, .{ .underflow = is_underflow });
+            self.rst(gpr, self.accumulator);
+        },
+        .add => |gpr| self.alu(.zr, @addWithOverflow(self.accumulator, self.register(gpr))),
+        .addc => return error.InstructionNotSupported,
+        .sub => |gpr| self.alu(.zr, @subWithOverflow(self.accumulator, self.register(gpr))),
+        .subb => return error.InstructionNotSupported,
+        .ior => |gpr| self.ast(self.accumulator | self.register(gpr), .{}),
+        .@"and" => |gpr| self.ast(self.accumulator & self.register(gpr), .{}),
+        .xor => |gpr| self.ast(self.accumulator ^ self.register(gpr), .{}),
+        .bsl => |len| self.ast(self.accumulator << len, .{}),
+        .bsld => |gpr| {
+            const len: u3 = @truncate(self.register(gpr));
+            self.ast(self.accumulator << len, .{});
+        },
+        .bsr => |len| self.ast(self.accumulator >> len, .{}),
+        .bsrd => |gpr| {
+            const len: u3 = @truncate(self.register(gpr));
+            self.ast(self.accumulator >> len, .{});
+        },
+        .imm => |gpr| {
+            self.ast(vm.read_type(u8, self.instruction_ptr + 1), .{});
+            self.rst(gpr, self.accumulator);
+        },
+        .brh => |cond| if (self.condition(cond)) continue :impl .jmpr,
         .jmp => return vm.read_type(u16, self.instruction_ptr + 1),
+        .jmpl => return error.InstructionNotSupported,
         .jmpr => {
             const safe_ptr: i32 = @intCast(self.instruction_ptr);
             const offset: i32 = @intCast(vm.read_type(i8, self.instruction_ptr + 1));
             return @intCast(safe_ptr + offset);
         },
+        .jmprl => return error.InstructionNotSupported,
         .jmpd => return error.InstructionNotSupported,
-
+        .jmpdl => return error.InstructionNotSupported,
+        .prf => return error.InstructionNotSupported,
+        .amr => return error.InstructionNotSupported,
         .mst => |spr| try vm.write(try self.addr(vm, spr), .{ .raw_value = self.accumulator }),
-        .mstx,
-        .mstw,
+        .mstx => return error.InstructionNotSupported,
+        .mstw => return error.InstructionNotSupported,
         .mstwx => return error.InstructionNotSupported,
         .mld => |spr| self.ast(vm.to_byte(vm.read(try self.addr(vm, spr))), .{}),
-        .mldx,
-        .mldw,
+        .mldx => return error.InstructionNotSupported,
+        .mldw => return error.InstructionNotSupported,
         .mldwx => return error.InstructionNotSupported
     }
 
@@ -169,25 +214,52 @@ fn ast(self: *Virtualiser, value: u8, flags: ResultFlags) void {
 }
 
 fn rst(self: *Virtualiser, reg: AsmSemanticAir.GpRegister, value: u8) void {
-    if (reg != .zr) self.registers[@intFromEnum(reg) - 1] = value;
+    if (reg != .zr)
+        self.gpr[@intFromEnum(reg) - 1] = value else
+        self.accumulator = value; // when unwanted, it's already written anyway
 }
 
 fn register(self: *Virtualiser, reg: AsmSemanticAir.GpRegister) u8 {
     return if (reg != .zr)
-        self.registers[@intFromEnum(reg) - 1] else
+        self.gpr[@intFromEnum(reg) - 1] else
         0;
+}
+
+fn register_acc(self: *Virtualiser, reg: AsmSemanticAir.GpRegister) u8 {
+    return if (reg != .zr) self.register(reg) else self.accumulator;
+}
+
+fn alu(self: *Virtualiser, writeback: AsmSemanticAir.GpRegister, result: anytype) void {
+    self.ast(result[0], .{ .carry = result[1] > 0 });
+    self.rst(writeback, self.accumulator); // zr possible
 }
 
 fn addr(self: *Virtualiser, vm: anytype, reg: AsmSemanticAir.SpRegister) !u16 {
     const absolute = vm.read_type(u16, self.instruction_ptr + 1);
+    const kmode = 0;
 
     const address = switch (reg) {
         .zr => absolute,
-        else => return error.AddressModeNotSupported
+        .sp => absolute + self.spr[0 + kmode],
+        .sf => absolute + self.spr[2 + kmode],
+        .adr => absolute + @as(u16, @intCast(self.gpr[4])) + (@as(u16, @intCast(self.gpr[5])) << 8)
     };
 
     self.last_memory_addr = address;
     return address;
+}
+
+fn condition(self: *Virtualiser, flag: AsmSemanticAir.Flag) bool {
+    return switch (flag) {
+        .c => self.flags.carry,
+        .s => self.flags.sign,
+        .u => self.flags.underflow,
+        .z => self.flags.zero,
+        .nc => !self.flags.carry,
+        .ns => !self.flags.sign,
+        .nu => !self.flags.underflow,
+        .nz => !self.flags.zero
+    };
 }
 
 fn jit(self: *Virtualiser, location: Linker.Byte) !Linker.Byte.Tag {
@@ -259,9 +331,12 @@ fn render_memory_page(
 
         if (render_jit) {
             if (instr.compiled) |instruction| switch (instruction) {
-                inline else => |operand, tag| if (@TypeOf(operand) != void)
-                    try writer.print(" {s} {s}", .{ @tagName(tag), @tagName(operand) }) else
-                    try writer.print(" {s}", .{ @tagName(tag) })
+                inline else => |operand, tag| switch (@typeInfo(@TypeOf(operand))) {
+                    .@"enum" => try writer.print(" {s} {s}", .{ @tagName(tag), @tagName(operand) }),
+                    .int => try writer.print(" {s} {}", .{ @tagName(tag), operand }),
+                    .@"void" => try writer.print(" {s}", .{ @tagName(tag) }),
+                    else => @compileError("bug: unable to render operand")
+                }
             };
 
             // what in the hell is this kind of if-chain?
@@ -311,16 +386,48 @@ fn render_col_stats(self: *Virtualiser, writer: TermWriter.Writer) !void {
 
     try writer.writeAll("Registers\n");
     try writer.print("acc 0b{b:0>8} ({})\n", .{ self.accumulator, self.accumulator });
+    for (&self.gpr, 0..) |value, reg|
+        try writer.print("r{c}: 0b{b:0>8} ({})\n", .{ gpr_name(reg), value, value });
+    try writer.writeAll("\n");
 
-    for (&self.registers, 0..) |value, reg|
-        try writer.print("r{c}: 0b{b:0>8} ({})\n", .{ @as(u8, @truncate('a' + reg)), value, value });
+    try writer.writeAll("Indexes\n");
+    for (&self.spr, 0..) |value, reg|
+        try writer.print("{s}: 0b{b:0>16} {X:0>4} ({})\n", .{ spr_name(reg), value, value, value });
 }
 
 fn dump_interesting_trace(self: *Virtualiser) !void {
     try stderr.print("a crash occurred. ip was at {} (ran {} cycles)\n", .{
         self.instruction_ptr,
         self.total_cycles });
+    try stderr.print("gpr dump  acc  : 0b{b:0>8} ({})\n", .{ self.accumulator, self.accumulator });
+    for (&self.gpr, 0..) |value, reg|
+        try stderr.print("          r{c}   : 0b{b:0>8} ({})\n", .{ gpr_name(reg), value, value });
+    for (&self.spr, 0..) |value, reg|
+        try stderr.print("{s: <8}  {s}: 0b{b:0>16} {X:0>4} ({})\n", .{
+            if (reg == 0) "spr dump" else "",
+            spr_name(reg),
+            value,
+            value,
+            value });
     try self.qcu.linker.dump_block_trace_near(.{
         .address = self.instruction_ptr,
         .message = "problem occurred here" }, stderr);
+}
+
+fn gpr_name(reg: usize) u8 {
+    return switch (reg) {
+        0...3 => @truncate('a' + reg),
+        4...6 => @truncate('x' + reg - 4),
+        else => unreachable
+    };
+}
+
+fn spr_name(reg: usize) []const u8 {
+    return switch (reg) {
+        0 => "sf   ",
+        1 => "sf(k)",
+        2 => "sp   ",
+        3 => "sp(k)",
+        else => unreachable
+    };
 }

@@ -101,12 +101,42 @@ pub const Byte = struct {
 
     pub const Tag = union(enum) {
 
-        cli,
+        sysc,
+        ret,
+        msp,
+        nta,
+        bmr,
+        bms,
         ast: AsmSemanticAir.GpRegister,
+        clr,
+        xch: AsmSemanticAir.GpRegister,
+        stg: AsmSemanticAir.GpRegister,
         rst: AsmSemanticAir.GpRegister,
+        inc: AsmSemanticAir.GpRegister,
+        dec: AsmSemanticAir.GpRegister,
+        neg: AsmSemanticAir.GpRegister,
+        rsh: AsmSemanticAir.GpRegister,
+        add: AsmSemanticAir.GpRegister,
+        addc: AsmSemanticAir.GpRegister,
+        sub: AsmSemanticAir.GpRegister,
+        subb: AsmSemanticAir.GpRegister,
+        ior: AsmSemanticAir.GpRegister,
+        @"and": AsmSemanticAir.GpRegister,
+        xor: AsmSemanticAir.GpRegister,
+        bsl: u3,
+        bsld: AsmSemanticAir.GpRegister,
+        bsr: u3,
+        bsrd: AsmSemanticAir.GpRegister,
+        imm: AsmSemanticAir.GpRegister,
+        brh: AsmSemanticAir.Flag,
         jmp,
+        jmpl,
         jmpr,
+        jmprl,
         jmpd,
+        jmpdl,
+        prf,
+        amr: AsmSemanticAir.GpRegister,
         mst: AsmSemanticAir.SpRegister,
         mstx: AsmSemanticAir.SpRegister,
         mstw: AsmSemanticAir.SpRegister,
@@ -568,8 +598,10 @@ fn emit_section_padding(self: *Linker, padding: usize) !void {
 fn emit_section_block(self: *Linker, section: *const Section) !void {
     for (section.inner.content.items(.instruction), 0..) |*instr, i| {
         const initial_address = self.current_block.absolute_size();
+        // fixme: reserve of negative len panics with this verification before error is reported to user
         const instr_size = instr.size();
 
+        // rules are not followed when size is zero
         if (instr_size == 0)
             continue;
         const maybe_unified_reference = section.reference_map.get(@intCast(i));
@@ -597,7 +629,6 @@ fn emit_instruction_bytes(
     if (size == 0) return;
 
     switch (instruction.*) {
-        .reserve, // fixme: force constant for reserve expression
         .u8, .u16, .u24,
         .i8, .i16, .i24 => {
             try self.current_block.content.append(self.allocator, .{
@@ -631,6 +662,17 @@ fn emit_instruction_bytes(
             }
         },
 
+        .reserve => |reserve| {
+            const type_size = reserve[0];
+            const len = reserve[1];
+
+            for (0..(type_size.result.size * try len.resolve_constant())) |i|
+                try self.current_block.content.append(self.allocator, .{
+                    .raw_value = 0,
+                    .label = if (i == 0) label else null,
+                    .long = if (i == 0) instruction else null });
+        },
+
         .ld_padding => {
             for (0..size) |_| try self.current_block.content.append(self.allocator, .pad);
         },
@@ -648,15 +690,49 @@ fn emit_instruction_bytes(
 
                 inline else => |operands, tag| {
                     inline for (@typeInfo(Byte.Tag).@"union".fields) |mapping| {
+                        @setEvalBranchQuota(9999);
+                        // @compileLog(tag, mapping.name);
+
                         // Zig should eagerly evaluate this at comptime! but still cool
                         if (comptime std.mem.eql(u8, mapping.name, @tagName(tag))) {
                             const opcode: u8 = switch (tag) {
-                                .cli => 0b0_0000_000,
+                                .sysc => 0b0_0000_000,
+                                .ret => 0b0_0000_001,
+                                .msp => 0b0_0000_010,
+                                .nta => 0b0_0000_011,
+                                .bmr => 0b0_0000_100,
+                                .bms => 0b0_0000_101,
                                 .ast => 0b0_0001_000,
+                                .clr => 0b0_0001_000,
+                                .xch => 0b0_0010_000,
+                                .stg => 0b0_0011_000,
                                 .rst => 0b0_0100_000,
+                                .inc => 0b0_0101_000,
+                                .dec => 0b0_0110_000,
+                                .neg => 0b0_0111_000,
+                                .rsh => 0b0_1000_000,
+                                .add => 0b0_1001_000,
+                                .addc => 0b0_1010_000,
+                                .sub => 0b0_1011_000,
+                                .subb => 0b0_1100_000,
+                                .ior => 0b0_1101_000,
+                                .@"and" => 0b0_1110_000,
+                                .xor => 0b0_0_1111_000,
+                                .bsl => 0b1_0000_000,
+                                .bsld => 0b1_0001_000,
+                                .bsr => 0b1_0010_000,
+                                .bsrd => 0b1_0011_000,
+                                // 0b1_0100_000 ... 0b1_0111_000 reserved
+                                .imm => 0b1_1000_000,
+                                .brh => 0b1_1001_000,
                                 .jmp => 0b1_1010_0_00,
+                                .jmpl => 0b1_1010_1_00,
                                 .jmpr => 0b1_1010_0_01,
+                                .jmprl => 0b1_1010_1_01,
                                 .jmpd => 0b1_1010_0_10,
+                                .jmpdl => 0b1_1010_1_10,
+                                .prf => 0b1_1010_0_11,
+                                .amr => 0b1_1011_000,
                                 .mst => 0b1_1100_0_00,
                                 .mstx => 0b1_1100_1_00,
                                 .mstw => 0b1_1101_0_00,
@@ -670,16 +746,19 @@ fn emit_instruction_bytes(
 
                             const is_operand = mapping.@"type" != void;
 
-                            const binary = opcode | if (is_operand)
-                                @as(u8, @intCast(@intFromEnum(operands[0].result))) else
-                                0;
-                            const compiled = if (is_operand)
-                                @unionInit(Byte.Tag, mapping.name, operands[0].result) else
-                                @unionInit(Byte.Tag, mapping.name, {});
-
-                            break :map .{
-                                .raw_value = binary,
-                                .compiled = compiled };
+                            if (is_operand) {
+                                const operand = try operands[0].resolve_constant();
+                                const operand_bits = if (@typeInfo(@TypeOf(operand)) == .@"enum")
+                                    @intFromEnum(operand) else
+                                    operand;
+                                break :map .{
+                                    .raw_value = opcode | @as(u8, operand_bits),
+                                    .compiled = @unionInit(Byte.Tag, mapping.name, operand) };
+                            } else {
+                                break :map .{
+                                    .raw_value = opcode,
+                                    .compiled = @unionInit(Byte.Tag, mapping.name, {}) };
+                            }
                         }
                     }
 
@@ -718,6 +797,9 @@ fn address_resolution(self: *Linker, block: *Block) !void {
 
                 if (!@hasField(@TypeOf(operand), "result") or !@hasField(@TypeOf(operand.result), "linktime_label"))
                     break :blk;
+                if (@TypeOf(operand.result).ResultType == .constant)
+                    break :blk; // constants are currently only used in class 1 instructions
+
                 const label_address = if (operand.result.linktime_label) |lbl|
                     self.unified_references.get(lbl.unified_name) orelse unreachable else
                     0;
@@ -735,7 +817,7 @@ fn address_resolution(self: *Linker, block: *Block) !void {
 
                 // instructions skip one byte for address insertion,
                 // pseudoinstructions are completely overwritten
-                @setEvalBranchQuota(9999);
+                @setEvalBranchQuota(999_999);
                 const ByteTag = @typeInfo(Byte.Tag).@"union".tag_type.?;
                 const offset = if (comptime std.meta.stringToEnum(ByteTag, @tagName(tag)) != null) 1 else 0;
 
@@ -832,7 +914,7 @@ pub fn dump_block_trace_range(
         else if (i != 0 and absolute_address % self.options.l1 == 0)
             try writer.print("L1 ({})\n", .{ self.options.l1 });
 
-        try writer.print("{s: <23} {x:0>4}:{s}0b{b:0>8}   ", .{
+        try writer.print("{s: <23} {X:0>4}:{s}0b{b:0>8}   ", .{
             label orelse "",
             absolute_address,
             if (is_padding) " * " else " ",
@@ -840,9 +922,12 @@ pub fn dump_block_trace_range(
         defer writer.writeAll("\n") catch {};
 
         if (compiled) |instruction| switch (instruction) {
-            inline else => |operand, tag| if (@TypeOf(operand) != void)
-                try writer.print(" {s} {s}", .{ @tagName(tag), @tagName(operand) }) else
-                try writer.print(" {s}", .{ @tagName(tag) })
+            inline else => |operand, tag| switch (@typeInfo(@TypeOf(operand))) {
+                .@"enum" => try writer.print(" {s} {s}", .{ @tagName(tag), @tagName(operand) }),
+                .int => try writer.print(" {s} {}", .{ @tagName(tag), operand }),
+                .@"void" => try writer.print(" {s}", .{ @tagName(tag) }),
+                else => @compileError("bug: unable to render operand")
+            }
         };
 
         if (address_hint) |hint|

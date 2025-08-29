@@ -481,6 +481,7 @@ const SemanticError = error {
     HeaderDuplicateParameter,
     AddressResolutionUnsigned,
     AddressResolutionOverflow,
+    OperandNotConstant,
     NoteDefinedHere,
     NoteCalledFromHere,
     NoteDidYouMean,
@@ -522,6 +523,7 @@ fn add_error(self: *AsmSemanticAir, comptime err: SemanticError, argument: anyty
         error.HeaderDuplicateParameter => "duplicate header argument '{s}'",
         error.AddressResolutionUnsigned => "address resolved to {} but instruction doens't permit signed addresses",
         error.AddressResolutionOverflow => "resolved address of {} doesn't fit in {s} type",
+        error.OperandNotConstant => "operand is required to be constant; labels are illegal",
         error.NoteDefinedHere => "{s} defined here",
         error.NoteCalledFromHere => "called from here",
         error.NoteDidYouMean => "did you mean to {s}{s}?",
@@ -569,6 +571,7 @@ fn add_error(self: *AsmSemanticAir, comptime err: SemanticError, argument: anyty
         error.HeaderResultType,
         error.HeaderContextIllegal,
         error.HeaderDuplicateParameter,
+        error.OperandNotConstant,
         error.NoteCalledFromHere => argument,
         else => null
     };
@@ -599,6 +602,7 @@ fn add_error(self: *AsmSemanticAir, comptime err: SemanticError, argument: anyty
         error.MissingBarrierContext,
         error.UnlinkableExpression,
         error.HeaderResultType,
+        error.OperandNotConstant,
         error.NoteCalledFromHere => .{},
         error.NonConformingSymbol => .{ argument[0].tag.fmt(), argument[1].tag.fmt() },
         error.DuplicateSymbol,
@@ -1198,12 +1202,42 @@ pub const Instruction = union(Tag) {
         instruction: Instruction
     };
 
-    cli,
+    sysc: struct { Expression(Numeric(.{ .literal = u8 })) },
+    ret,
+    msp: struct { Expression(Numeric(.{ .literal = u16 })) },
+    nta,
+    bmr,
+    bms,
     ast: struct { Expression(GpRegister) },
+    clr,
+    xch: struct { Expression(GpRegister) },
+    stg: struct { Expression(GpRegister) },
     rst: struct { Expression(GpRegister) },
+    inc: struct { Expression(GpRegister) },
+    dec: struct { Expression(GpRegister) },
+    neg: struct { Expression(GpRegister) },
+    rsh: struct { Expression(GpRegister) },
+    add: struct { Expression(GpRegister) },
+    addc: struct { Expression(GpRegister) },
+    sub: struct { Expression(GpRegister) },
+    subb: struct { Expression(GpRegister) },
+    ior: struct { Expression(GpRegister) },
+    @"and": struct { Expression(GpRegister) },
+    xor: struct { Expression(GpRegister) },
+    bsl: struct { Expression(Numeric(.{ .constant = u3 })) },
+    bsld: struct { Expression(GpRegister) },
+    bsr: struct { Expression(Numeric(.{ .constant = u3 })) },
+    bsrd: struct { Expression(GpRegister) },
+    imm: struct { Expression(GpRegister), Expression(Numeric(.agnostic)) },
+    brh: struct { Expression(Flag), Expression(Numeric(.relative)) },
     jmp: struct { Expression(Numeric(.{ .literal = u16 })) },
+    jmpl: struct { Expression(Numeric(.{ .literal = u16 })) },
     jmpr: struct { Expression(Numeric(.relative)) },
+    jmprl: struct { Expression(Numeric(.relative)) },
     jmpd,
+    jmpdl,
+    prf: struct { Expression(Numeric(.{ .literal = u16 })) },
+    amr: struct { Expression(GpRegister) }, // fixme: async memory
     mst: struct { Expression(SpRegister), Expression(Numeric(.{ .literal = u16 })) },
     mstx: struct { Expression(SpRegister), Expression(Numeric(.{ .literal = u16 })) },
     mstw: struct { Expression(SpRegister), Expression(Numeric(.{ .literal = u16 })) },
@@ -1221,19 +1255,49 @@ pub const Instruction = union(Tag) {
     i16: struct { Expression(Numeric(.{ .literal = i16 })) },
     i24: struct { Expression(Numeric(.{ .literal = i24 })) },
     ascii: struct { Expression(StringContent) },
-    reserve: struct { Expression(TypeSize), Expression(Numeric(.constant)) },
+    reserve: struct { Expression(TypeSize), Expression(Numeric(.{ .constant = u16 })) },
 
     // adds fixed zero bytes
     ld_padding: struct { usize },
 
     pub const Tag = enum {
 
-        cli,
+        sysc,
+        ret,
+        msp,
+        nta,
+        bmr,
+        bms,
         ast,
+        clr,
+        xch,
+        stg,
         rst,
+        inc,
+        dec,
+        neg,
+        rsh,
+        add,
+        addc,
+        sub,
+        subb,
+        ior,
+        @"and",
+        xor,
+        bsl,
+        bsld,
+        bsr,
+        bsrd,
+        imm,
+        brh,
         jmp,
+        jmpl,
         jmpr,
+        jmprl,
         jmpd,
+        jmpdl,
+        prf,
+        amr,
         mst,
         mstx,
         mstw,
@@ -1257,8 +1321,11 @@ pub const Instruction = union(Tag) {
         pub fn is_jump(self: Tag) bool {
             return switch (self) {
                 .jmp,
+                .jmpl,
                 .jmpr,
-                .jmpd => true,
+                .jmprl,
+                .jmpd,
+                .jmpdl => true,
 
                 else => false
             };
@@ -1266,7 +1333,10 @@ pub const Instruction = union(Tag) {
 
         pub fn is_relative(self: Tag) bool {
             return switch (self) {
-                .jmpr => true,
+                .brh,
+                .jmpr,
+                .jmprl => true,
+
                 else => false
             };
         }
@@ -1310,14 +1380,44 @@ pub const Instruction = union(Tag) {
 
         pub fn basic_size(self: Tag) usize {
             return switch (self) {
-                .cli,
+                .ret,
+                .nta,
+                .bmr,
+                .bms,
                 .ast,
+                .clr,
+                .xch,
+                .stg,
                 .rst,
-                .jmpd => 1,
+                .inc,
+                .dec,
+                .neg,
+                .rsh,
+                .add,
+                .addc,
+                .sub,
+                .subb,
+                .ior,
+                .@"and",
+                .xor,
+                .bsl,
+                .bsld,
+                .bsr,
+                .bsrd,
+                .jmpd,
+                .jmpdl,
+                .amr => 1,
 
-                .jmpr => 2,
+                .sysc,
+                .imm,
+                .brh,
+                .jmpr,
+                .jmprl => 2,
 
+                .msp,
                 .jmp,
+                .jmpl,
+                .prf,
                 .mst,
                 .mstx,
                 .mstw,
@@ -1339,24 +1439,56 @@ pub const Instruction = union(Tag) {
     };
 
     pub const instruction_map = std.StaticStringMap(Tag).initComptime(.{
-        .{ "cli", .cli },
+        .{ "sysc", .sysc },
+        .{ "ret", .ret },
+        .{ "msp", .msp },
+        .{ "nta", .nta },
+        .{ "bmr", .bmr },
+        .{ "bms", .bms },
         .{ "ast", .ast },
+        .{ "clr", .clr },
+        .{ "xch", .xch },
+        .{ "stg", .stg },
         .{ "rst", .rst },
+        .{ "inc", .inc },
+        .{ "dec", .dec },
+        .{ "neg", .neg },
+        .{ "rsh", .rsh },
+        .{ "add", .add },
+        .{ "addc", .addc },
+        .{ "sub", .sub },
+        .{ "subb", .subb },
+        .{ "ior", .ior },
+        .{ "and", .@"and" },
+        .{ "xor", .xor },
+        .{ "bsl", .bsl },
+        .{ "bsld", .bsld },
+        .{ "bsr", .bsr },
+        .{ "bsrd", .bsrd },
+        .{ "imm", .imm },
+        .{ "brh", .brh },
         .{ "jmp", .jmp },
+        .{ "jmpl", .jmpl },
         .{ "jmpr", .jmpr },
+        .{ "jmprl", .jmprl },
         .{ "jmpd", .jmpd },
+        .{ "jmpdl", .jmpdl },
+        .{ "prf", .prf },
+        .{ "amr", .amr },
         .{ "mst", .mst },
         .{ "mstw", .mstw },
         .{ "mld", .mld },
         .{ "mldw", .mldw },
-        .{ "u8", .u8 },
-        .{ "u16", .u16 },
-        .{ "u24", .u24 },
-        .{ "i8", .i8 },
+
+        .{ "ascii", .ascii },
         .{ "i16", .i16 },
         .{ "i24", .i24 },
-        .{ "ascii", .ascii },
-        .{ "reserve", .reserve }
+        .{ "i8", .i8 },
+        .{ "u16", .u16 },
+        .{ "u24", .u24 },
+        .{ "u8", .u8 },
+
+        .{ "reserve", .reserve },
     });
 
     pub const modifier_map = std.StaticStringMap(Tag).initComptime(.{
@@ -1369,6 +1501,7 @@ pub const Instruction = union(Tag) {
     comptime {
         // Zig comptime validation, hell yeah!
         for (@typeInfo(Tag).@"enum".fields) |instruction_tag| {
+            @setEvalBranchQuota(9999);
             if (std.mem.startsWith(u8, instruction_tag.name, "ld_"))
                 continue;
             const real_instruction = std.mem.trimRight(u8, instruction_tag.name, "x");
@@ -1667,6 +1800,16 @@ fn Expression(comptime ResultType: type) type {
                     null
             };
         }
+
+        const ConstantType = if (@hasDecl(ResultType, "ResultType"))
+            ResultType.ResultType.FittingType() else
+            ResultType;
+
+        pub fn resolve_constant(self: *const ExpressionType) !ConstantType {
+            return if (@hasDecl(ResultType, "ResultType"))
+                try self.result.resolve_constant(self.token, self.executed_token) else
+                self.result;
+        }
     };
 }
 
@@ -1781,14 +1924,14 @@ const NumericResult = union(enum) {
 
     relative,
     agnostic, // i8 or u8
-    constant,
+    constant: type,
     literal: type, // eval as type
 
     pub fn FittingType(self: NumericResult) type {
         return switch (self) {
             .relative => i8,
             .agnostic => u8, // @bitCast
-            .constant => u16,
+            .constant => |the_type| the_type,
             .literal => |the_type| the_type
         };
     }
@@ -1798,12 +1941,7 @@ const NumericResult = union(enum) {
     }
 
     pub fn is_signed(self: NumericResult) bool {
-        return switch (self) {
-            .relative,
-            .agnostic => true,
-            .constant => false,
-            .literal => |the_type| @typeInfo(the_type).@"int".signedness == .signed
-        };
+        return @typeInfo(self.FittingType()).int.signedness == .signed;
     }
 };
 
@@ -2027,10 +2165,21 @@ fn Numeric(comptime Type: NumericResult) type {
             };
         }
 
+        pub fn resolve_constant(
+            self: *const NumericType,
+            origin_token: ForeignToken,
+            token: ForeignToken
+        ) !ResolutionType {
+            const result = try NumericType.cast_numeric(self.assembletime_offset orelse 0, origin_token, token) orelse 0;
+            if (self.linktime_label != null)
+                try token.sema.emit_resolved_error(error.OperandNotConstant, origin_token, token.token, token.token);
+            return result;
+        }
+
         const AddressResolution = struct {
             absolute_address: i32,
             real_address: i32,
-            result: ResultType.FittingType()
+            result: ResolutionType
         };
 
         pub fn resolve(
@@ -2050,15 +2199,38 @@ fn Numeric(comptime Type: NumericResult) type {
                 else => absolute_address
             };
 
-            if (!ResultType.is_signed() and real_address < 0) {
-                try token.sema.emit_resolved_error(error.AddressResolutionUnsigned, origin_token, token.token, .{ real_address, token.token });
+            const casted_address = try NumericType.cast_numeric(real_address, origin_token, token) orelse return null;
+
+            return .{
+                .absolute_address = absolute_address,
+                .real_address = real_address,
+                .result = casted_address };
+        }
+
+        const ResolutionType = ResultType.FittingType();
+
+        fn cast_numeric(
+            address: i32,
+            origin_token: ForeignToken,
+            token: ForeignToken,
+        ) !?ResolutionType {
+            if (!ResultType.is_signed() and address < 0 and ResultType != .agnostic) {
+                try token.sema.emit_resolved_error(error.AddressResolutionUnsigned, origin_token, token.token, .{ address, token.token });
                 return null;
             }
 
-            const ResolutionType = ResultType.FittingType();
+            const is_overflow = address > std.math.maxInt(ResolutionType);
+            const is_underflow = ResultType != .agnostic and address < std.math.minInt(ResolutionType);
 
-            if (real_address > std.math.maxInt(ResolutionType) or real_address < std.math.minInt(ResolutionType)) {
-                try token.sema.emit_resolved_error(error.AddressResolutionOverflow, origin_token, token.token, .{ real_address, @typeName(ResolutionType), token.token });
+            if (is_overflow or is_underflow) {
+                try token.sema.emit_resolved_error(error.AddressResolutionOverflow, origin_token, token.token, .{ address, @typeName(ResolutionType), token.token });
+                return null;
+            }
+
+            const is_agnostic_underflow = ResultType == .agnostic and address < -((std.math.maxInt(ResolutionType) + 1) / 2);
+
+            if (is_agnostic_underflow) {
+                try token.sema.emit_resolved_error(error.AddressResolutionOverflow, origin_token, token.token, .{ address, std.fmt.comptimePrint("i{}", .{ @bitSizeOf(ResolutionType) }), token.token });
                 return null;
             }
 
@@ -2066,13 +2238,24 @@ fn Numeric(comptime Type: NumericResult) type {
                 .signedness = if (comptime ResultType.is_signed()) .signed else .unsigned,
                 .bits = @bitSizeOf(i32) } });
             // we already did the validation, so truncate doesn't lose any info
-            const result: ResolutionType = @truncate(@as(intermediate_type, @bitCast(real_address)));
-
-            return .{
-                .absolute_address = absolute_address,
-                .real_address = real_address,
-                .result = result };
+            return @truncate(@as(intermediate_type, @bitCast(address)));
         }
+    };
+}
+
+fn parse_enumerated_operand(
+    self: *AsmSemanticAir,
+    comptime T: type,
+    comptime err: []const u8,
+    node: AsmAst.Node,
+    origin_token: ForeignToken
+) !?T {
+    const token = self.source.tokens[node.token];
+    const name = token.content_slice(self.source.buffer);
+
+    return std.meta.stringToEnum(T, name) orelse {
+        try self.emit_resolved_expected_error(Token.string(err), origin_token, token);
+        return null;
     };
 }
 
@@ -2088,13 +2271,7 @@ pub const GpRegister = enum(u3) {
     rz,
 
     pub fn analyse(sema: *AsmSemanticAir, node: AsmAst.Node, origin_token: ForeignToken) !?GpRegister {
-        const token = sema.source.tokens[node.token];
-        const name = token.content_slice(sema.source.buffer);
-
-        return std.meta.stringToEnum(GpRegister, name) orelse {
-            try sema.emit_resolved_expected_error(Token.string("a general-purpose register"), origin_token, token);
-            return null;
-        };
+        return try sema.parse_enumerated_operand(GpRegister, "a general-purpose register", node, origin_token);
     }
 };
 
@@ -2106,13 +2283,23 @@ pub const SpRegister = enum(u2) {
     adr,
 
     pub fn analyse(sema: *AsmSemanticAir, node: AsmAst.Node, origin_token: ForeignToken) !?SpRegister {
-        const token = sema.source.tokens[node.token];
-        const name = token.content_slice(sema.source.buffer);
+        return try sema.parse_enumerated_operand(SpRegister, "a special-purpose register", node, origin_token);
+    }
+};
 
-        return std.meta.stringToEnum(SpRegister, name) orelse {
-            try sema.emit_resolved_expected_error(Token.string("a special-purpose register"), origin_token, token);
-            return null;
-        };
+pub const Flag = enum(u3) {
+
+    c,
+    s,
+    u,
+    z,
+    nc,
+    ns,
+    nu,
+    nz,
+
+    pub fn analyse(sema: *AsmSemanticAir, node: AsmAst.Node, origin_token: ForeignToken) !?Flag {
+        return try sema.parse_enumerated_operand(Flag, "a flag", node, origin_token);
     }
 };
 
@@ -2367,21 +2554,21 @@ test "@section" {
 
     try testSemaErr(
         \\@section foo
-        \\          cli
+        \\          clr
     , &.{});
 
     try testSemaErr(
         \\@section foo
-        \\          cli
+        \\          clr
         \\@section bar
-        \\          cli
+        \\          clr
     , &.{});
 
     try testSemaGenAnd(
         \\@section foo
-        \\cli
+        \\clr
     , &.{
-        .{ .cli = {} }
+        .{ .clr = {} }
     }, struct {
         fn run(sema: *AsmSemanticAir) !void {
             const section = sema.current_section.?;
@@ -2391,9 +2578,9 @@ test "@section" {
 
     try testSemaGenAnd(
         \\@section(noelimination) foo
-        \\cli
+        \\clr
     , &.{
-        .{ .cli = {} }
+        .{ .clr = {} }
     }, struct {
         fn run(sema: *AsmSemanticAir) !void {
             const section = sema.current_section.?;
@@ -2405,15 +2592,15 @@ test "@section" {
 test "labels" {
     try testSemaErr(
         \\@section foo
-        \\.label:   cli
+        \\.label:   clr
     , &.{});
 }
 
 test "instruction validation" {
-    try testSemaErr("@section foo\ncli", &.{});
-    try testSemaErr("@section foo\ncli'", &.{ error.UnknownModifiedInstruction });
+    try testSemaErr("@section foo\nclr", &.{});
+    try testSemaErr("@section foo\nclr'", &.{ error.UnknownModifiedInstruction });
     try testSemaErr("@section foo\nmst' sf, 0", &.{});
-    try testSemaErr("@section foo\ncli ra", &.{ error.ExpectedArgumentsLen });
+    try testSemaErr("@section foo\nclr ra", &.{ error.ExpectedArgumentsLen });
     try testSemaErr("@section foo\nast", &.{ error.ExpectedArgumentsLen });
     try testSemaErr("@section foo\nast u8", &.{ error.ExpectedElsewhere });
     try testSemaErr("@section foo\nu8 255", &.{});
@@ -2425,7 +2612,7 @@ test "instruction validation" {
 
 // fixme: testing without token location
 // test "instruction codegen" {
-//     try testSemaGen("@section foo\ncli", &.{ .{ .cli = {} } });
+//     try testSemaGen("@section foo\nclr", &.{ .{ .clr = {} } });
 //     try testSemaGen("@section foo\nast ra", &.{ .{ .ast = .{ .ra } } });
 //     // fixme: represent/check values
 //     // try testSemaGen("@section foo\nu8 0", &.{ .{ .u8 = .{ 0 } } });
@@ -2442,20 +2629,20 @@ test "@region" {
     try testSemaGen(
         \\@section foo
         \\@region 1
-        \\cli
+        \\clr
         \\@end
     , &.{
-        .{ .cli = {} },
+        .{ .clr = {} },
         .{ .ld_padding = .{ 0 } }
     });
 
     try testSemaGen(
         \\@section foo
         \\@region 24
-        \\cli
+        \\clr
         \\@end
     , &.{
-        .{ .cli = {} },
+        .{ .clr = {} },
         .{ .ld_padding = .{ 23 } }
     });
 
@@ -2486,10 +2673,10 @@ test "@align" {
 
     try testSemaGenAnd(
         \\@section foo
-        \\cli
+        \\clr
         \\@align 8
     , &.{
-        .{ .cli = {} },
+        .{ .clr = {} },
         .{ .ld_padding = .{ 7 } }
     }, struct {
         fn run(sema: *AsmSemanticAir) !void {
@@ -2500,11 +2687,11 @@ test "@align" {
 
     try testSemaGenAnd(
         \\@section foo
-        \\cli
+        \\clr
         \\@align 8
         \\@align 16
     , &.{
-        .{ .cli = {} },
+        .{ .clr = {} },
         .{ .ld_padding = .{ 7 } },
         .{ .ld_padding = .{ 8 } }
     }, struct {
@@ -2516,11 +2703,11 @@ test "@align" {
 
     try testSemaGenAnd(
         \\@section foo
-        \\cli
+        \\clr
         \\@align 16
         \\@align 8
     , &.{
-        .{ .cli = {} },
+        .{ .clr = {} },
         .{ .ld_padding = .{ 15 } },
         .{ .ld_padding = .{ 0 } }
     }, struct {
@@ -2550,7 +2737,7 @@ test "@barrier" {
 
     // try testSemaGen(
     //     \\@section foo
-    //     \\cli
+    //     \\clr
     //     \\@barrier
     //     \\ast ra
     // , &.{
@@ -2647,10 +2834,10 @@ test "linking .label symbols" {
     try testSemaResult(
         \\@define bar, .foo
         \\@section foo
-        \\      cli
+        \\      clr
         \\      jmpr @bar
-        \\      cli
-        \\.foo: cli
+        \\      clr
+        \\.foo: clr
         \\      jmpr .foo
     , struct {
         fn run(sema: *AsmSemanticAir) !void {
@@ -2870,7 +3057,7 @@ test "full fledge" {
         \\
         \\@section(noelimination) foo
         \\          @region 32
-        \\              cli
+        \\              clr
         \\              ast rb
         \\              ascii "333"
         \\              @align 4

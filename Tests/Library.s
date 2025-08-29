@@ -4,8 +4,9 @@
 
 @section text
 @align 32 // L1 cache line
-spinlock:               jmpr .baah
+spinlock:         inc ra
+                  jmpr .baah
 
 @section text
 @align 8
-.baah: jmpr .spinlock
+.baah:            jmpr .spinlock

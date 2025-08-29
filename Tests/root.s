@@ -7,7 +7,7 @@
 
 _:                u16 .main.start   // entrypoint
                   u16 0             // interrupt
-                  u16 0x0000        // CPU flags
+flags:            u16 0x8400        // CPU flags
 
 @end
 
