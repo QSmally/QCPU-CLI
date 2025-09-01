@@ -22,7 +22,10 @@ accumulator: u8,
 flags: Flags,
 gpr: [7]u8,
 spr: [4]u16,
+start_timestamp: i128,
+end_timestamp: i128,
 last_memory_addr: ?u16,
+output_dump: std.ArrayListUnmanaged(struct { u64, u16, u8 }),
 
 const Root = struct {
     entrypoint: u16,
@@ -34,6 +37,9 @@ const Root = struct {
     // pub const int_enabled = 1 << 1; // Interrupts
     // pub const btb_enabled = 1 << 2; // Branch Target Buffer
     // pub const bti_enabled = 1 << 3; // Branch Target Identification
+
+    sf: u16,
+    sp: u16
 };
 
 const Flags = struct {
@@ -55,11 +61,15 @@ pub fn init(allocator: std.mem.Allocator, qcu: *const Qcu, options: Options) !Vi
         .flags = .{},
         .gpr = @splat(0),
         .spr = @splat(0),
-        .last_memory_addr = null };
+        .start_timestamp = 0,
+        .end_timestamp = undefined,
+        .last_memory_addr = null,
+        .output_dump = .empty };
 }
 
 pub fn deinit(self: *Virtualiser) void {
     self.physical_memory.deinit();
+    self.output_dump.deinit(self.allocator);
 }
 
 const stdin = std.io.getStdIn();
@@ -75,6 +85,7 @@ pub fn begin(allocator: std.mem.Allocator, qcu: *const Qcu, options: Options) !v
 
     const original_termio = try term.enable_raw(stdin);
     defer term.restore_termio(stdin, original_termio) catch {};
+    defer virtualiser.end_timestamp = std.time.nanoTimestamp();
     try virtualiser.run();
 }
 
@@ -88,16 +99,22 @@ pub const Options = struct {
     step: bool = false,
     maxcycles: u64 = 4096,
     iobatch: u64 = 16,
+    listen: ?u3 = null,
+    memory: ?u16 = null,
     mode: ExecutionMode = .direct
 };
 
 pub fn run(self: *Virtualiser) !void {
     const pm = self.physical_memory.reader();
     const root = pm.read_type(Root, 0);
-    self.instruction_ptr = root.entrypoint;
 
     try self.render_terminal();
     try self.wait();
+
+    self.instruction_ptr = root.entrypoint;
+    self.special(.sf).* = root.sf;
+    self.special(.sp).* = root.sp;
+    self.start_timestamp = std.time.nanoTimestamp();
 
     while (true) {
         self.instruction_ptr = try self.single_step();
@@ -123,16 +140,21 @@ fn single_step(self: *Virtualiser) !u16 {
     var vm = self.physical_memory.reader(); // fixme: this should be mapped memory
     const location = vm.read(self.instruction_ptr) orelse Linker.Byte.pad;
     const instruction = location.compiled orelse try self.jit(location);
+    const next_instruction_ptr = @addWithOverflow(self.instruction_ptr, instruction.size());
+
+    try self.output_dump.ensureUnusedCapacity(self.allocator, 2);
 
     impl: switch (instruction) {
+        .bkpt => return error.Breakpoint,
         .sysc => return error.InstructionNotSupported,
-        .ret => return error.InstructionNotSupported,
-        .msp => return error.InstructionNotSupported,
+        .ret => return self.ret(vm),
+        .msp => {
+            self.special(.sp).* += vm.read_type(u16, self.instruction_ptr + 1);
+            self.last_memory_addr = self.special(.sp).*;
+        },
         .nta => return error.InstructionNotSupported,
-        .bmr => return error.InstructionNotSupported,
-        .bms => return error.InstructionNotSupported,
         .ast => |gpr| self.ast(self.register(gpr), .{}),
-        .clr => self.rst(.ra, 0),
+        .clr => self.rst(.zr, 0),
         .xch => |gpr| {
             const acc = self.accumulator;
             self.ast(self.register(gpr), .{});
@@ -172,13 +194,19 @@ fn single_step(self: *Virtualiser) !u16 {
         },
         .brh => |cond| if (self.condition(cond)) continue :impl .jmpr,
         .jmp => return vm.read_type(u16, self.instruction_ptr + 1),
-        .jmpl => return error.InstructionNotSupported,
+        .jmpl => {
+            try self.link(&vm, @truncate(next_instruction_ptr[0]));
+            continue :impl .jmp;
+        },
         .jmpr => {
             const safe_ptr: i32 = @intCast(self.instruction_ptr);
             const offset: i32 = @intCast(vm.read_type(i8, self.instruction_ptr + 1));
             return @intCast(safe_ptr + offset);
         },
-        .jmprl => return error.InstructionNotSupported,
+        .jmprl => {
+            try self.link(&vm, @truncate(next_instruction_ptr[0]));
+            continue :impl .jmpr;
+        },
         .jmpd => return error.InstructionNotSupported,
         .jmpdl => return error.InstructionNotSupported,
         .prf => return error.InstructionNotSupported,
@@ -193,11 +221,9 @@ fn single_step(self: *Virtualiser) !u16 {
         .mldwx => return error.InstructionNotSupported
     }
 
-    const instruction_ptr: usize = @intCast(self.instruction_ptr);
-    const next_instruction_ptr = instruction_ptr + instruction.size();
-    if (next_instruction_ptr > std.math.maxInt(u16))
+    if (next_instruction_ptr[1] > 0)
         return error.InstructionPtrOverflow;
-    return @truncate(next_instruction_ptr);
+    return @truncate(next_instruction_ptr[0]);
 }
 
 const ResultFlags = struct {
@@ -214,9 +240,13 @@ fn ast(self: *Virtualiser, value: u8, flags: ResultFlags) void {
 }
 
 fn rst(self: *Virtualiser, reg: AsmSemanticAir.GpRegister, value: u8) void {
-    if (reg != .zr)
-        self.gpr[@intFromEnum(reg) - 1] = value else
+    if (reg != .zr) {
+        self.gpr[@intFromEnum(reg) - 1] = value;
+        if (self.options.listen) |gpr| if (gpr == @intFromEnum(reg))
+            self.output_dump.appendAssumeCapacity(.{ self.total_cycles, self.instruction_ptr, value });
+    } else {
         self.accumulator = value; // when unwanted, it's already written anyway
+    }
 }
 
 fn register(self: *Virtualiser, reg: AsmSemanticAir.GpRegister) u8 {
@@ -236,12 +266,11 @@ fn alu(self: *Virtualiser, writeback: AsmSemanticAir.GpRegister, result: anytype
 
 fn addr(self: *Virtualiser, vm: anytype, reg: AsmSemanticAir.SpRegister) !u16 {
     const absolute = vm.read_type(u16, self.instruction_ptr + 1);
-    const kmode = 0;
 
     const address = switch (reg) {
         .zr => absolute,
-        .sp => absolute + self.spr[0 + kmode],
-        .sf => absolute + self.spr[2 + kmode],
+        .sp => absolute + self.special(reg).*,
+        .sf => absolute + self.special(reg).*,
         .adr => absolute + @as(u16, @intCast(self.gpr[4])) + (@as(u16, @intCast(self.gpr[5])) << 8)
     };
 
@@ -260,6 +289,43 @@ fn condition(self: *Virtualiser, flag: AsmSemanticAir.Flag) bool {
         .nu => !self.flags.underflow,
         .nz => !self.flags.zero
     };
+}
+
+fn special(self: *Virtualiser, reg: AsmSemanticAir.SpRegister) *u16 {
+    const kmode = 0;
+
+    return switch (reg) {
+        .sp => &self.spr[0 + kmode],
+        .sf => &self.spr[2 + kmode],
+        else => unreachable
+    };
+}
+
+fn ret(self: *Virtualiser, vm: anytype) u16 {
+    const frame = self.special(.sf);
+    const ret_frame = vm.read_type(u16, frame.*);
+    const ret_addr = vm.read_type(u16, frame.* + 2);
+
+    self.special(.sp).* = frame.*;
+    frame.* = ret_frame;
+    self.last_memory_addr = ret_frame;
+    return ret_addr;
+}
+
+fn link(self: *Virtualiser, vm: anytype, ret_addr: u16) !void {
+    const sf = self.special(.sf);
+    const sp = self.special(.sp);
+    const ret_frame = sf.*;
+
+    sf.* = sp.*;
+    sp.* += 4;
+
+    try vm.write(sf.* + 0, .{ .raw_value = @truncate(ret_frame & 0xFF) });
+    try vm.write(sf.* + 1, .{ .raw_value = @truncate(ret_frame >> 8) });
+    try vm.write(sf.* + 2, .{ .raw_value = @truncate(ret_addr & 0xFF) });
+    try vm.write(sf.* + 3, .{ .raw_value = @truncate(ret_addr >> 8) });
+
+    self.last_memory_addr = sp.*;
 }
 
 fn jit(self: *Virtualiser, location: Linker.Byte) !Linker.Byte.Tag {
@@ -396,9 +462,10 @@ fn render_col_stats(self: *Virtualiser, writer: TermWriter.Writer) !void {
 }
 
 fn dump_interesting_trace(self: *Virtualiser) !void {
-    try stderr.print("a crash occurred. ip was at {} (ran {} cycles)\n", .{
+    try stderr.print("a crash occurred. ip was at {} (ran {} cycles in {})\n", .{
         self.instruction_ptr,
-        self.total_cycles });
+        self.total_cycles,
+        std.fmt.fmtDuration(@intCast(self.end_timestamp - self.start_timestamp)) });
     try stderr.print("gpr dump  acc  : 0b{b:0>8} ({})\n", .{ self.accumulator, self.accumulator });
     for (&self.gpr, 0..) |value, reg|
         try stderr.print("          r{c}   : 0b{b:0>8} ({})\n", .{ gpr_name(reg), value, value });
@@ -412,6 +479,26 @@ fn dump_interesting_trace(self: *Virtualiser) !void {
     try self.qcu.linker.dump_block_trace_near(.{
         .address = self.instruction_ptr,
         .message = "problem occurred here" }, stderr);
+    if (self.options.memory) |from_address| {
+        try stderr.print("memory dump (--memory {}..{})\n", .{ from_address, from_address + self.qcu.linker.options.l1 });
+        try self.render_memory_page(from_address, self.qcu.linker.options.l1, 0, true, stderr);
+    }
+    if (self.options.listen) |gpr| {
+        try stderr.print("listen gpr {s} (--listen {})\n", .{
+            @tagName(@as(AsmSemanticAir.GpRegister, @enumFromInt(gpr))),
+            gpr });
+        var last_cycle: u64 = 0;
+
+        for (self.output_dump.items) |change| {
+            try stderr.print("+{: <4} {: >5} {X:0>4}: 0b{b:0>8} ({})\n", .{
+                change[0] - last_cycle,
+                change[0],
+                change[1],
+                change[2],
+                change[2] });
+            last_cycle = change[0];
+        }
+    }
 }
 
 fn gpr_name(reg: usize) u8 {

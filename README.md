@@ -1,7 +1,7 @@
 
 # QCPU CLI
 
-A software description of the QCPU 2 architecture
+QCPU assembly language
 
 Tracks the [QCPU 2 specification](https://github.com/QSmally/QCPU). For older
 versions written in Swift, see the [repository tags](https://github.com/QSmally/QCPU-CLI/tree/2CI).
@@ -14,6 +14,14 @@ A compiled version of the CLI can be created through the Zig build system (Zig `
 $ zig build
 ```
 
+Listing of the available options is done using the `--help` option:
+
+```bash
+$ zig-out/bin/qcpu --help
+```
+
+Read also: [QCPU language reference](https://qcpu.qsmally.org/pages/assembly)
+
 ## Tests
 
 QCPU CLI comes with use cases written as tests.
@@ -22,10 +30,22 @@ QCPU CLI comes with use cases written as tests.
 $ zig build test
 ```
 
-An inspection dump can be done with `-Ddump`.
+An inspection dump can be done with `-Ddump`:
 
 ```bash
 $ zig build test -Ddump
+```
+
+There are test files in `Tests/`, which can be inspected with:
+
+```bash
+$ zig-out/bin/qcpu --dlinker [--verbose] Tests/name-of-test.s
+```
+
+Or ran with:
+
+```bash
+$ zig-out/bin/qcpu --virtualise [--step] Tests/name-of-test.s
 ```
 
 ## Contributing

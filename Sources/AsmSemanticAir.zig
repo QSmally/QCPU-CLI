@@ -1202,12 +1202,11 @@ pub const Instruction = union(Tag) {
         instruction: Instruction
     };
 
+    bkpt,
     sysc: struct { Expression(Numeric(.{ .literal = u8 })) },
     ret,
     msp: struct { Expression(Numeric(.{ .literal = u16 })) },
     nta,
-    bmr,
-    bms,
     ast: struct { Expression(GpRegister) },
     clr,
     xch: struct { Expression(GpRegister) },
@@ -1238,6 +1237,7 @@ pub const Instruction = union(Tag) {
     jmpdl,
     prf: struct { Expression(Numeric(.{ .literal = u16 })) },
     amr: struct { Expression(GpRegister) }, // fixme: async memory
+    // fixme: memory operations should be able to also have signed integers (sp - 4 offsets)
     mst: struct { Expression(SpRegister), Expression(Numeric(.{ .literal = u16 })) },
     mstx: struct { Expression(SpRegister), Expression(Numeric(.{ .literal = u16 })) },
     mstw: struct { Expression(SpRegister), Expression(Numeric(.{ .literal = u16 })) },
@@ -1262,12 +1262,11 @@ pub const Instruction = union(Tag) {
 
     pub const Tag = enum {
 
+        bkpt,
         sysc,
         ret,
         msp,
         nta,
-        bmr,
-        bms,
         ast,
         clr,
         xch,
@@ -1320,12 +1319,11 @@ pub const Instruction = union(Tag) {
         /// used by Liveness to check unreachable instructions.
         pub fn is_jump(self: Tag) bool {
             return switch (self) {
+                .bkpt,
+                .ret,
                 .jmp,
-                .jmpl,
                 .jmpr,
-                .jmprl,
-                .jmpd,
-                .jmpdl => true,
+                .jmpd => true,
 
                 else => false
             };
@@ -1380,10 +1378,9 @@ pub const Instruction = union(Tag) {
 
         pub fn basic_size(self: Tag) usize {
             return switch (self) {
+                .bkpt,
                 .ret,
                 .nta,
-                .bmr,
-                .bms,
                 .ast,
                 .clr,
                 .xch,
@@ -1439,12 +1436,11 @@ pub const Instruction = union(Tag) {
     };
 
     pub const instruction_map = std.StaticStringMap(Tag).initComptime(.{
+        .{ "bkpt", .bkpt },
         .{ "sysc", .sysc },
         .{ "ret", .ret },
         .{ "msp", .msp },
         .{ "nta", .nta },
-        .{ "bmr", .bmr },
-        .{ "bms", .bms },
         .{ "ast", .ast },
         .{ "clr", .clr },
         .{ "xch", .xch },
@@ -1809,6 +1805,10 @@ fn Expression(comptime ResultType: type) type {
             return if (@hasDecl(ResultType, "ResultType"))
                 try self.result.resolve_constant(self.token, self.executed_token) else
                 self.result;
+        }
+
+        pub fn bits(result: ConstantType) u8 {
+            return if (@typeInfo(@TypeOf(result)) == .@"enum") @intFromEnum(result) else result;
         }
     };
 }

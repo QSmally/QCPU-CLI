@@ -101,12 +101,11 @@ pub const Byte = struct {
 
     pub const Tag = union(enum) {
 
+        bkpt,
         sysc,
         ret,
         msp,
         nta,
-        bmr,
-        bms,
         ast: AsmSemanticAir.GpRegister,
         clr,
         xch: AsmSemanticAir.GpRegister,
@@ -145,6 +144,8 @@ pub const Byte = struct {
         mldx: AsmSemanticAir.SpRegister,
         mldw: AsmSemanticAir.SpRegister,
         mldwx: AsmSemanticAir.SpRegister,
+
+        pub const Type = @typeInfo(Tag).@"union".tag_type.?;
 
         pub fn size(self: Tag) usize {
             @setEvalBranchQuota(999_999);
@@ -696,12 +697,11 @@ fn emit_instruction_bytes(
                         // Zig should eagerly evaluate this at comptime! but still cool
                         if (comptime std.mem.eql(u8, mapping.name, @tagName(tag))) {
                             const opcode: u8 = switch (tag) {
-                                .sysc => 0b0_0000_000,
-                                .ret => 0b0_0000_001,
-                                .msp => 0b0_0000_010,
-                                .nta => 0b0_0000_011,
-                                .bmr => 0b0_0000_100,
-                                .bms => 0b0_0000_101,
+                                .bkpt => 0b0_0000_000,
+                                .sysc => 0b0_0000_001,
+                                .ret => 0b0_0000_010,
+                                .msp => 0b0_0000_011,
+                                .nta => 0b0_0000_100,
                                 .ast => 0b0_0001_000,
                                 .clr => 0b0_0001_000,
                                 .xch => 0b0_0010_000,
@@ -748,11 +748,8 @@ fn emit_instruction_bytes(
 
                             if (is_operand) {
                                 const operand = try operands[0].resolve_constant();
-                                const operand_bits = if (@typeInfo(@TypeOf(operand)) == .@"enum")
-                                    @intFromEnum(operand) else
-                                    operand;
                                 break :map .{
-                                    .raw_value = opcode | @as(u8, operand_bits),
+                                    .raw_value = opcode | @TypeOf(operands[0]).bits(operand),
                                     .compiled = @unionInit(Byte.Tag, mapping.name, operand) };
                             } else {
                                 break :map .{
@@ -803,6 +800,7 @@ fn address_resolution(self: *Linker, block: *Block) !void {
                 const label_address = if (operand.result.linktime_label) |lbl|
                     self.unified_references.get(lbl.unified_name) orelse unreachable else
                     0;
+                // fixme: label modifiers
                 const resolved_address = try operand.result.resolve(
                     operand.token,
                     operand.executed_token,
@@ -818,8 +816,7 @@ fn address_resolution(self: *Linker, block: *Block) !void {
                 // instructions skip one byte for address insertion,
                 // pseudoinstructions are completely overwritten
                 @setEvalBranchQuota(999_999);
-                const ByteTag = @typeInfo(Byte.Tag).@"union".tag_type.?;
-                const offset = if (comptime std.meta.stringToEnum(ByteTag, @tagName(tag)) != null) 1 else 0;
+                const offset = if (comptime std.meta.stringToEnum(Byte.Tag.Type, @tagName(tag)) != null) 1 else 0;
 
                 for (bytes, 0..) |byte, idx| {
                     const byte_address = i + offset + idx; // block addr + instr. byte offset + byte index
@@ -866,8 +863,8 @@ pub fn dump_block_trace_near(self: *const Linker, note: Note, writer: anytype) !
     } else {
         try writer.print(
             \\@section unknown
-            \\"... unknown section mapped near address {}
-            \\"... {s}
+            \\... unknown section mapped near address {}
+            \\... {s}
             \\
         , .{ note.address, note.message });
     }
@@ -914,7 +911,7 @@ pub fn dump_block_trace_range(
         else if (i != 0 and absolute_address % self.options.l1 == 0)
             try writer.print("L1 ({})\n", .{ self.options.l1 });
 
-        try writer.print("{s: <23} {X:0>4}:{s}0b{b:0>8}   ", .{
+        try writer.print("{s: <24} {X:0>4}:{s}0b{b:0>8}   ", .{
             label orelse "",
             absolute_address,
             if (is_padding) " * " else " ",

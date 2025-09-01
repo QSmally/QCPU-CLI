@@ -445,7 +445,7 @@ const AstGen = struct {
     // IndentedBuiltin <- IndentedBuiltinIdentifier (LParan OptionList RParan)? ArgumentList Eol Opaque End Eol
     // Section <- SectionBuiltinIdentifier Identifier Eol Opaque [^Section]
     // SimpleBuiltinIdentifier <- '@barrier' / '@define' / '@import' / '@linkinfo'
-    // IndentedBuiltin <- '@align' / '@header' / '@region'
+    // IndentedBuiltinIdentifier <- '@align' / '@header' / '@region'
     // SectionBuiltinIdentifier <- '@section'
     // End <- '@end'
     fn parse_builtin(self: *AstGen) TreeError!Node {
@@ -638,7 +638,7 @@ const AstGen = struct {
     // Binary <- '0b' [01] [01]*
     // Hexadecimal <- '0x' [0-9a-fA-F] [0-9a-fA-F]*
     // Identifier <- [@a-zA-Z] [a-zA-Z0-9]*
-    // Character <- '\'' [a-zA-Z] '\''
+    // Character <- '\'' . '\''
     // ReservedArgument <- 'ra' / 'rb' / 'rc' / 'rd' / 'rx' / 'ry' /
     //     'rz' / 's' / 'ns' / 'z' / 'nz' / 'c' / 'nc' / 'u' / 'nu' /
     //     'sf' / 'sp' / 'xy'
@@ -864,7 +864,7 @@ const AstGen = struct {
     // Comma <- ','
     // Colon <- ':'
     // Apostrophe <- '\''
-    // Eol <- '\n'
+    // Eol <- ('//' .*)? (';' .*)? '\n'
     // Eof <- '\0'
 };
 

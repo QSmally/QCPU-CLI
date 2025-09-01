@@ -44,7 +44,8 @@ fn help(raw_writer: anytype) !void {
                 ?[]const u8 => "string (default none)",
                 bool => "",
                 Virtualiser.ExecutionMode => "mode (default " ++ @tagName(field.defaultValue().?) ++ ")",
-                u32, u64 => @typeName(field.@"type") ++ " (default " ++ std.fmt.comptimePrint("{}", .{ field.defaultValue().? }) ++ ")",
+                u3, u16, u32, u64 => @typeName(field.@"type") ++ " (default " ++ std.fmt.comptimePrint("{}", .{ field.defaultValue().? }) ++ ")",
+                ?u3, ?u16, ?u32, ?u64 => @typeName(field.@"type") ++ " (default none)",
                 else => @typeName(field.@"type")
             };
 
@@ -242,11 +243,17 @@ fn Arguments(comptime T: type) type {
                         const value = switch (Type) {
                             bool => true,
 
-                            u16, u24, u32, u64 => val: {
+                            u3, u16, u32, u64,
+                            ?u3, ?u16, ?u32, ?u64 => val: {
+                                const UnderlyingType = if (@typeInfo(Type) == .optional)
+                                    @typeInfo(Type).@"optional".child else
+                                    Type;
                                 const inherit = 0;
-                                const parsed_value = try std.fmt.parseInt(Type, try self.expect(), inherit);
-                                if (parsed_value == 0) return error.Zero;
-                                if (!std.math.isPowerOfTwo(parsed_value)) return error.NotPowerOfTwo;
+                                const parsed_value = try std.fmt.parseInt(UnderlyingType, try self.expect(), inherit);
+                                if (parsed_value == 0)
+                                    return error.Zero;
+                                if (std.math.isPowerOfTwo(@bitSizeOf(UnderlyingType)) and !std.math.isPowerOfTwo(parsed_value))
+                                    return error.NotPowerOfTwo;
                                 break :val parsed_value;
                             },
 
