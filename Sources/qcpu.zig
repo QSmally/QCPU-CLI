@@ -113,17 +113,25 @@ pub fn main() !u8 {
 
     // fixme: deinit with gpa on error gives segfault/double panic
     const qcu = Qcu.init(arena.allocator(), std.fs.cwd(), run_files, unmerge(Qcu.Options, run_options)) catch |err| {
-        try stderr.print("error: unhandled {}\n", .{ err });
+        try stderr.print("{}\n", .{ err });
         return 1;
     };
 
     while (qcu.work_queue.removeOrNull()) |job| {
-        job.execute() catch {
-            for (qcu.errors.items) |err|
-                try err.write(stderr);
-            if (!qcu.options.dnotrace)
-                try qcu.linker.dump_last_block_trace(stderr);
-            return 1;
+        job.execute() catch |err| switch (err) {
+            error.EmptyQcu,
+            error.OutOfMemory => {
+                try stderr.print("{}\n", .{ err });
+                return 1;
+            },
+
+            else => {
+                for (qcu.errors.items) |the_err|
+                    try the_err.write(stderr);
+                if (!qcu.options.dnotrace)
+                    try qcu.linker.dump_last_block_trace(stderr);
+                return 1;
+            }
         };
     }
 

@@ -19,6 +19,7 @@ physical_memory: Memory,
 instruction_ptr: u16,
 total_cycles: u64,
 accumulator: u8,
+last_accumulator: u8,
 flags: Flags,
 gpr: [7]u8,
 spr: [4]u16,
@@ -58,6 +59,7 @@ pub fn init(allocator: std.mem.Allocator, qcu: *const Qcu, options: Options) !Vi
         .instruction_ptr = 0,
         .total_cycles = 0,
         .accumulator = 0,
+        .last_accumulator = 0,
         .flags = .{},
         .gpr = @splat(0),
         .spr = @splat(0),
@@ -108,12 +110,13 @@ pub fn run(self: *Virtualiser) !void {
     const pm = self.physical_memory.reader();
     const root = pm.read_type(Root, 0);
 
-    try self.render_terminal();
-    try self.wait();
-
     self.instruction_ptr = root.entrypoint;
     self.special(.sf).* = root.sf;
     self.special(.sp).* = root.sp;
+
+    try self.render_terminal();
+    try self.wait();
+
     self.start_timestamp = std.time.nanoTimestamp();
 
     while (true) {
@@ -211,12 +214,12 @@ fn single_step(self: *Virtualiser) !u16 {
         .jmpdl => return error.InstructionNotSupported,
         .prf => return error.InstructionNotSupported,
         .amr => return error.InstructionNotSupported,
-        .mst => |spr| try vm.write(try self.addr(vm, spr), .{ .raw_value = self.accumulator }),
-        .mstx => return error.InstructionNotSupported,
+        .mst => |spr| try vm.write(try self.addr(vm, spr, false), .{ .raw_value = self.accumulator }),
+        .mstx => |spr| try vm.write(try self.addr(vm, spr, true), .{ .raw_value = self.last_accumulator }),
         .mstw => return error.InstructionNotSupported,
         .mstwx => return error.InstructionNotSupported,
-        .mld => |spr| self.ast(vm.to_byte(vm.read(try self.addr(vm, spr))), .{}),
-        .mldx => return error.InstructionNotSupported,
+        .mld => |spr| self.ast(vm.to_byte(vm.read(try self.addr(vm, spr, false))), .{}),
+        .mldx => |spr| self.ast(vm.to_byte(vm.read(try self.addr(vm, spr, true))), .{}),
         .mldw => return error.InstructionNotSupported,
         .mldwx => return error.InstructionNotSupported
     }
@@ -232,6 +235,7 @@ const ResultFlags = struct {
 };
 
 fn ast(self: *Virtualiser, value: u8, flags: ResultFlags) void {
+    self.last_accumulator = self.accumulator;
     self.accumulator = value;
     self.flags.zero = self.accumulator == 0;
     self.flags.sign = self.accumulator & 0x80 > 0;
@@ -245,7 +249,7 @@ fn rst(self: *Virtualiser, reg: AsmSemanticAir.GpRegister, value: u8) void {
         if (self.options.listen) |gpr| if (gpr == @intFromEnum(reg))
             self.output_dump.appendAssumeCapacity(.{ self.total_cycles, self.instruction_ptr, value });
     } else {
-        self.accumulator = value; // when unwanted, it's already written anyway
+        self.ast(value, .{}); // when unwanted, it's already written anyway
     }
 }
 
@@ -264,7 +268,7 @@ fn alu(self: *Virtualiser, writeback: AsmSemanticAir.GpRegister, result: anytype
     self.rst(writeback, self.accumulator); // zr possible
 }
 
-fn addr(self: *Virtualiser, vm: anytype, reg: AsmSemanticAir.SpRegister) !u16 {
+fn addr(self: *Virtualiser, vm: anytype, reg: AsmSemanticAir.SpRegister, accumulator_offset: bool) !u16 {
     const absolute = vm.read_type(u16, self.instruction_ptr + 1);
 
     const address = switch (reg) {
@@ -274,8 +278,11 @@ fn addr(self: *Virtualiser, vm: anytype, reg: AsmSemanticAir.SpRegister) !u16 {
         .adr => absolute + @as(u16, @intCast(self.gpr[4])) + (@as(u16, @intCast(self.gpr[5])) << 8)
     };
 
-    self.last_memory_addr = address;
-    return address;
+    const real_address = if (accumulator_offset)
+        address + self.accumulator else
+        address;
+    self.last_memory_addr = real_address;
+    return real_address;
 }
 
 fn condition(self: *Virtualiser, flag: AsmSemanticAir.Flag) bool {

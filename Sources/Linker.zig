@@ -343,6 +343,7 @@ pub fn generate(self: *Linker) !void {
 
 fn get_root_section(self: *Linker) !?*Section {
     return try self.find_single_section(self.options.rootsection) orelse {
+        if (self.link_list.items.len == 0) return error.EmptyQcu;
         try self.add_error(error.MissingGlobalSection, self.link_list.items[0].file, self.options.rootsection);
         return null;
     };

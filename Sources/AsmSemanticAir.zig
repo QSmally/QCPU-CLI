@@ -1490,7 +1490,7 @@ pub const Instruction = union(Tag) {
     pub const modifier_map = std.StaticStringMap(Tag).initComptime(.{
         .{ "mst", .mstx },
         .{ "mstw", .mstwx },
-        .{ "mld", .mstx },
+        .{ "mld", .mldx },
         .{ "mldw", .mldwx }
     });
 

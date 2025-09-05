@@ -483,7 +483,7 @@ const AstGen = struct {
     }
 
     // OptionList <- (Option Comma)* Option?
-    // Option <- 'expose' / 'noelimination'
+    // Option <- 'expose' / 'noelimination' / 'origin' / 'align' / 'maxaddr' / 'maxlen'
     fn parse_builtin_options(self: *AstGen) !Index {
         _ = self.eat_token(.l_paran) orelse return Null;
         const frame = self.mark_frame();
