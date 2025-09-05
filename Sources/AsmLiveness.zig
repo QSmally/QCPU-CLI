@@ -353,7 +353,7 @@ test "unused sections" {
     try testLivenessErr(
         \\@section foo
         \\@barrier
-        \\foo: cli
+        \\foo: clr
         \\     jmpr 0x00
     , &.{ error.EmptySection });
 
@@ -376,7 +376,7 @@ test "unlabeled instruction after unconditional jump/unknown sized instructions"
 
     try testLivenessErr(
         \\@section foo
-        \\foo: cli
+        \\foo: clr
         \\ast ra
         \\ast rb
         \\jmpr 0x00
@@ -459,7 +459,7 @@ test "execution spills into padding" {
 
     try testLivenessErr(
         \\@section foo
-        \\foo: cli
+        \\foo: clr
         \\@align 16
         \\jmpr 0x00
     , &.{
@@ -476,7 +476,7 @@ test "execution spills into padding" {
     try testLivenessErr(
         \\@section foo
         \\@region 24
-        \\foo: cli
+        \\foo: clr
         \\@end
         \\jmpr 0x00
     , &.{
@@ -495,7 +495,7 @@ test "execution spills into padding" {
 test "execution spills into data" {
     try testLivenessErr(
         \\@section foo
-        \\foo: cli
+        \\foo: clr
         \\     u8 0x00
     , &.{
         error.UncoordinatedData,
@@ -505,7 +505,7 @@ test "execution spills into data" {
     try testLivenessErr(
         \\@section foo
         \\@region 24
-        \\foo: cli
+        \\foo: clr
         \\     u8 0x00
         \\@end
     , &.{
@@ -548,13 +548,13 @@ test "doubly write to same register" {
 test "unlabeled instruction after @section" {
     try testLivenessErr(
         \\@section foo
-        \\foo: cli
+        \\foo: clr
         \\     jmpr 0x00
     , &.{});
 
     try testLivenessErr(
         \\@section foo
-        \\cli
+        \\clr
         \\jmpr 0x00
     , &.{
         error.UnreachableOpaque,
@@ -564,7 +564,7 @@ test "unlabeled instruction after @section" {
     try testLivenessErr(
         \\@section foo
         \\@region 24
-        \\cli
+        \\clr
         \\@end
     , &.{
         error.UnreachableOpaque,
@@ -576,10 +576,10 @@ test "unlabeled instruction after @section" {
 
     try testLivenessErr(
         \\@section foo
-        \\cli
+        \\clr
         \\jmpr 0x00
         \\@barrier
-        \\cli
+        \\clr
         \\jmpr 0x00
     , &.{
         error.UnreachableOpaque,
@@ -592,20 +592,20 @@ test "unlabeled instruction after @section" {
 test "undefined control flow" {
     try testLivenessErr(
         \\@section foo
-        \\foo: cli
+        \\foo: clr
         \\     jmpr 0x00
     , &.{});
 
     try testLivenessErr(
         \\@section foo
-        \\foo: cli
+        \\foo: clr
     , &.{
         error.UndefinedControlFlow
     });
 
     try testLivenessErr(
         \\@section foo
-        \\foo: cli
+        \\foo: clr
         \\     jmpr 0x00
         \\@barrier
         \\bar: ast ra
@@ -677,19 +677,19 @@ test "full fledge" {
         \\@define aaaaaaaaaaaa, 0
         \\@define(expose) bbbb, 0
         \\@region 24
-        \\              cli
+        \\              clr
         \\              u8 0x00
         \\              u16 0x0000
         \\@end
         \\@section bar
-        \\bar:          cli
+        \\bar:          clr
         \\@section roo
         \\roo:          u8 0x00
     , &.{
         error.DuplicateStore,
         error.UncoordinatedPadding,
         error.NotePaddingHere,
-        // fixme: the 'cli' after @align is invalid
+        // fixme: the 'clr' after @align is invalid
         // error.UnreachableOpaque,
         // error.NoteDivertedHere,
         error.UncoordinatedData,
