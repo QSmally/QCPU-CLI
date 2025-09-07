@@ -249,7 +249,11 @@ fn rst(self: *Virtualiser, reg: AsmSemanticAir.GpRegister, value: u8) void {
         if (self.options.listen) |gpr| if (gpr == @intFromEnum(reg))
             self.output_dump.appendAssumeCapacity(.{ self.total_cycles, self.instruction_ptr, value });
     } else {
-        self.ast(value, .{}); // when unwanted, it's already written anyway
+        // when unwanted, it's already written anyway
+        // retain flags though
+        self.ast(value, .{
+            .carry = self.flags.carry,
+            .underflow = self.flags.underflow });
     }
 }
 
