@@ -1,16 +1,15 @@
 
-@import main, "sample.s"
-
 @section root
-@region 256
 @align 2
 
-_:                u16 .main.start   // entrypoint
-                  u16 0             // interrupt
-flags:            u16 0x8400        // CPU flags
+_:                jmpr .entrypoint
 
-@end
+@section text
+@align 2
 
-@linkinfo(origin) root, 0
-@linkinfo(align) text, 256
-@linkinfo(align) data, 256
+.entrypoint:      bkpt
+
+// physical memory linkage
+
+@linkinfo(origin) root, 0x0800
+@linkinfo(align) text, 32

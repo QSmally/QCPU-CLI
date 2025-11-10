@@ -2,11 +2,12 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const Qcu = @import("Qcu.zig");
-const Virtualiser = @import("Virtualiser.zig");
+
+const version_str = "0.1.0";
 
 fn version(writer: anytype) !void {
     try writer.print("QCPU-CLI v{s} (Zig {s}) ({s}, {s})", .{
-        "0.0.0",
+        version_str,
         builtin.zig_version_string,
         @tagName(builtin.os.tag),
         @tagName(builtin.cpu.arch) });
@@ -26,7 +27,7 @@ fn help(raw_writer: anytype) !void {
     try writer.writeAll(
         \\
         \\    QCPU CLI
-        \\    qcpu [option ...] file ...
+        \\    qcpu [option ...] [--flag key[ value] ...] file ...
         \\
         \\
     );
@@ -34,7 +35,7 @@ fn help(raw_writer: anytype) !void {
     inline for (&[_]struct { []const u8, type } {
         .{ "general options", CliOptions },
         .{ "compilation unit options", Qcu.Options },
-        .{ "virtualiser options", Virtualiser.Options }
+        // .{ "virtualiser options", Virtualiser.Options }
     }) |category| {
         try writer.print("{s}\n", .{ category[0] });
 
@@ -43,7 +44,6 @@ fn help(raw_writer: anytype) !void {
                 []const u8 => "string (default " ++ field.defaultValue().? ++ ")",
                 ?[]const u8 => "string (default none)",
                 bool => "",
-                Virtualiser.ExecutionMode => "mode (default " ++ @tagName(field.defaultValue().?) ++ ")",
                 u3, u16, u32, u64 => @typeName(field.@"type") ++ " (default " ++ std.fmt.comptimePrint("{}", .{ field.defaultValue().? }) ++ ")",
                 ?u3, ?u16, ?u32, ?u64 => @typeName(field.@"type") ++ " (default none)",
                 else => @typeName(field.@"type")
@@ -58,43 +58,44 @@ fn help(raw_writer: anytype) !void {
     try version(writer);
 }
 
+var gpa = std.heap.GeneralPurposeAllocator(.{}) {};
+
 pub fn main() !u8 {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}) {};
-    defer _ = gpa.deinit();
     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
     defer arena.deinit();
 
     var arguments = Arguments(std.process.ArgIterator).init_second(std.process.args());
 
     const run_files,
+    const run_flags,
     var run_options = arguments.parse(Options, arena.allocator()) catch |err| {
-        _ = switch (err) {
-            error.InvalidCharacter => stderr.print("error: {s}: invalid numeric '{s}'\n", .{ arguments.current_option, arguments.current_value }),
-            error.Overflow => stderr.print("error: {s}: {s} doesn't fit in type {s}\n", .{ arguments.current_option, arguments.current_value, arguments.current_type }),
-            error.ArgumentExpected => stderr.print("error: {s}: expected option value\n", .{ arguments.current_option }),
-            error.NotPowerOfTwo => stderr.print("error: {s}: numeric options must be powers of two ({s})\n", .{ arguments.current_option, arguments.current_value }),
-            error.Zero => stderr.print("error: {s}: numeric options must be non-zero\n", .{ arguments.current_option }),
-            error.SelectionNotFound => stderr.print("error: {s}: value '{s}' is invalid\n", .{ arguments.current_option, arguments.current_value }),
-            error.OptionNotFound => stderr.print("error: {s}: unknown option\n", .{  arguments.current_value }),
-            error.OutOfMemory => stderr.print("error: out of memory\n", .{})
-        } catch return 255;
+         switch (err) {
+            // error.InvalidCharacter => try stderr.print("error: {s}: invalid numeric '{s}'\n", .{ arguments.current_option, arguments.current_value }),
+            // error.Overflow => try stderr.print("error: {s}: {s} doesn't fit in type {s}\n", .{ arguments.current_option, arguments.current_value, arguments.current_type }),
+            error.ArgumentExpected => try stderr.print("error: {s}: expected option value\n", .{ arguments.current_option }),
+            // error.NotPowerOfTwo => try stderr.print("error: {s}: numeric options must be powers of two ({s})\n", .{ arguments.current_option, arguments.current_value }),
+            // error.Zero => try stderr.print("error: {s}: numeric options must be non-zero\n", .{ arguments.current_option }),
+            // error.SelectionNotFound => try stderr.print("error: {s}: value '{s}' is invalid\n", .{ arguments.current_option, arguments.current_value }),
+            error.OptionNotFound => try stderr.print("error: {s}: unknown option\n", .{  arguments.current_value }),
+            error.OutOfMemory => try stderr.print("error: out of memory\n", .{})
+        }
         return 1;
     };
 
     if (run_options.verbose) {
         run_options.doptions = true;    // dump options
-        run_options.dload = true;       // dump file loads
-        run_options.dtokens = true;     // dump tokens
         run_options.dast = true;        // dump abstract syntax tree
         run_options.dair = true;        // dump analysed intermediate representation
-        run_options.dlinker = true;     // dump linker sections and symbols
+        // run_options.dlinker = true;     // dump linker sections and symbols
     }
-
-    if (run_options.l1 > run_options.page)
-        return error.CachePageHierarchy;
 
     if (run_options.doptions)
         try stderr.print("{any}\n", .{ run_options });
+
+    // if (run_options.l1 > run_options.page) {
+    //     try stderr.print("error: --l1: larger than page size\n", .{});
+    //     return 1;
+    // }
 
     if (run_options.version) {
         try version(stdout);
@@ -111,63 +112,58 @@ pub fn main() !u8 {
         return 1;
     }
 
-    // fixme: deinit with gpa on error gives segfault/double panic
-    const qcu = Qcu.init(arena.allocator(), std.fs.cwd(), run_files, unmerge(Qcu.Options, run_options)) catch |err| {
+    const qcu = Qcu.init(
+        gpa.allocator(),
+        std.fs.cwd(),
+        run_files,
+        &run_flags,
+        unmerge(Qcu.Options, run_options)
+    ) catch |err| {
         try stderr.print("{}\n", .{ err });
         return 1;
     };
 
-    while (qcu.work_queue.removeOrNull()) |job| {
-        job.execute() catch |err| switch (err) {
-            error.EmptyQcu,
-            error.OutOfMemory => {
-                try stderr.print("{}\n", .{ err });
-                return 1;
-            },
+    qcu.work() catch |err| switch (err) {
+        error.OutOfMemory => {
+            try stderr.print("{}\n", .{ err });
+            return 1;
+        },
 
-            else => {
-                for (qcu.errors.items) |the_err|
-                    try the_err.write(stderr);
-                if (!qcu.options.dnotrace)
-                    try qcu.linker.dump_last_block_trace(stderr);
-                return 1;
-            }
-        };
-    }
-
-    if (run_options.dry)
-        return 0;
-
-    post_assemble_task(gpa.allocator(), qcu, run_options) catch |err| {
-        try stderr.print("{}\n", .{ err });
-        return 1;
+        else => {
+            for (qcu.errors.items) |the_err|
+                try the_err.write(stderr);
+            // if (!qcu.options.dnotrace)
+            //     try qcu.linker.dump_last_block_trace(stderr);
+            return 1;
+        }
     };
 
+    return task(gpa.allocator(), qcu, run_options) catch |err| exit: {
+        try stderr.print("{}\n", .{ err });
+        break :exit 1;
+    };
+}
+
+fn task(allocator: std.mem.Allocator, qcu: *Qcu, run_options: Options) !u8 {
+    // if (run_options.output) |file_name|
+    //     try qcu.output_binary(file_name);
+    // if (run_options.virtualise)
+    //     try Virtualiser.begin(allocator, qcu, unmerge(Virtualiser.Options, run_options));
+    _ = allocator;
+    _ = qcu;
+    _ = run_options;
     return 0;
 }
 
-fn post_assemble_task(allocator: std.mem.Allocator, qcu: *Qcu, run_options: Options) !void {
-    // if (run_options.output) |file|
-    //     try qcu.output_file(file);
-    if (run_options.virtualise)
-        try Virtualiser.begin(allocator, qcu, unmerge(Virtualiser.Options, run_options));
-    // if (run_options.output == null and run_options.virtualise == null)
-    //     qcu.output_file("binary");
-}
-
-const stdout = std.io
-    .getStdOut()
-    .writer();
-const stderr = std.io
-    .getStdErr()
-    .writer();
+const stdout = std.io.getStdOut().writer();
+const stderr = std.io.getStdErr().writer();
 
 const CliOptions = struct {
     version: bool = false,
     help: bool = false,
     doptions: bool = false,
     verbose: bool = false,
-    dry: bool = false,
+    docs: ?[]const u8 = null,
     output: ?[]const u8 = null,
     virtualise: bool = false
 };
@@ -175,12 +171,12 @@ const CliOptions = struct {
 const Options = blk: {
     const cli = @typeInfo(CliOptions).@"struct";
     const qcu = @typeInfo(Qcu.Options).@"struct";
-    const virt = @typeInfo(Virtualiser.Options).@"struct";
+    // const virt = @typeInfo(Virtualiser.Options).@"struct";
 
     // Merging structs at compile-time? Hell yeah!
     break :blk @Type(.{ .@"struct" = .{
         .layout = .auto,
-        .fields = cli.fields ++ qcu.fields ++ virt.fields,
+        .fields = cli.fields ++ qcu.fields,
         .is_tuple = false,
         .decls = &.{} } });
 };
@@ -228,9 +224,11 @@ fn Arguments(comptime T: type) type {
 
         fn parse(self: *ArgumentsType, comptime OptionsType: type, allocator: std.mem.Allocator) !struct {
             []const []const u8,
+            std.StringArrayHashMapUnmanaged([]const u8),
             OptionsType
         } {
             var run_files: std.ArrayListUnmanaged([]const u8) = .empty;
+            var run_flags: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
             var run_options = OptionsType {};
 
             arg: while (self.next()) |argument| {
@@ -276,6 +274,14 @@ fn Arguments(comptime T: type) type {
                     }
                 }
 
+                if (std.mem.eql(u8, argument, "--flag")) {
+                    self.current_option = "--flag";
+                    const key = try self.expect();
+                    const value = try self.expect();
+                    try run_flags.put(allocator, key, value);
+                    continue;
+                }
+
                 if (std.mem.startsWith(u8, argument, "--"))
                     return error.OptionNotFound;
                 try run_files.append(allocator, argument);
@@ -283,6 +289,7 @@ fn Arguments(comptime T: type) type {
 
             return .{
                 try run_files.toOwnedSlice(allocator),
+                run_flags,
                 run_options };
         }
     };
@@ -292,14 +299,13 @@ fn Arguments(comptime T: type) type {
 
 test "unmerge options" {
     const options = Options {
-        .dload = false,
-        .dair = true,
-        .noliveness = true };
-    const concrete_options = unmerge(Qcu.Options, options);
+        .version = true,
+        .help = true };
+    const concrete_options = unmerge(CliOptions, options);
 
-    try std.testing.expectEqual(options.dload, concrete_options.dload);
-    try std.testing.expectEqual(options.dair, concrete_options.dair);
-    try std.testing.expectEqual(options.noliveness, concrete_options.noliveness);
+    try std.testing.expectEqual(options.version, concrete_options.version);
+    try std.testing.expectEqual(options.help, concrete_options.help);
+    try std.testing.expectEqual(options.virtualise, concrete_options.virtualise);
 }
 
 test "arguments iterator" {

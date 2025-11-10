@@ -2,50 +2,45 @@
 // Abstract Syntax Tree
 
 const std = @import("std");
-const Error = @import("Error.zig");
-const Source = @import("Source.zig");
+const SourceLocation = @import("SourceLocation.zig");
+const AsmTokeniser = @import("AsmTokeniser.zig");
 const Token = @import("Token.zig");
 
 const AsmAst = @This();
 
-allocator: std.mem.Allocator,
-source: Source,
-/// Index=0 is the root node which references the other nodes.
+/// Guaranteed to have at least one element (the end of file token).
+tokens: []const Token,
+/// Index = 0 is the root container node which references the other nodes.
 nodes: []const Node,
-/// If any errors are present in the AST result, the node list cannot be
-/// guaranteed to be complete or valid.
-errors: []const Error,
 
-/// From a list of tokens, parses them into an Abstract Syntax Tree and
-/// deallocating intermediate results. Tokens can be deallocated after parsing,
-/// but the source buffer cannot. The caller owns 'nodes' and 'errors' until
-/// deinit is called.
-pub fn init(allocator: std.mem.Allocator, source: Source) !AsmAst {
-    var ast_gen = AstGen.init(allocator, source);
+/// From a source location, tokenises the buffer and parses them into an
+/// Abstract Syntax Tree and deallocating the intermediate results. Errors are
+/// emitted to the bridge. If any errors exist, the tree cannot be guaranteed
+/// to be complete or valid.
+pub fn init(
+    allocator: std.mem.Allocator,
+    source_location: *const SourceLocation,
+    bridge: Bridge
+) !AsmAst {
+    var ast_gen = try AstGen.init(allocator, source_location, bridge);
     defer ast_gen.deinit();
 
-    std.debug.assert(source.tokens.len > 0);
-    std.debug.assert(source.tokens[source.tokens.len - 1].tag == .eof);
+    std.debug.assert(ast_gen.tokens.len > 0);
+    std.debug.assert(ast_gen.tokens[ast_gen.tokens.len - 1].tag == .eof);
 
-    const estimated_node_count = source.tokens.len + 2;
-    try ast_gen.nodes.ensureTotalCapacity(allocator, estimated_node_count);
     try ast_gen.parse_root();
 
     std.debug.assert(ast_gen.nodes.items.len > 0);
     std.debug.assert(ast_gen.temporary.items.len == 0);
 
     return .{
-        .allocator = allocator,
-        .source = source,
-        .nodes = try ast_gen.nodes.toOwnedSlice(allocator),
-        .errors = try ast_gen.errors.toOwnedSlice(allocator) };
+        .tokens = ast_gen.tokens,
+        .nodes = try ast_gen.nodes.toOwnedSlice(allocator) };
 }
 
-pub fn deinit(self: *AsmAst) void {
-    self.allocator.free(self.nodes);
-    for (self.errors) |err|
-        self.allocator.free(err.message);
-    self.allocator.free(self.errors);
+pub fn deinit(self: *AsmAst, allocator: std.mem.Allocator) void {
+    allocator.free(self.tokens);
+    allocator.free(self.nodes);
 }
 
 const render = @import("render.zig");
@@ -65,37 +60,46 @@ fn dump_node(self: *AsmAst, ais: anytype, pm: anytype, index: Index) !void {
     pm[index] = true;
 
     switch (node.tag) {
-        .container => for (node.operands.lhs..node.operands.rhs) |index_|
-            try self.dump_node(ais, pm, @intCast(index_)),
+        .container => for (node.operands.lhs..node.operands.rhs) |i|
+            try self.dump_node(ais, pm, @intCast(i)),
+
         .composite,
         .builtin,
         .instruction,
-        .add,
-        .sub,
-        .mult,
-        .lsh,
-        .rsh => {
+        .addition,
+        .subtraction,
+        .multiplication,
+        .bitwise_or,
+        .bitwise_and,
+        .left_shift,
+        .right_shift => {
             try self.dump_node(ais, pm, @intCast(node.operands.lhs));
             try self.dump_node(ais, pm, @intCast(node.operands.rhs));
         },
-        .neg,
-        .inv => {
-            try self.dump_node(ais, pm, @intCast(node.operands.lhs));
-        },
+
+        .negation,
+        .inversion => try self.dump_node(ais, pm, @intCast(node.operands.lhs)),
+
         .string,
         .reference => if (node.operands.lhs > 0)
             try self.dump_node(ais, pm, @intCast(node.operands.lhs)),
-        else => {}
+
+        .label,
+        .identifier,
+        .integer,
+        .character,
+        .modifier,
+        .argument => {}
     }
 }
 
-pub fn dump(self: *AsmAst, writer: anytype) !void {
+pub fn dump(self: *AsmAst, allocator: std.mem.Allocator, writer: anytype) !void {
     const DumpStream = render.AutoIndentingStream(@TypeOf(writer));
     var renderer = DumpStream {
         .underlying_writer = writer,
         .indent_delta = 4 };
-    const poke_map = try self.allocator.alloc(bool, self.nodes.len);
-    defer self.allocator.free(poke_map);
+    const poke_map = try allocator.alloc(bool, self.nodes.len);
+    defer allocator.free(poke_map);
 
     try self.dump_node(&renderer, poke_map, 0);
 
@@ -105,45 +109,93 @@ pub fn dump(self: *AsmAst, writer: anytype) !void {
     }
 }
 
+pub const Bridge = struct {
+
+    const AllocatorError = std.mem.Allocator.Error;
+
+    pub const VTable = struct {
+        emit_error: *const fn (*anyopaque, SourceLocation.Error) AllocatorError!void
+    };
+
+    vtable: VTable,
+    context: *anyopaque,
+
+    fn emit_error(self: *Bridge, err: SourceLocation.Error) !void {
+        try self.vtable.emit_error(self.context, err);
+    }
+};
+
 pub const Node = struct {
 
     token: Index,
     tag: Tag,
     operands: Operands,
 
-    comptime {
-        std.debug.assert(@sizeOf(Node) == 16);
-    }
-
     pub const Tag = enum {
-        container,      // nodes[lhs..rhs]
-        composite,      // lhs and rhs refer to other nodes
-        builtin,        // lhs is arguments container, rhs is compositie of options container, opaque
-        option,         // both unused, token is option
-        label,          // both are unused, token is label
-        instruction,    // lhs is arguments container, rhs is optional composite of labels container, modifier
-        modifier,       // both unused, token is modifier
-        identifier,     // both unused, token is identifier
-        neg,            // -lhs, rhs is unused
-        inv,            // !lhs, rhs is unused
-        add,            // lhs + rhs
-        sub,            // lhs - rhs
-        mult,           // lhs * rhs
-        lsh,            // lhs lsh rhs
-        rsh,            // lhs rsh rhs
-        integer,        // both unused, token is integer
-        char,           // both unused, token is char
-        string,         // lhs is sentinel, rhs is unused, token is string
-        reference,      // lhs is modifier, rhs is unused, token is label
-        argument,       // both unused, token is reserved argument
-
-        pub fn fmt(self: Tag) []const u8 {
-            return switch (self) {
-                .identifier => "an identifier",
-                .string => "a string",
-                else => @tagName(self)
-            };
-        }
+        /// nodes[lhs..rhs], hosted optionally
+        container,
+        /// lhs and rhs refer to other nodes, generically
+        composite,
+        /// lhs: arguments container
+        /// rhs: composite of options identifier container and opaque
+        /// token: the @builtin
+        builtin,
+        /// lhs: label, optional
+        /// rhs: arguments container
+        /// token: the instruction
+        instruction,
+        /// token: the label
+        label,
+        /// token: the identifier
+        identifier,
+        /// lhs: unary operand
+        /// token: the unary operator
+        negation,
+        /// lhs: unary operand
+        /// token: the unary operator
+        inversion,
+        /// lhs: left binary operand
+        /// rhs: right binary operand
+        /// token: the binary operator
+        addition,
+        /// lhs: left binary operand
+        /// rhs: right binary operand
+        /// token: the binary operator
+        subtraction,
+        /// lhs: left binary operand
+        /// rhs: right binary operand
+        /// token: the binary operator
+        multiplication,
+        /// lhs: left bitwise operand
+        /// rhs: right bitwise operand
+        /// token: the bitwise operator
+        bitwise_or,
+        /// lhs: left bitwise operand
+        /// rhs: right bitwise operand
+        /// token: the bitwise operator
+        bitwise_and,
+        /// lhs: left operand
+        /// rhs: right shift operand
+        /// token: the bitshift operator
+        left_shift,
+        /// lhs: left operand
+        /// rhs: right shift operand
+        /// token: the bitshift operator
+        right_shift,
+        /// token: the numeric literal
+        integer,
+        /// token: the char literal
+        character,
+        /// lhs: sentinel operand, optional
+        /// token: the string literal
+        string,
+        /// lhs: modifier, optional
+        /// token: the label
+        reference,
+        /// token: the modifier
+        modifier,
+        /// token: the argument
+        argument
     };
 
     pub const Operands = struct {
@@ -151,10 +203,15 @@ pub const Node = struct {
         lhs: Index = Null,
         rhs: Index = Null,
 
-        pub const zero = Operands {
+        pub const none = Operands {
             .lhs = Null,
             .rhs = Null };
     };
+
+    pub const none = Node {
+        .tag = .composite,
+        .token = Null,
+        .operands = .none };
 };
 
 pub const Null = 0;
@@ -162,30 +219,103 @@ pub const Index = u32;
 pub const IndexRange = Node.Operands;
 
 const NodeList = std.ArrayListUnmanaged(Node);
-const ErrorList = std.ArrayListUnmanaged(Error);
 
 /// Recursive-descent parser that generates the Abstract Syntax Tree.
 const AstGen = struct {
 
     allocator: std.mem.Allocator,
-    source: Source,
+    source_location: *const SourceLocation,
+    tokens: []const Token,
     nodes: NodeList,
     temporary: NodeList,
-    errors: ErrorList,
+    bridge: Bridge,
     cursor: Index,
 
-    pub fn init(allocator: std.mem.Allocator, source: Source) AstGen {
+    pub fn init(
+        allocator: std.mem.Allocator,
+        source_location: *const SourceLocation,
+        bridge: Bridge
+    ) !AstGen {
+        var tokeniser = AsmTokeniser.init(source_location.buffer);
+        var tokens = try std.ArrayList(Token).initCapacity(allocator, source_location.buffer.len / 4 + 1);
+        errdefer tokens.deinit();
+        
+        while (true) {
+            const token = tokeniser.next();
+            try tokens.append(token);
+            if (token.tag == .eof) break;
+        }
+
         return .{
             .allocator = allocator,
-            .source = source,
+            .source_location = source_location,
+            .tokens = try tokens.toOwnedSlice(),
             .nodes = .empty,
             .temporary = .empty,
-            .errors = .empty,
+            .bridge = bridge,
             .cursor = 0 };
     }
 
     pub fn deinit(self: *AstGen) void {
+        self.nodes.deinit(self.allocator);
         self.temporary.deinit(self.allocator);
+    }
+
+    fn current_tag(self: *AstGen) Token.Tag {
+        return self.tokens[self.cursor].tag;
+    }
+
+    fn advance(self: *AstGen) void {
+        if (self.tokens.len != self.cursor + 1)
+            self.cursor += 1;
+    }
+
+    fn next_cursor(self: *AstGen) Index {
+        const cursor = self.cursor;
+        self.advance();
+        return cursor;
+    }
+
+    /// Moves the cursor to the next newline or EOF.
+    fn consume_line(self: *AstGen) void {
+        while (std.mem.indexOfScalar(Token.Tag, &[_]Token.Tag { .newline, .eof }, self.tokens[self.next_cursor()].tag) == null) {}
+    }
+
+    /// Expect a tag, emit an error if the cursor isn't pointing to a token
+    /// containing the tag, and always advances to the next token.
+    fn expect(self: *AstGen, tag: Token.Tag) !Index {
+        if (self.tokens[self.cursor].tag != tag)
+            try self.add_error(error.Expected, tag);
+        return self.next_cursor();
+    }
+
+    fn expect_newline(self: *AstGen) !void {
+        const tag = self.tokens[self.cursor].tag;
+        if (tag != .newline and tag != .eof)
+            try self.add_error(error.Unexpected, .{});
+        self.consume_line();
+    }
+
+    /// Expect a tag, optionally emits an error if the cursor isn't pointing to
+    /// a token containing the tag, and only advances the cursor if the tag
+    /// matches.
+    fn eat(self: *AstGen, expected_tag: Token.Tag, comptime mode: enum {
+        silent,
+        err
+    }) !?Index {
+        const tag = self.tokens[self.cursor].tag;
+        const is_newline = tag == .eof or tag == .newline;
+
+        if (expected_tag == .newline and is_newline)
+            return self.next_cursor();
+
+        if (tag != expected_tag) {
+            if (mode == .err)
+                try self.add_error(error.Expected, expected_tag);
+            return null;
+        }
+
+        return self.next_cursor();
     }
 
     fn add_node(self: *AstGen, node: Node) !Index {
@@ -211,11 +341,11 @@ const AstGen = struct {
             .operands = index_range });
     }
 
-    fn mark_frame(self: *AstGen) usize {
+    fn create_list_frame(self: *AstGen) usize {
         return self.temporary.items.len;
     }
 
-    fn reset_frame(self: *AstGen, len: usize) void {
+    fn pop_frame(self: *AstGen, len: usize) void {
         self.temporary.shrinkRetainingCapacity(len);
     }
 
@@ -223,641 +353,444 @@ const AstGen = struct {
         try self.temporary.append(self.allocator, node);
     }
 
-    fn lower_frame_nodes(self: *AstGen, frame: usize) !IndexRange {
+    fn copy_frame_nodes(self: *AstGen, frame: usize) !IndexRange {
         const frame_diff = self.temporary.items[frame..];
         return if (frame_diff.len > 0)
-            self.add_nodes(frame_diff) else
+            try self.add_nodes(frame_diff) else
             .{ .lhs = Null, .rhs = Null };
     }
 
-    fn expect_token(self: *AstGen, tag: Token.Tag) !Index {
-        if (tag == .newline and
-            (self.source.tokens[self.cursor].tag == .eof or
-            self.source.tokens[self.cursor].tag == .newline)
-        ) return self.next_token();
-
-        if (self.source.tokens[self.cursor].tag != tag)
-            try self.add_error_arg(error.Expected, tag);
-        return self.next_token();
-    }
-
-    fn next_token(self: *AstGen) Index {
-        const cursor_ = self.cursor;
-        if (self.source.tokens.len != cursor_ + 1)
-            self.cursor += 1;
-        return cursor_;
-    }
-
-    fn eat_token(self: *AstGen, tag: Token.Tag) ?Index {
-        return if (self.source.tokens[self.cursor].tag == tag)
-            self.next_token() else
-            null;
-    }
-
-    fn harshly_eat_token(self: *AstGen, tag: Token.Tag) !?Index {
-        if (tag == .newline and
-            (self.source.tokens[self.cursor].tag == .eof or
-            self.source.tokens[self.cursor].tag == .newline)
-        ) return self.next_token();
-
-        if (self.source.tokens[self.cursor].tag != tag) {
-            try self.add_error_arg(error.Expected, tag);
-            return null;
-        }
-
-        return self.next_token();
-    }
-
-    const endings = [_]Token.Tag {
-        .newline,
-        .eof,
-        .unexpected_eof };
-    fn consume_line(self: *AstGen) void {
-        while (std.mem.indexOfScalar(Token.Tag, &endings, self.source.tokens[self.next_token()].tag) == null) {}
-    }
-
-    fn current_tag(self: *AstGen) Token.Tag {
-        return self.source.tokens[self.cursor].tag;
-    }
-
-    fn current_token(self: *AstGen) Token {
-        return self.source.tokens[self.cursor];
-    }
-
-    fn from_buffer(self: *AstGen, index: Index) []const u8 {
-        const token = self.source.tokens[index];
-        return token.location.slice(self.source.buffer);
-    }
-
-    const ParseError = error {
-        UnexpectedEof,
+    pub const AstError = error {
         Expected,
         Unexpected,
-        RootLevelInstruction,
-        RootLevelLabel,
+        RootInstruction,
+        RootLabel,
+        RootBuiltin,
         ExtraEndScope,
-        BuiltinRootLevel,
-        BuiltinOpaqueLevel,
         NoteDefinedHere,
-        NoteUseTo,
-        NoteGeneric
+        Note
     };
 
-    const TreeError = std.mem.Allocator.Error;
+    pub const ParseError = std.mem.Allocator.Error;
 
-    fn add_error_arg(self: *AstGen, comptime err: ParseError, argument: anytype) !void {
-        @branchHint(.unlikely);
+    fn add_error(self: *AstGen, comptime err: AstError, argument: anytype) !void {
+        @branchHint(.cold);
 
-        const message = switch (err) {
-            error.UnexpectedEof => "unexpected EOF",
-            error.Expected => "expected {s}, found {s}",
-            error.Unexpected => "unexpectedly got {s} '{s}'",
-            error.RootLevelInstruction => "instructions cannot be defined at the root level",
-            error.RootLevelLabel => "labels cannot be declared at the root level",
-            error.ExtraEndScope => "extra @end",
-            error.BuiltinRootLevel => "builtin '{s}' cannot appear at an opaque level",
-            error.BuiltinOpaqueLevel => "builtin '{s}' cannot appear at the root level",
-            error.NoteDefinedHere => "{s} defined here",
-            error.NoteUseTo => "use '{s}' to {s}",
-            error.NoteGeneric => "{s}"
+        const token = self.tokens[self.cursor];
+
+        const format = switch (err) {
+            error.Expected => .{ "expected {s}, found {s}", .{
+                if (@TypeOf(argument) == Token.Tag) argument.fmt() else argument,
+                token.tag.fmt() } }, // argument = tag
+            error.Unexpected => .{ "unexpectedly got {s}", .{ token.tag.fmt() } },
+            error.RootInstruction => .{ "instructions cannot be defined at the root level", .{} },
+            error.RootLabel => .{ "labels cannot be declared at the root level", .{} },
+            error.RootBuiltin => .{ "{s} cannot appear at the root level", .{ token.tag.fmt() } },
+            error.ExtraEndScope => .{ "extra @end", .{} },
+            error.NoteDefinedHere => .{ "{s} defined here", .{ argument.tag.fmt() } }, // argument = token
+            error.Note => .{ "{s}", .{ argument } } // argument = message
         };
+
+        const message = try std.fmt.allocPrint(self.allocator, format[0], format[1]);
+        errdefer self.allocator.free(message);
 
         const is_note = switch (err) {
             error.NoteDefinedHere,
-            error.NoteUseTo,
-            error.NoteGeneric => true,
+            error.Note => true,
             else => false
         };
 
-        const is_locationable = switch (err) {
-            error.NoteUseTo,
-            error.NoteGeneric => false,
-            else => true
-        };
-
-        const token: ?Token =
-            if (!is_locationable) null else
-            if (is_note) argument else
-            self.source.tokens[self.cursor];
-        const token_location = if (token) |token_|
-            self.source.location_of(token_.location) else
-            null;
-        const arguments = switch (err) {
-            error.Expected => .{ argument.fmt(), token.?.tag.fmt() },
-            error.Unexpected => .{ token.?.tag.fmt(), self.from_buffer(self.cursor) },
-            error.BuiltinRootLevel,
-            error.BuiltinOpaqueLevel => .{ token.?.tag.fmt() },
-            error.NoteDefinedHere => .{ argument.tag.fmt() },
-            error.NoteUseTo => .{ argument[0], argument[1] },
-            else => argument
-        };
-
-        const format = try std.fmt.allocPrint(self.allocator, message, arguments);
-
-        try self.errors.append(self.allocator, .{
-            .id = err,
-            .token = token,
+        try self.bridge.emit_error(.{
+            .err = err,
+            .token = switch (err) {
+                error.NoteDefinedHere => argument,
+                else => token,
+            },
+            .source_location = self.source_location,
             .is_note = is_note,
-            .message = format,
-            .location = token_location });
+            .is_preview = err != error.Note,
+            .message = message });
     }
 
-    fn add_error(self: *AstGen, comptime err: ParseError) !void {
-        return self.add_error_arg(err, .{});
-    }
+    /// Root <- Builtin* Eof
+    pub fn parse_root(self: *AstGen) ParseError!void {
+        std.debug.assert(self.nodes.items.len == 0);
 
-    fn add_node_notes(self: *AstGen, nodes: []const Node) !void {
-        for (nodes) |node|
-            try self.add_error_arg(error.NoteDefinedHere, self.source.tokens[node.token]);
-    }
-
-    // Root <- TopBuiltin* Eof
-    pub fn parse_root(self: *AstGen) TreeError!void {
         try self.nodes.append(self.allocator, .{
             .tag = .container,
             .token = Null,
             .operands = .{} });
-        const frame = self.mark_frame();
-        defer self.reset_frame(frame);
+        const frame = self.create_list_frame();
+        defer self.pop_frame(frame);
 
-        while (self.current_tag() != .eof) {
-            switch (self.current_tag()) {
-                .builtin_barrier,
-                .builtin_define,
-                .builtin_header,
-                .builtin_import,
-                .builtin_linkinfo,
-                .builtin_section => {
-                    const builtin = try self.parse_builtin();
-                    try self.add_frame_node(builtin);
-                },
+        while (self.current_tag() != .eof) switch(self.current_tag()) {
+            .identifier,
+            .instruction => {
+                try self.add_error(error.RootInstruction, .{});
+                self.consume_line();
+            },
 
-                .builtin_align,
-                .builtin_region => {
-                    try self.add_error(error.BuiltinOpaqueLevel);
-                    // recover by parsing the rest so the Ast reports other
-                    // possible errors.
-                    const builtin = try self.parse_builtin();
-                    try self.add_frame_node(builtin);
-                },
+            .label,
+            .private_label => {
+                try self.add_error(error.RootLabel, .{});
+                self.consume_line();
+            },
 
-                .builtin_end => {
-                    try self.add_error(error.ExtraEndScope);
-                    self.consume_line();
-                },
+            .builtin_else => {
+                try self.add_error(error.Unexpected, .{});
+                self.consume_line();
+            },
 
-                .identifier,
-                .instruction,
-                .pseudo_instruction => {
-                    try self.add_error(error.RootLevelInstruction);
-                    self.consume_line();
-                },
+            .builtin_end => {
+                try self.add_error(error.ExtraEndScope, .{});
+                self.consume_line();
+            },
 
-                .label,
-                .private_label => {
-                    try self.add_error(error.RootLevelLabel);
-                    self.consume_line();
-                },
+            .newline => self.advance(),
 
-                .unexpected_eof => {
-                    try self.add_error(error.UnexpectedEof);
-                    _ = self.next_token();
-                    break;
-                },
+            .eof => unreachable,
 
-                .newline => _ = self.next_token(),
-
-                else => {
-                    try self.add_error(error.Unexpected);
-                    _ = self.next_token();
-                }
+            else => |tag| if (tag.is_builtin()) {
+                if (tag.is_builtin_instruction())
+                    try self.add_error(error.RootBuiltin, .{});
+                const builtin = try self.parse_builtin();
+                try self.add_frame_node(builtin);
+            } else {
+                try self.add_error(error.Unexpected, .{});
+                self.advance();
             }
-        }
+        };
 
-        const container = try self.lower_frame_nodes(frame);
+        const container = try self.copy_frame_nodes(frame);
         self.nodes.items[0].operands = container;
-        _ = try self.expect_token(.eof);
+        _ = try self.eat(.eof, .err);
     }
 
-    // TopBuiltin <- Builtin / Section
-    // Builtin <- SimpleBuiltin / IndentedBuiltin
-    // SimpleBuiltin <- SimpleBuiltinIdentifier (LParan OptionList RParan)? ArgumentList Eol
-    // IndentedBuiltin <- IndentedBuiltinIdentifier (LParan OptionList RParan)? ArgumentList Eol Opaque End Eol
-    // Section <- SectionBuiltinIdentifier Identifier Eol Opaque [^Section]
-    // SimpleBuiltinIdentifier <- '@barrier' / '@define' / '@import' / '@linkinfo'
-    // IndentedBuiltinIdentifier <- '@align' / '@header' / '@region'
-    // SectionBuiltinIdentifier <- '@section'
-    // End <- '@end'
-    fn parse_builtin(self: *AstGen) TreeError!Node {
-        const token = self.next_token();
+    /// Builtin <- Section / SimpleBuiltin / OpaqueBuiltin
+    /// Section <- SectionKeyword BuiltinArguments Opaque [^SectionKeyword]
+    /// SimpleBuiltin <- SimpleBuiltinKeyword BuiltinArguments
+    /// OpaqueBuiltin <- OpaqueBuiltinKeyword BuiltinArguments Opaque EndKeyword Eol
+    /// BuiltinArguments <- (LParan OptionList RParan)? ArgumentList Eol
+    /// SectionKeyword <- '@section' / '@barrier'
+    /// SimpleBuiltinKeyword <- '@align' / '@alignop' / '@buildinfo' / '@define' / '@entrypoint' / '@err' / '@import' / '@linkinfo' / '@offset'
+    /// OpaqueBuiltinKeyword <- '@else' / '@header' / '@if' / '@region'
+    /// EndKeyword <- '@end'
+    fn parse_builtin(self: *AstGen) ParseError!Node {
+        const cursor = self.next_cursor();
         const builtin_options = try self.parse_builtin_options();
         const builtin_arguments = try self.parse_arguments();
-        _ = try self.expect_token(.newline);
+        try self.expect_newline();
 
-        const tag = self.source.tokens[token].tag;
-        const has_opaque = tag.builtin_opaque();
+        const token = self.tokens[cursor];
 
-        const opaque_ = if (has_opaque) blk: {
+        const payload = if (token.tag.is_builtin_opaque()) blk: {
             const payload = try self.parse_opaque();
 
-            if (tag == .builtin_section or tag == .builtin_barrier)
+            // @sections aren't delimited by @end
+            if (token.tag.is_builtin_section())
                 break :blk payload;
+
             if (self.current_tag() != .builtin_end) {
-                try self.add_error_arg(error.Expected, Token.Tag.builtin_end);
-                try self.add_error_arg(error.NoteDefinedHere, self.source.tokens[token]);
+                try self.add_error(error.Expected, Token.Tag.builtin_end);
+                try self.add_error(error.NoteDefinedHere, token);
             }
 
-            _ = self.next_token();
-            _ = try self.expect_token(.newline);
+            // @else doesn't consume the @end
+            if (token.tag != .builtin_else) {
+                self.advance();
+                try self.expect_newline();
+            }
+
             break :blk payload;
         } else Null;
 
-        const composite = try self.add_node(.{
-            .tag = .composite,
-            .token = Null,
-            .operands = .{ .lhs = builtin_options, .rhs = opaque_ } });
+        const composite = if (builtin_options != Null or payload != Null)
+            try self.add_node(.{ .tag = .composite, .token = Null, .operands = .{ .lhs = builtin_options, .rhs = payload } }) else
+            Null;
         return .{
             .tag = .builtin,
-            .token = token,
+            .token = cursor,
             .operands = .{ .lhs = builtin_arguments, .rhs = composite } };
     }
 
-    // OptionList <- (Option Comma)* Option?
-    // Option <- 'expose' / 'noelimination' / 'origin' / 'align' / 'maxaddr' / 'maxlen'
-    fn parse_builtin_options(self: *AstGen) !Index {
-        _ = self.eat_token(.l_paran) orelse return Null;
-        const frame = self.mark_frame();
-        defer self.reset_frame(frame);
+    /// OptionList <- (LParan ArgumentList RParan)?
+    fn parse_builtin_options(self: *AstGen) ParseError!Index {
+        _ = try self.eat(.l_paran, .silent) orelse return Null;
+        const arguments = try self.parse_arguments();
+        _ = try self.eat(.r_paran, .err);
+        return arguments;
+    }
 
-        while (true) {
-            switch (self.current_tag()) {
-                .option => {
-                    try self.add_frame_node(.{
-                        .tag = .option,
-                        .token = self.next_token(),
-                        .operands = .{} });
-                    _ = self.eat_token(.comma) orelse {
-                        _ = try self.harshly_eat_token(.r_paran);
+    /// ArgumentList <- (Expression Comma)* Expression?
+    fn parse_arguments(self: *AstGen) ParseError!Index {
+        const frame = self.create_list_frame();
+        defer self.pop_frame(frame);
+
+        while (true) switch (self.current_tag()) {
+            .l_paran,
+            .minus,
+            .bang,
+            .dollar,
+            .reference_label,
+            .numeric_literal,
+            .string_literal,
+            .identifier,
+            .instruction,
+            .argument => {
+                const expression = try self.parse_expression();
+                try self.add_frame_node(expression);
+
+                switch (self.current_tag()) {
+                    .newline,
+                    .eof,
+                    .r_paran => break,
+
+                    .comma => self.advance(),
+
+                    else => {
+                        try self.add_error(error.Expected, "an expression");
+                        self.advance();
                         break;
-                    };
-                },
-
-                .r_paran => {
-                    _ = self.next_token();
-                    break;
-                },
-
-                .newline,
-                .eof,
-                .unexpected_eof => {
-                    try self.add_error_arg(error.Expected, Token.Tag.r_paran);
-                    break;
-                },
-
-                else => {
-                    try self.add_error_arg(error.Expected, Token.Tag.option);
-                    _ = self.next_token();
-                }
-            }
-        }
-
-        const range = try self.lower_frame_nodes(frame);
-        return try self.add_index_range(range);
-    }
-
-    // ArgumentList <- (Expression Comma)* Expression?
-    fn parse_arguments(self: *AstGen) TreeError!Index {
-        const frame = self.mark_frame();
-        defer self.reset_frame(frame);
-
-        while (true) {
-            switch (self.current_tag()) {
-                .l_paran,
-                .minus,
-                .bang,
-                .reference_label,
-                .numeric_literal,
-                .char_literal,
-                .string_literal,
-                .identifier,
-                .pseudo_instruction,
-                .reserved_argument => {
-                    const expression = try self.parse_expression();
-                    try self.add_frame_node(expression);
-
-                    _ = self.eat_token(.comma) orelse switch (self.current_tag()) {
-                        .newline,
-                        .eof,
-                        .unexpected_eof => break,
-
-                        else => {
-                            try self.add_error_arg(error.Expected, Token.string("a comma"));
-                            _ = self.next_token();
-                            break;
-                        }
-                    };
-
-                    switch (self.current_tag()) {
-                        .newline,
-                        .eof,
-                        .unexpected_eof => try self.add_error_arg(error.Expected, Token.string("an argument")),
-                        else => {}
                     }
-                },
-
-                .newline,
-                .eof,
-                .unexpected_eof => break,
-
-                else => {
-                    try self.add_error_arg(error.Expected, Token.string("an expression"));
-                    _ = self.next_token();
                 }
-            }
-        }
 
-        const range = try self.lower_frame_nodes(frame);
-        return try self.add_index_range(range);
+                switch (self.current_tag()) {
+                    .newline,
+                    .eof => try self.add_error(error.Expected, "an argument"),
+                    else => {}
+                }
+            },
+
+            .newline,
+            .eof,
+            .r_paran => break,
+
+            else => {
+                try self.add_error(error.Expected, "an expression");
+                self.advance();
+            }
+        };
+
+        const container = try self.copy_frame_nodes(frame);
+        return try self.add_index_range(container);
     }
 
-    // Expression <- (Expression BinaryOperation)* UnaryExpression
-    // BinaryOperation <- '+' / '-' / '*' / 'lsh' / 'rsh'
-    fn parse_expression(self: *AstGen) TreeError!Node {
+    /// Expression <- (Expression BinaryOperator)* UnaryExpression
+    /// BinaryOperator <- '+' / '-' / '*' / '|' / '&' / '<<' / '>>'
+    fn parse_expression(self: *AstGen) ParseError!Node {
         const unary_expression = try self.parse_unary_expression();
 
         const binary_tag: Node.Tag = switch (self.current_tag()) {
-            .plus => .add,
-            .minus => .sub,
-            .mult => .mult,
-            .lsh => .lsh,
-            .rsh => .rsh,
+            .plus => .addition,
+            .minus => .subtraction,
+            .asterisk => .multiplication,
+            .pipe => .bitwise_or,
+            .ampersand => .bitwise_and,
+            .lsh => .left_shift,
+            .rsh => .right_shift,
             else => return unary_expression
         };
 
-        const binary_token = self.next_token();
-        const another_expression = try self.parse_expression();
+        const binary_cursor = self.next_cursor();
+        const operand_expression = try self.parse_expression();
         const lhs = try self.add_node(unary_expression);
-        const rhs = try self.add_node(another_expression);
+        const rhs = try self.add_node(operand_expression);
 
         return .{
             .tag = binary_tag,
-            .token = binary_token,
+            .token = binary_cursor,
             .operands = .{ .lhs = lhs, .rhs = rhs } };
     }
 
-    // UnaryExpression <- UnaryOperation? PrimaryExpression
-    // UnaryOperation <- '-' / '!'
-    fn parse_unary_expression(self: *AstGen) TreeError!Node {
+    /// UnaryExpression <- UnaryOperator? PrimaryExpression
+    /// UnaryOperator <- '-' / '!'
+    fn parse_unary_expression(self: *AstGen) ParseError!Node {
         const unary_tag: Node.Tag = switch (self.current_tag()) {
-            .minus => .neg,
-            .bang => .inv,
+            .minus => .negation,
+            .bang => .inversion,
             else => return try self.parse_primary_expression()
         };
 
-        const unary_token = self.next_token();
+        const unary_cursor = self.next_cursor();
         const expression = try self.parse_primary_expression();
+        const rhs = try self.add_node(expression);
 
         return .{
             .tag = unary_tag,
-            .token = unary_token,
-            .operands = .{ .lhs = try self.add_node(expression) } };
+            .token = unary_cursor,
+            .operands = .{ .lhs = rhs } };
     }
 
-    // PrimaryExpression <-
-    //          GroupedExpression /
-    //          Integer /
-    //          Identifier /
-    //          String /
-    //          Character /
-    //          Reference /
-    //          PseudoOpcode /
-    //          ReservedArgument
-    // GroupedExpression <- '(' Expression ')'
-    // Integer <- Decimal / Binary / Hexadecimal
-    // Decimal <- [0-9] [0-9]*
-    // Binary <- '0b' [01] [01]*
-    // Hexadecimal <- '0x' [0-9a-fA-F] [0-9a-fA-F]*
-    // Identifier <- [@a-zA-Z] [a-zA-Z0-9]*
-    // Character <- '\'' . '\''
-    // ReservedArgument <- 'ra' / 'rb' / 'rc' / 'rd' / 'rx' / 'ry' /
-    //     'rz' / 's' / 'ns' / 'z' / 'nz' / 'c' / 'nc' / 'u' / 'nu' /
-    //     'sf' / 'sp' / 'xy'
-    fn parse_primary_expression(self: *AstGen) TreeError!Node {
+    /// PrimaryExpression <-
+    ///             GroupedExpression /
+    ///             Reference /
+    ///             Integer /
+    ///             Chararcter /
+    ///             String /
+    ///             Identifier /
+    ///             Opcode /
+    ///             Argument
+    /// GroupedExpression <- LParan Expression RParan
+    /// Integer <- Decimal / Binary / Hexadecimal
+    /// Decimal <- [0-9]+
+    /// Binary <- '0b' [01]+
+    /// Hexadecimal <- '0x' [0-9A-F]+
+    /// Character <- '\'' . '\''
+    /// Identifier <- '@'? [a-zA-Z_]+
+    /// Argument <- ...
+    fn parse_primary_expression(self: *AstGen) ParseError!Node {
         const expression_tag: Node.Tag = switch (self.current_tag()) {
-            .identifier => .identifier,
             .numeric_literal => .integer,
-            .char_literal => .char,
-            .pseudo_instruction,
-            .reserved_argument => .argument,
+            .char_literal => .character,
+            .identifier => .identifier,
+            .instruction, .argument => .argument,
 
+            .dollar,
             .reference_label => return try self.parse_reference_expression(),
             .string_literal => return try self.parse_string_expression(),
 
             .l_paran => {
-                _ = self.next_token();
+                self.advance();
                 const paranthesis = try self.parse_expression();
-                _ = try self.harshly_eat_token(.r_paran);
+                _ = try self.eat(.r_paran, .err);
                 return paranthesis;
             },
 
             else => {
-                try self.add_error_arg(error.Expected, Token.string("an expression"));
-                _ = self.next_token();
-                return .{
-                    .tag = .identifier,
-                    .token = Null,
-                    .operands = .{} };
+                try self.add_error(error.Expected, "an expression");
+                self.advance();
+                return .none;
             }
         };
 
         return .{
             .tag = expression_tag,
-            .token = self.next_token(),
-            .operands = .{} };
+            .token = self.next_cursor(),
+            .operands = .none };
     }
 
-    // Reference <- Dot Identifier (Apostrophe ReferenceSelector)?
-    // ReferenceSelector <- 'l' / 'h'
-    fn parse_reference_expression(self: *AstGen) TreeError!Node {
-        std.debug.assert(self.current_tag() == .reference_label);
-        const reference_token = self.next_token();
+    /// Reference <- (ReferenceLabel / CurrentAddress) (Apostrophe AddressModifier)?
+    /// ReferenceLabel <- Dot Identifier
+    /// CurrentAddress <- '$'
+    /// AddressModifier <- 'l' / 'h'
+    fn parse_reference_expression(self: *AstGen) ParseError!Node {
+        const hosted_tag = self.current_tag();
+        std.debug.assert(hosted_tag == .reference_label or hosted_tag == .dollar);
+        const reference_cursor = self.next_cursor();
 
-        const modifier = if (self.eat_token(.modifier)) |modifier_token|
-            try self.add_node(.{ .tag = .modifier, .token = modifier_token, .operands = .{} }) else
+        const modifier = if (try self.eat(.modifier, .silent)) |modifier_cursor|
+            try self.add_node(.{ .tag = .modifier, .token = modifier_cursor, .operands = .none }) else
             Null;
         return .{
             .tag = .reference,
-            .token = reference_token,
+            .token = reference_cursor,
             .operands = .{ .lhs = modifier } };
     }
 
-    // String <- '"' .* '"' Integer?
-    fn parse_string_expression(self: *AstGen) TreeError!Node {
+    /// String <- '"' .* '"' Integer?
+    fn parse_string_expression(self: *AstGen) ParseError!Node {
         std.debug.assert(self.current_tag() == .string_literal);
-        const string_token = self.next_token();
+        const string_cursor = self.next_cursor();
 
-        const sentinel = if (self.eat_token(.numeric_literal)) |numeric_token|
-            try self.add_node(.{ .tag = .integer, .token = numeric_token, .operands = .{} }) else
+        const sentinel = if (try self.eat(.numeric_literal, .silent)) |numeric_cursor|
+            try self.add_node(.{ .tag = .integer, .token = numeric_cursor, .operands = .{} }) else
             Null;
         return .{
             .tag = .string,
-            .token = string_token,
+            .token = string_cursor,
             .operands = .{ .lhs = sentinel } };
     }
 
-    // Opaque <- (Builtin / Instruction)*
-    fn parse_opaque(self: *AstGen) TreeError!Index {
-        const frame = self.mark_frame();
-        defer self.reset_frame(frame);
+    /// Opaque <- (Builtin / Instruction)*
+    fn parse_opaque(self: *AstGen) ParseError!Index {
+        const frame = self.create_list_frame();
+        defer self.pop_frame(frame);
 
-        while (true) {
-            switch (self.current_tag()) {
-                .builtin_align,
-                .builtin_define,
-                .builtin_linkinfo,
-                .builtin_region => {
-                    const builtin = try self.parse_builtin();
-                    try self.add_frame_node(builtin);
-                },
+        while (true) switch (self.current_tag()) {
+            .identifier,
+            .instruction => {
+                const instruction = try self.parse_instruction();
+                try self.add_frame_node(instruction);
+            },
 
-                .builtin_header,
-                .builtin_import => {
-                    try self.add_error(error.BuiltinRootLevel);
-                    // recover by parsing the rest so the Ast reports other
-                    // possible errors.
-                    const builtin = try self.parse_builtin();
-                    try self.add_frame_node(builtin);
-                },
+            .label,
+            .private_label => {
+                const instruction = try self.parse_labeled_instruction();
+                try self.add_frame_node(instruction);
+            },
 
-                .identifier,
-                .instruction,
-                .pseudo_instruction => {
-                    const instruction = try self.parse_instruction();
-                    try self.add_frame_node(instruction);
-                },
+            .eof,
+            .builtin_end,
+            .builtin_section,
+            .builtin_barrier => break,
 
-                .label,
-                .private_label => {
-                    const label = try self.parse_labeled_instruction();
-                    try self.add_frame_node(label);
-                },
+            .newline => self.advance(),
 
-                .unexpected_eof => {
-                    try self.add_error(error.UnexpectedEof);
-                    _ = self.next_token();
-                    break;
-                },
-
-                .eof,
-                .builtin_end,
-                .builtin_section,
-                .builtin_barrier => break,
-
-                .newline => _ = self.next_token(),
-
-                else => {
-                    try self.add_error(error.Unexpected);
-                    _ = self.next_token();
-                }
-            }
-        }
-
-        const range = try self.lower_frame_nodes(frame);
-        return try self.add_index_range(range);
-    }
-
-    // Instruction <- (Label Eol)* Label? AnyOpcode ArgumentList Eol
-    // AnyOpcode <- Opcode / PseudoOpcode / TypedOpcode
-    // Opcode <- 'ast'
-    // PseudoOpcode <- 'ascii' / 'i16' / 'i24' / 'i8' / 'u16' / 'u24' / 'u8'
-    // TypedOpcode <- 'reserve'
-    fn parse_instruction(self: *AstGen) TreeError!Node {
-        const instruction = self.next_token();
-
-        const composite = if (self.eat_token(.modifier)) |modifier| blk: {
-            const modifier_node = try self.add_node(.{
-                .tag = .modifier,
-                .token = modifier,
-                .operands = .{} });
-            const node = try self.add_node(.{
-                .tag = .composite,
-                .token = Null,
-                .operands = .{ .rhs = modifier_node } });
-            break :blk node;
-        } else Null;
-
-        const instruction_arguments = try self.parse_arguments();
-
-        return .{
-            .tag = .instruction,
-            .token = instruction,
-            .operands = .{ .lhs = instruction_arguments, .rhs = composite } };
-    }
-
-    // Label <- PublicLabel / PrivateLabel
-    // PublicLabel <- Identifier Colon
-    // PrivateLabel <- Dot Identifier Colon
-    fn parse_labeled_instruction(self: *AstGen) TreeError!Node {
-        const frame = self.mark_frame();
-        defer self.reset_frame(frame);
-
-        const instruction = loop: while (true) {
-            switch (self.current_tag()) {
-                .identifier,
-                .instruction,
-                .pseudo_instruction => {
-                    break :loop try self.parse_instruction();
-                },
-
-                .label,
-                .private_label => {
-                    try self.add_frame_node(.{
-                        .tag = .label,
-                        .token = self.next_token(),
-                        .operands = .{} });
-                },
-
-                .newline => _ = self.next_token(),
-
-                .eof,
-                .unexpected_eof => {
-                    try self.add_error(error.UnexpectedEof);
-                    break :loop Node {
-                        .tag = .instruction,
-                        .token = Null,
-                        .operands = .{} };
-                },
-
-                else => {
-                    try self.add_error_arg(error.Expected, Token.Tag.instruction);
-                    try self.add_node_notes(self.temporary.items[frame..]);
-
-                    const tag = self.current_tag();
-                    if (tag == .builtin_section or tag == .builtin_barrier or tag == .builtin_end)
-                        try self.add_error_arg(error.NoteUseTo, .{ "reserve [type] [len]", "occupy opaque space" })
-                    else if (tag.is_builtin())
-                        try self.add_error_arg(error.NoteGeneric, .{ "label cannot bind to builtin or opaque without assembletime-known size" });
-                    break :loop Node {
-                        .tag = .instruction,
-                        .token = Null,
-                        .operands = .{} };
-                }
+            else => |tag| if (tag.is_builtin()) {
+                const builtin = try self.parse_builtin();
+                try self.add_frame_node(builtin);
+            } else {
+                try self.add_error(error.Unexpected, .{});
+                self.advance();
             }
         };
 
-        const range = try self.lower_frame_nodes(frame);
-        const range_node = try self.add_index_range(range);
-        const modifier = if (instruction.operands.rhs != Null)
-            self.nodes.items[instruction.operands.rhs].operands.rhs else
-            Null;
-        const composite = try self.add_node(.{
-            .tag = .composite,
-            .token = Null,
-            .operands = .{ .lhs = range_node, .rhs = modifier } });
+        const container = try self.copy_frame_nodes(frame);
+        return try self.add_index_range(container);
+    }
+
+    /// Instruction <- Label? Opcode ArgumentList Eol
+    /// Opcode <- ...
+    fn parse_instruction(self: *AstGen) ParseError!Node {
+        const hosted_tag = self.current_tag();
+        std.debug.assert(hosted_tag == .identifier or hosted_tag == .instruction);
+
+        const instruction_cursor = self.next_cursor();
+        const arguments = try self.parse_arguments();
+        try self.expect_newline();
+
+        return .{
+            .tag = .instruction,
+            .token = instruction_cursor,
+            .operands = .{ .rhs = arguments } };
+    }
+
+    /// Label <- PublicLabel / PrivateLabel
+    /// PublicLabel <- Identifier Colon
+    /// PrivateLabel <- Dot Identifier Colon
+    fn parse_labeled_instruction(self: *AstGen) ParseError!Node {
+        const hosted_tag = self.current_tag();
+        std.debug.assert(hosted_tag == .label or hosted_tag == .private_label);
+
+        const label_cursor = self.next_cursor();
+
+        const label_node = try self.add_node(.{
+            .tag = .label,
+            .token = label_cursor,
+            .operands = .none });
+        const instruction = search: while (true) switch (self.current_tag()) {
+            .identifier,
+            .instruction => break :search try self.parse_instruction(),
+
+            .newline => self.advance(),
+
+            else => |tag| {
+                try self.add_error(error.Expected, Token.Tag.instruction);
+                try self.add_error(error.NoteDefinedHere, self.tokens[label_cursor]);
+
+                if (tag.is_builtin_section() or tag == .builtin_end)
+                    try self.add_error(error.Note, "use 'reserve <type>, <len>' to occupy opaque space")
+                else if (tag.is_builtin())
+                    try self.add_error(error.Note, "label cannot bind to builtin or opaque without assembletime-known size");
+                self.consume_line();
+                break :search Node.none;
+            }
+        };
+
         return .{
             .tag = .instruction,
             .token = instruction.token,
-            .operands = .{ .lhs = instruction.operands.lhs, .rhs = composite } };
+            .operands = .{ .lhs = label_node, .rhs = instruction.operands.rhs } };
     }
 
     // Dot <- '.'
@@ -870,212 +803,150 @@ const AstGen = struct {
 
 // Tests
 
-const options = @import("options");
-const AsmTokeniser = @import("AsmTokeniser.zig");
+const build_options = @import("options");
 
-const stderr = std.io
-    .getStdErr()
-    .writer();
+const TestBridge = struct {
 
-fn testAst(input: [:0]const u8) !AsmAst {
-    var tokeniser = AsmTokeniser.init(input);
-    const source = try Source.init(std.testing.allocator, &tokeniser);
-    return try AsmAst.init(std.testing.allocator, source);
-}
+    allocator: std.mem.Allocator,
+    errors: std.ArrayListUnmanaged(SourceLocation.Error) = .empty,
 
-fn testAstFree(ast: *AsmAst) void {
-    ast.deinit();
-    ast.source.deinit();
-}
-
-fn testAstGen(input: [:0]const u8) !void {
-    var ast = try testAst(input);
-    defer testAstFree(&ast);
-
-    if (options.dump) {
-        for (ast.nodes, 0..) |node, idx|
-            try stderr.print("{}: {s} {s}({}) lhs={} rhs={}\n", .{
-                idx,
-                @tagName(node.tag),
-                @tagName(ast.source.tokens[node.token].tag),
-                node.token,
-                node.operands.lhs,
-                node.operands.rhs });
-        try ast.dump(stderr);
-
-        const estimated_node_count = ast.source.tokens.len + 2;
-        try stderr.print("input len:            {} bytes ({}) (estimated={})\n", .{ ast.source.buffer.len, ast.source.tokens.len, input.len / 4 });
-        try stderr.print("ast memory consumed:  {} bytes ({})\n", .{ ast.nodes.len * @sizeOf(Node), ast.nodes.len });
-        try stderr.print("ast memory estimated: {} bytes ({})\n", .{ estimated_node_count * @sizeOf(Node), estimated_node_count });
+    pub fn deinit(self: *TestBridge) void {
+        for (self.errors.items) |err|
+            self.allocator.free(err.message);
+        self.errors.deinit(self.allocator);
     }
 
-    for (ast.errors) |err|
-        try err.write("test.s", input, stderr);
-    try std.testing.expect(ast.errors.len == 0);
-}
+    const astTable = AsmAst.Bridge.VTable {
+        .emit_error = emit_error
+    };
 
-fn testAstGenErr(input: [:0]const u8, errors: []const AstGen.ParseError) !void {
-    var ast = try testAst(input);
-    defer testAstFree(&ast);
-
-    var ast_errors = std.ArrayList(anyerror).init(std.testing.allocator);
-    defer ast_errors.deinit();
-    for (ast.errors) |err|
-        try ast_errors.append(err.id);
-    try std.testing.expectEqualSlices(anyerror, errors, ast_errors.items);
-}
-
-const ErrLine = struct { AstGen.ParseError, usize };
-
-fn testAstGenErrLine(input: [:0]const u8, errors: []const ErrLine) !void {
-    var ast = try testAst(input);
-    defer testAstFree(&ast);
-
-    if (options.dump)
-        for (ast.errors) |err|
-            try err.write("test.s", input, stderr);
-
-    try std.testing.expectEqual(errors.len, ast.errors.len);
-
-    for (errors, ast.errors) |expected_error, err| {
-        const line = if (err.location) |l| l.line else 0;
-        try std.testing.expectEqual(expected_error[0], err.id);
-        try std.testing.expectEqual(expected_error[1], line);
+    fn emit_error(context: *anyopaque, err: SourceLocation.Error) !void {
+        const self: *TestBridge = @alignCast(@ptrCast(context));
+        try self.errors.append(self.allocator, err);
     }
+
+    pub fn bridge(self: *TestBridge) Bridge {
+        return .{ .vtable = astTable, .context = self };
+    }
+};
+
+const stderr = std.io.getStdErr().writer();
+
+fn testAstGen(input: [:0]const u8, errors: []const AstGen.AstError) !void {
+    const source_location = SourceLocation {
+        .cwd = std.fs.cwd(),
+        .file_name = "foo.s",
+        .real_path = "Tests/foo.s",
+.buffer = input };
+    var bridge = TestBridge { .allocator = std.testing.allocator };
+    defer bridge.deinit();
+    var ast = try AsmAst.init(std.testing.allocator, &source_location, bridge.bridge());
+    defer ast.deinit(std.testing.allocator);
+
+    if (build_options.dump and errors.len == 0)
+        try ast.dump(std.testing.allocator, stderr);
+
+    if (errors.len != bridge.errors.items.len) {
+        for (bridge.errors.items) |err|
+            try err.write(stderr);
+    }
+
+    try std.testing.expectEqual(errors.len, bridge.errors.items.len);
+    for (errors, 0..) |err, i| try std.testing.expectEqual(err, bridge.errors.items[i].err);
 }
 
-test "format errors" {
-    try testAstGenErr("", &.{});
-    try testAstGenErr("/", &.{ error.UnexpectedEof });
-    try testAstGenErr("0xZZ", &.{ error.Unexpected });
-    try testAstGenErr("ast", &.{ error.RootLevelInstruction });
-    try testAstGenErr(".label:", &.{ error.RootLevelLabel });
-    try testAstGenErr("@end", &.{ error.ExtraEndScope });
+test "basic" {
+    try testAstGen("", &.{});
+    try testAstGen("/", &.{ error.Unexpected });
+    try testAstGen("0x00", &.{ error.Unexpected });
+    try testAstGen(".label:", &.{ error.RootLabel });
+    try testAstGen("@end", &.{ error.ExtraEndScope });
 }
 
-test "forbid instructions at top level" {
-    try testAstGenErr("ast", &.{ error.RootLevelInstruction });
-    try testAstGenErr("@section foo\nast", &.{});
-    try testAstGenErr("@header foo\nast\n@end", &.{});
+test "root instructions" {
+    try testAstGen("bkpt", &.{ error.RootInstruction });
+    try testAstGen("@section foo\nbkpt", &.{});
+    try testAstGen("@header foo\nbkpt\n@end", &.{});
 }
 
-test "error line number" {
-    try testAstGenErrLine(
-        \\
-        \\ascii "foo"
-        \\
-        \\@define(foo
-        \\@define foo)
-        \\
-        \\@section test
-        \\
-        \\            ast 0xZZ ; hmmmm
-        \\
-        \\            0x00
-        \\            ra
-    , &.{
-        .{ error.RootLevelInstruction, 2 },
-        .{ error.Expected, 4 },
-        .{ error.Expected, 4 },
-        .{ error.Expected, 5 },
-        .{ error.Expected, 9 },
-        .{ error.Unexpected, 11 },
-        .{ error.Unexpected, 12 }
-    });
-}
-
-test "errors with notes" {
-    try testAstGenErrLine(
-        \\@section test
-        \\            ast
-        \\label:
-        \\.label:     ast
-        \\
-        \\unused_lbl:
-        \\.unused_lbl:
-        \\.another_unused_lbl:
-        \\
-        \\@section test
-        \\          ast
-    , &.{
-        .{ error.Expected, 10 },
-        .{ error.NoteDefinedHere, 6 },
-        .{ error.NoteDefinedHere, 7 },
-        .{ error.NoteDefinedHere, 8 },
-        .{ error.NoteUseTo, 0 }
-    });
-
-    try testAstGenErrLine(
-        \\@section test
-        \\
-        \\unused_lbl:
-        \\
-        \\@align 16
-        \\          ast
-    , &.{
-        .{ error.Expected, 5 },
-        .{ error.NoteDefinedHere, 3 },
-        .{ error.NoteGeneric, 0 }
-    });
-
-    try testAstGenErrLine(
-        \\@section test
-        \\
-        \\unused_lbl:
-        \\
-        \\@region
-        \\          ast
-        \\@end
-    , &.{
-        .{ error.Expected, 5 },
-        .{ error.NoteDefinedHere, 3 },
-        .{ error.NoteGeneric, 0 }
-    });
-
-    try testAstGenErrLine(
-        \\@section test
-        \\
-        \\@region
-        \\          ast
-    , &.{
-        .{ error.Expected, 4 },
-        .{ error.NoteDefinedHere, 3 }
-    });
+test "builtins" {
+    try testAstGen("@align", &.{ error.RootBuiltin });
+    try testAstGen("@define", &.{});
+    try testAstGen("@define()", &.{});
+    try testAstGen("@define() foo", &.{});
+    try testAstGen("@define foo bar", &.{ error.Expected });
+    try testAstGen("@define foo, bar", &.{});
+    try testAstGen("@define(expose, \"Hello world\") foo, bar", &.{});
 }
 
 test "expressions" {
-    try testAstGen(
-        \\@section test
-        \\          ast ra
-        \\          ast ra + rb ; verified in semair
-        \\          ast ra + rb, ra
-        \\          ast -ra
-        \\          jmpr .label
-        \\          jmpr !0
-        \\          jmpr !(0 + 1)
-        \\          jmpr (.label - .label) lsh 2
-        \\          ascii "foo"
-        \\          ascii "foo" 0
-        \\          ascii "foo" 0 + 5 ; verified in semair
-    );
+    try testAstGen("@define foo, r1", &.{});
+    try testAstGen("@define foo, sp | zr", &.{});
+    try testAstGen("@define foo, 0b1111 & .label", &.{});
+    try testAstGen("@define foo, 5", &.{});
+    try testAstGen("@define foo, 5 + 3", &.{});
+    try testAstGen("@define foo, 5 + 3 << 8", &.{});
+    try testAstGen("@define foo, (5 + 3) << 8", &.{});
+    try testAstGen("@define foo, -5 + 3", &.{});
+    try testAstGen("@define foo, !5", &.{});
+    try testAstGen("@define foo, 5'l", &.{ error.Expected });
+    try testAstGen("@define foo, -5 3", &.{ error.Expected });
+    try testAstGen("@define foo, +3", &.{ error.Expected });
+    try testAstGen("@define foo, ($ - .label) << 2", &.{});
+    try testAstGen("@define foo, ($ - .label'u) << 2", &.{});
+    try testAstGen("@define foo, \"Hello world!\"", &.{});
+    try testAstGen("@define foo, \"Hello world!\" 1 + 2", &.{}); // string sentinel + integer
 }
 
-test "barriers" {
+test "labels" {
     try testAstGen(
-        \\@barrier ; verified in semair
-        \\@section test
-        \\          ast ra
-        \\@region 24
+        \\@section foo
+        \\.label:       kbpt
+    , &.{});
+
+    try testAstGen(
+        \\@section foo
+        \\.label:
+    , &.{
+        error.Expected,
+        error.NoteDefinedHere
+    });
+
+    try testAstGen(
+        \\@section foo
+        \\@region
+        \\              bkpt
+    , &.{
+        error.Expected,
+        error.NoteDefinedHere
+    });
+
+    try testAstGen(
+        \\@section foo
+        \\.label:
+        \\@define foo, bar
+    , &.{
+        error.Expected,
+        error.NoteDefinedHere,
+        error.Note
+    });
+}
+
+test "sections" {
+    try testAstGen(
+        \\@barrier ; verified in semanticair
+        \\@section foo
+        \\              bkpt
+        \\@region 32
         \\@end
         \\@barrier
-        \\          ast ra
-        \\@section test
-        \\          ast rb
-    );
+        \\@section bar
+        \\              bkpt
+    , &.{});
 
-    try testAstGenErr(
+    try testAstGen(
         \\@header foo
-        \\          @barrier
+        \\@barrier
         \\@end
     , &.{
         error.Expected,
@@ -1086,58 +957,20 @@ test "barriers" {
 
 test "full fledge" {
     try testAstGen(
+        \\
         \\// foo
         \\
-        \\@section foo, foo
-        \\@section(noelimination) bar
-        \\              ast' foo, bar
-        \\.label:
-        \\label:        ast bar
-    );
-
-    try testAstGen(
-        \\@section test
-        \\              reserve u24, 4
-        \\              ascii "foo bar roo" 0x00
-        \\@section test
-        \\              ast foo + -(bar - 5)
-        \\              ast foo + -5
-        \\              ast !0x00 - (foo)
-        \\@section test
-        \\              ast foo + 5 lsh 1       ; in (lhs=^binop rhs=binop) cases, lhs and lhs of binop should be evaluated first
-        \\              ast (foo + 5) lsh 1, ra
-        \\              ast .reference'u + 1
-        \\              ast
-        \\              ast 'A' + 5
-    );
-
-    try testAstGen(
+        \\@section foo
+        \\@section(noelimination) foo
+        \\@align 2
         \\
-        \\@import "awd/space @import test.s"
-        \\@define foo, bar
-        \\@define(expose) aaa
+        \\@define(expose) foo, 5 + 3
         \\
         \\@header Queue, type, len
         \\              @align 16
-        \\              reserve type, len
+        \\              reserve @type, @len
         \\@end
         \\
-        \\@section globals
-        \\
-        \\@define len, 24
-        \\.myqueue:     @Queue u16, @len ; custom type
-        \\
-        \\@region 32
-        \\              ascii "foo bar" 0x00
-        \\@end
-        \\
-        \\@section text
-        \\
-        \\main:
-        \\_start:       ast 0x00 + 0x00, 0x00
-        \\              ast' memory
-        \\              ast .myqueue'l + 4
-        \\@barrier
-        \\              @callable -1 + (1 lsh @len)
-    );
+        \\.queue:       @Queue u16, @foo
+    , &.{});
 }
