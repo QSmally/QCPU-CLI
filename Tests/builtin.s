@@ -31,9 +31,9 @@ _:                      jmpr .entrypoint
 @linkinfo(origin) root, 0x0800
 @linkinfo(align) text, 32
 
-@buildinfo foo, 1
+@buildinfo foo, bar, 34
 
-@define(expose, 5 + 3) bar, @foo * 5 + 5
+@define(expose) bar, @foo * 5 + 5
 @define roo, (@bar >> 8) * !3
 @define doo, -@roo
 @define zoo, "Hello world!" 1 + 2

@@ -4,6 +4,7 @@
 const std = @import("std");
 const SourceLocation = @import("SourceLocation.zig");
 const AsmAst = @import("AsmAst.zig");
+const AsmIr = @import("AsmIr.zig");
 const Token = @import("Token.zig");
 const Instruction = @import("Instruction.zig");
 const Section = @import("Section.zig");
@@ -13,35 +14,31 @@ const AsmSemanticAir = @This();
 allocator: std.mem.Allocator,
 arena: std.heap.ArenaAllocator,
 source_location: *const SourceLocation,
-/// Borrowed from AsmAst.
-tokens: []const Token,
-/// Borrowed from AsmAst.
-nodes: []const AsmAst.Node,
-sections: Section.Map,
-current_section: ?*Section,
-/// Semantic Analysis unit which instantiated and manages this unit.
-parent: ?*AsmSemanticAir,
-/// Emitting reference.
+tree: *const AsmAst,
+ir: *const AsmIr,
 bridge: Bridge,
 
-/// Borrows a list of tokens and nodes (from an Abstract Syntax Tree) and
-/// initialises a Semantic Analysis unit in its context.
+sections: Section.Map = .empty,
+current_section: ?*Section = null,
+/// Semantic Analysis unit which instantiated and manages this unit.
+parent: ?*AsmSemanticAir = null,
+
+/// Borrows the Abstract Syntax Tree and Intermediate Representation, and
+/// initialises a Semantic Analysis unit in its context. A specific
+/// `analyse_block` call must be done in order to add an analysed section.
 pub fn init(
     allocator: std.mem.Allocator,
     source_location: *const SourceLocation,
-    tokens: []const Token,
-    nodes: []const AsmAst.Node,
+    tree: *const AsmAst,
+    ir: *const AsmIr,
     bridge: Bridge
 ) AsmSemanticAir {
     return .{
         .allocator = allocator,
         .arena = std.heap.ArenaAllocator.init(allocator),
         .source_location = source_location,
-        .tokens = tokens,
-        .nodes = nodes,
-        .sections = .empty,
-        .current_section = null,
-        .parent = null,
+        .tree = tree,
+        .ir = ir,
         .bridge = bridge };
 }
 
@@ -54,23 +51,14 @@ pub fn dump(self: *AsmSemanticAir, _: std.mem.Allocator, writer: anytype) !void 
     _ = writer;
 }
 
-const Symbol = struct {
-
-    token: SourceLocation.Token,
-    name: []const u8,
-    the_type: union(enum) {
-        file
-    }
-};
-
 pub const Bridge = struct {
 
     const AllocatorError = std.mem.Allocator.Error;
-    const OpenError = std.fs.File.OpenError;
 
     pub const VTable = struct {
         emit_error: *const fn (*anyopaque, SourceLocation.Error) AllocatorError!void,
-        resolve: *const fn (*anyopaque, []const u8) (AllocatorError || OpenError)!?*AsmSemanticAir
+        file_evaluation_context: *const fn (*anyopaque, AsmIr.Index) AllocatorError!?*AsmSemanticAir,
+        ensure_block_analysis: *const fn (*anyopaque, AsmIr.Index, AsmIr.Index) AllocatorError!void
     };
 
     vtable: VTable,
@@ -80,8 +68,12 @@ pub const Bridge = struct {
         try self.vtable.emit_error(self.context, err);
     }
 
-    fn resolve(self: *Bridge, file_path: []const u8) !?*AsmSemanticAir {
-        try self.vtable.resolve(self.context, file_path);
+    fn file_evaluation_context(self: *Bridge, file_path: []const u8) !?*AsmSemanticAir {
+        return try self.vtable.file_evaluation_context(self.context, file_path);
+    }
+
+    fn ensure_block_analysis(self: *Bridge, index: AsmIr.Index, block_index: AsmIr.Index) !void {
+        try self.vtable.ensure_block_analysis(self.context, index, block_index);
     }
 };
 
@@ -152,12 +144,9 @@ inline fn astgen_failure() noreturn {
 
 const ParseError = std.mem.Allocator.Error;
 
-pub fn static_analysis(self: *AsmSemanticAir) ParseError!void {
+pub fn analyse_block(self: *AsmSemanticAir, block: AsmIr.Index) ParseError!void {
     _ = self;
-}
-
-pub fn semantic_analysis(self: *AsmSemanticAir) ParseError!void {
-    _ = self;
+    _ = block;
 }
 
 // Tests
@@ -177,7 +166,8 @@ const TestBridge = struct {
 
     const semaTable = Bridge.VTable {
         .emit_error = emit_error,
-        .resolve = resolve
+        .file_evaluation_context = file_evaluation_context,
+        .ensure_block_analysis = ensure_block_analysis
     };
 
     fn emit_error(context: *anyopaque, err: SourceLocation.Error) !void {
@@ -185,10 +175,16 @@ const TestBridge = struct {
         try self.errors.append(self.allocator, err);
     }
 
-    fn resolve(context: *anyopaque, file_path: []const u8) !?*AsmSemanticAir {
+    fn file_evaluation_context(context: *anyopaque, index: AsmIr.Index) !?*AsmSemanticAir {
         _ = context;
-        _ = file_path;
+        _ = index;
         return null;
+    }
+
+    fn ensure_block_analysis(context: *anyopaque, index: AsmIr.Index, block_index: AsmIr.Index) !void {
+        _ = context;
+        _ = index;
+        _ = block_index;
     }
 
     pub fn bridge(self: *TestBridge) Bridge {

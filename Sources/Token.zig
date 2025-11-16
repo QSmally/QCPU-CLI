@@ -75,24 +75,24 @@ pub const Tag = enum {
         };
     }
 
-    pub fn is_builtin_instruction(self: Tag) bool {
+    pub fn is_builtin_scoped(self: Tag) bool {
         return switch (self) {
             .builtin_barrier,
             .builtin_buildinfo,
             .builtin_define,
-            .builtin_else,
-            .builtin_end,
-            .builtin_entrypoint,
-            .builtin_err,
             .builtin_header,
-            .builtin_if,
             .builtin_import,
             .builtin_linkinfo,
-            .builtin_offset,
             .builtin_section => false,
 
             .builtin_align,
             .builtin_alignop,
+            .builtin_else,
+            .builtin_end,
+            .builtin_entrypoint,
+            .builtin_err,
+            .builtin_if,
+            .builtin_offset,
             .builtin_region => true,
 
             else => false

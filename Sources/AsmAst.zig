@@ -195,7 +195,15 @@ pub const Node = struct {
         /// token: the modifier
         modifier,
         /// token: the argument
-        argument
+        argument,
+
+        pub fn fmt(self: Tag) []const u8 {
+            return switch (self) {
+                .identifier => "an identifier",
+                .string => "a string",
+                else => @tagName(self)
+            };
+        }
     };
 
     pub const Operands = struct {
@@ -366,6 +374,7 @@ const AstGen = struct {
         RootInstruction,
         RootLabel,
         RootBuiltin,
+        NonRootBuiltin,
         ExtraEndScope,
         NoteDefinedHere,
         Note
@@ -386,6 +395,7 @@ const AstGen = struct {
             error.RootInstruction => .{ "instructions cannot be defined at the root level", .{} },
             error.RootLabel => .{ "labels cannot be declared at the root level", .{} },
             error.RootBuiltin => .{ "{s} cannot appear at the root level", .{ token.tag.fmt() } },
+            error.NonRootBuiltin => .{ "{s} must appear at the root level", .{ token.tag.fmt() } },
             error.ExtraEndScope => .{ "extra @end", .{} },
             error.NoteDefinedHere => .{ "{s} defined here", .{ argument.tag.fmt() } }, // argument = token
             error.Note => .{ "{s}", .{ argument } } // argument = message
@@ -451,7 +461,7 @@ const AstGen = struct {
             .eof => unreachable,
 
             else => |tag| if (tag.is_builtin()) {
-                if (tag.is_builtin_instruction())
+                if (tag.is_builtin_scoped())
                     try self.add_error(error.RootBuiltin, .{});
                 const builtin = try self.parse_builtin();
                 try self.add_frame_node(builtin);
@@ -548,7 +558,7 @@ const AstGen = struct {
                     .comma => self.advance(),
 
                     else => {
-                        try self.add_error(error.Expected, "an expression");
+                        try self.add_error(error.Expected, Token.Tag.comma);
                         self.advance();
                         break;
                     }
@@ -719,6 +729,11 @@ const AstGen = struct {
                 try self.add_frame_node(instruction);
             },
 
+            .builtin_import => {
+                try self.add_error(error.NonRootBuiltin, .{});
+                self.consume_line();
+            },
+
             .eof,
             .builtin_end,
             .builtin_section,
@@ -801,6 +816,34 @@ const AstGen = struct {
     // Eof <- '\0'
 };
 
+pub fn is_null_or(self: *const AsmAst, index: Index, tag: Node.Tag) bool {
+    return index == Null or self.nodes[index].tag == tag;
+}
+
+pub fn unwrap(self: *const AsmAst, index: Index) ?Node {
+    return if (index != Null)
+        self.nodes[index] else
+        null;
+}
+
+pub fn optional_range(self: *const AsmAst, index: Index) IndexRange {
+    return if (self.unwrap(index)) |node|
+        node.operands else
+        .none;
+}
+
+pub fn is_empty(operands: AsmAst.Node.Operands) bool {
+    return operands.lhs == operands.rhs;
+}
+
+pub inline fn assert(ok: bool) void {
+    if (!ok) failure();
+}
+
+pub inline fn failure() noreturn {
+    @panic("AstGen failed to comply to consumed assumption");
+}
+
 // Tests
 
 const build_options = @import("options");
@@ -835,9 +878,11 @@ const stderr = std.io.getStdErr().writer();
 fn testAstGen(input: [:0]const u8, errors: []const AstGen.AstError) !void {
     const source_location = SourceLocation {
         .cwd = std.fs.cwd(),
-        .file_name = "foo.s",
-        .real_path = "Tests/foo.s",
-.buffer = input };
+        .file_name = "AsmAst.zig",
+        .real_path = "Sources/AsmAst.zig",
+        .buffer = input,
+        .inode = undefined,
+        .size = undefined };
     var bridge = TestBridge { .allocator = std.testing.allocator };
     defer bridge.deinit();
     var ast = try AsmAst.init(std.testing.allocator, &source_location, bridge.bridge());
@@ -877,6 +922,17 @@ test "builtins" {
     try testAstGen("@define foo bar", &.{ error.Expected });
     try testAstGen("@define foo, bar", &.{});
     try testAstGen("@define(expose, \"Hello world\") foo, bar", &.{});
+}
+
+test "root-only builtins" {
+    try testAstGen("@import foo, \"hello world!\"", &.{});
+
+    try testAstGen(
+        \\@section foo
+        \\@import foo, "hello world!"
+    , &.{
+        error.NonRootBuiltin
+    });
 }
 
 test "expressions" {
@@ -934,7 +990,7 @@ test "labels" {
 
 test "sections" {
     try testAstGen(
-        \\@barrier ; verified in semanticair
+        \\@barrier ; verified in IrGen
         \\@section foo
         \\              bkpt
         \\@region 32
@@ -953,6 +1009,29 @@ test "sections" {
         error.NoteDefinedHere,
         error.ExtraEndScope
     });
+
+    try testAstGen(
+        \\@entrypoint
+        \\@err "hello world!"
+        \\@if @foo
+        \\@offset q, b
+        \\@else
+        \\@end
+        \\@section foo
+    , &.{
+        error.RootBuiltin,
+        error.RootBuiltin,
+        error.RootBuiltin
+    });
+
+    try testAstGen(
+        \\@section foo
+        \\@entrypoint
+        \\@if @foo
+        \\@offset q, b
+        \\@err "hello world!"
+        \\@end
+    , &.{});
 }
 
 test "full fledge" {

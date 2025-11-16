@@ -85,6 +85,7 @@ pub fn main() !u8 {
     if (run_options.verbose) {
         run_options.doptions = true;    // dump options
         run_options.dast = true;        // dump abstract syntax tree
+        run_options.dir = true;         // dump intermediate representation
         run_options.dair = true;        // dump analysed intermediate representation
         // run_options.dlinker = true;     // dump linker sections and symbols
     }

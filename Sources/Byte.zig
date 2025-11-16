@@ -1,5 +1,5 @@
 
-const Instructino = @import("Instruction.zig");
+const Instruction = @import("Instruction.zig");
 
 const Byte = @This();
 

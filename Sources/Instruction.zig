@@ -53,19 +53,19 @@ pub const Operation = union(Tag) {
         };
     }
 
-    /// instr r1, r2
-    const RegReg2 = struct {
-        r1: Register,
-        r2: Register
-    };
+    // /// instr r1, r2
+    // const RegReg2 = struct {
+    //     r1: Register,
+    //     r2: Register
+    // };
 
-    /// instr rb, uimm
-    fn Memory2(comptime immediateType: ImmediateType) type {
-        return struct {
-            rb: Register,
-            imm: Immediate(immediateType, .unsigned)
-        };
-    }
+    // /// instr rb, uimm
+    // fn Memory2(comptime immediateType: ImmediateType) type {
+    //     return struct {
+    //         rb: Register,
+    //         imm: Immediate(immediateType, .unsigned)
+    //     };
+    // }
 
     add: RegReg,
     addc: RegReg,
@@ -116,39 +116,39 @@ pub const Operation = union(Tag) {
     xch: Memory(.b5),
     xchw: Memory(.b5a2),
 
-    bkpt,
-    mov: RegReg2,
-    @"test": Register,
-    neg: RegReg2,
-    cmp: RegReg2,
-    nop,
-    inc: Register,
-    dec: Register,
-    alloc: Immediate(.b8, .signed),
-    ip: Register,
-    clri,
-    sneg: RegReg2,
-    spos: RegReg2,
-    snez: RegReg2,
-    cut4: Register,
-    cut8: Register,
-    clrl: Register,
-    not: Register,
-    not8: Register,
-    clr: Register,
-    sysc: Immediate(.b8, .unsigned),
-    ret,
-    fence,
-    ftlb,
-    rfi,
-    wfi,
-    scf,
-    rscf,
-    //
-    //
-    prfd: Memory2(.b5a2),
-    mclr: Memory2(.b5),
-    mclrw: Memory2(.b5a2),
+    // bkpt,
+    // mov: RegReg2,
+    // @"test": Register,
+    // neg: RegReg2,
+    // cmp: RegReg2,
+    // nop,
+    // inc: Register,
+    // dec: Register,
+    // alloc: Immediate(.b8, .signed),
+    // ip: Register,
+    // clri,
+    // sneg: RegReg2,
+    // spos: RegReg2,
+    // snez: RegReg2,
+    // cut4: Register,
+    // cut8: Register,
+    // clrl: Register,
+    // not: Register,
+    // not8: Register,
+    // clr: Register,
+    // sysc: Immediate(.b8, .unsigned),
+    // ret,
+    // fence,
+    // ftlb,
+    // rfi,
+    // wfi,
+    // scf,
+    // rscf,
+    // //
+    // //
+    // prfd: Memory2(.b5a2),
+    // mclr: Memory2(.b5),
+    // mclrw: Memory2(.b5a2),
 
     u8: Immediate(.b8, .unsigned),
     u16: Immediate(.b16, .unsigned),
@@ -213,40 +213,40 @@ pub const Tag = enum {
     xch,
     xchw,
 
-    // Alias Instructions
-    bkpt,
-    mov,
-    @"test",
-    neg,
-    cmp,
-    nop,
-    inc,
-    dec,
-    alloc,
-    ip,
-    clri,
-    sneg,
-    spos,
-    snez,
-    cut4,
-    cut8,
-    clrl,
-    not,
-    not8,
-    clr,
-    sysc,
-    ret,
-    fence,
-    ftlb,
-    rfi,
-    wfi,
-    scf,
-    rscf,
-    //
-    //
-    prfd,
-    mclr,
-    mclrw,
+    // // Alias Instructions
+    // bkpt,
+    // mov,
+    // @"test",
+    // neg,
+    // cmp,
+    // nop,
+    // inc,
+    // dec,
+    // alloc,
+    // ip,
+    // clri,
+    // sneg,
+    // spos,
+    // snez,
+    // cut4,
+    // cut8,
+    // clrl,
+    // not,
+    // not8,
+    // clr,
+    // sysc,
+    // ret,
+    // fence,
+    // ftlb,
+    // rfi,
+    // wfi,
+    // scf,
+    // rscf,
+    // //
+    // //
+    // prfd,
+    // mclr,
+    // mclrw,
 
     // Pseudo Instructions
     u8,

@@ -8,21 +8,28 @@ cwd: std.fs.Dir,
 file_name: []const u8,
 real_path: []const u8,
 buffer: [:0]const u8,
+inode: std.fs.File.INode,
+size: u64,
 
 pub fn init(
     allocator: std.mem.Allocator,
     cwd: std.fs.Dir,
     host_path: []const u8,
     path: []const u8
-) !SourceLocation {
+) InitError!SourceLocation {
     const real_path = try std.fs.path.resolve(allocator, &.{ host_path, path });
     errdefer allocator.free(real_path);
+
+    const source = try get_source(allocator, cwd, real_path);
+    errdefer allocator.free(source.buffer);
 
     return .{
         .cwd = cwd,
         .file_name = std.fs.path.basename(path),
         .real_path = real_path,
-        .buffer = try get_source(allocator, cwd, real_path) };
+        .buffer = source.buffer,
+        .inode = source.inode,
+        .size = source.size };
 }
 
 pub fn init_from(
@@ -48,10 +55,24 @@ pub const Token = struct {
         return self.source_location == other.source_location and self.inner_token.location.eql(other.inner_token.location);
     }
 
-    pub fn slice(self: *const Token) []const u8 {
+    pub fn content(self: *const Token) []const u8 {
         return self.inner_token.location.slice(self.source_location.buffer);
     }
 };
+
+// TODO: use this
+pub fn default_token(self: *const SourceLocation) Token {
+    const zero_token: Token = .{
+        .tag = .identifier,
+        .location = .{ .start = 0, .end = 0 } };
+    return .{
+        .inner_token = zero_token,
+        .source_location = self };
+}
+
+pub fn content(self: *const SourceLocation, token: InnerToken) []const u8 {
+    return token.content_slice(self.buffer);
+}
 
 pub const Error = struct {
 
@@ -105,12 +126,27 @@ pub const Cursor = struct {
     line_end_cursor: usize
 };
 
-/// Memory returned is owned by caller.
+pub const InitError = error {
+    FileTooBig,
+    UnexpectedEndOfFile
+} ||
+    std.fs.File.OpenError ||
+    std.fs.File.StatError ||
+    std.fs.File.ReadError ||
+    std.mem.Allocator.Error;
+
+const Source = struct {
+    buffer: [:0]const u8,
+    inode: std.fs.File.INode,
+    size: u64
+};
+
+/// Memory (`buffer`) returned is owned by caller.
 fn get_source(
     allocator: std.mem.Allocator,
     cwd: std.fs.Dir,
     path: []const u8
-) ![:0]const u8 {
+) InitError!Source {
     var file = try cwd.openFile(path, .{});
     defer file.close();
     const stat = try file.stat();
@@ -122,7 +158,15 @@ fn get_source(
 
     if (try file.readAll(buffer) != stat.size)
         return error.UnexpectedEndOfFile;
-    return buffer;
+
+    return .{
+        .buffer = buffer,
+        .inode = stat.inode,
+        .size = stat.size };
+}
+
+pub fn eql(self: *const SourceLocation, other: *const SourceLocation) bool {
+    return self.inode == other.inode and self.size == other.size;
 }
 
 pub fn location(self: *const SourceLocation, token: InnerToken) Cursor {
@@ -166,7 +210,9 @@ const source_location = SourceLocation {
     .cwd = std.fs.cwd(),
     .file_name = "foo.s",
     .real_path = "Tests/foo.s",
-    .buffer = test_buffer };
+    .buffer = test_buffer,
+    .inode = undefined,
+    .size = undefined };
 
 const test_token = InnerToken {
     .tag = .argument,
@@ -182,7 +228,7 @@ test "location" {
         .line_cursor = 14,
         .line_end_cursor = 28 };
     try std.testing.expectEqual(expected_cursor, cursor);
-    try std.testing.expectEqualSlices(u8, "x1", token_a.slice());
+    try std.testing.expectEqualSlices(u8, "x1", token_a.content());
 }
 
 test "equality" {
@@ -190,7 +236,9 @@ test "equality" {
         .cwd = std.fs.cwd(),
         .file_name = "foo.s",
         .real_path = "Tests/foo.s",
-        .buffer = test_buffer };
+        .buffer = test_buffer,
+        .inode = undefined,
+        .size = undefined };
     const token_b = Token {
         .inner_token = test_token,
         .source_location = &other_source_location };
