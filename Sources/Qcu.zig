@@ -30,8 +30,8 @@ flags: FlagMap,
 options: Options,
 files: std.ArrayListUnmanaged(File) = .empty,
 work_queue: std.PriorityQueue(Job, void, Job.before),
-/// [file index] << 16 | [block index]
-semantically_analysed: std.AutoHashMapUnmanaged(u32, void) = .empty,
+/// [file index] << 32 | [block index]
+semantically_analysed: std.AutoHashMapUnmanaged(u64, void) = .empty,
 /// [file index]
 liveness_analysed: std.AutoHashMapUnmanaged(u32, void) = .empty,
 errors: std.ArrayListUnmanaged(SourceLocation.Error) = .empty,
@@ -48,7 +48,6 @@ pub fn init(
     options: Options
 ) !*Qcu {
     const qcu = try allocator.create(Qcu);
-    errdefer allocator.destroy(qcu);
 
     qcu.* = .{
         .allocator = allocator,
@@ -60,7 +59,7 @@ pub fn init(
     try qcu.files.ensureUnusedCapacity(allocator, file_paths.len);
 
     for (file_paths) |file_path|
-        qcu.files.appendAssumeCapacity(try File.init(qcu, cwd, file_path));
+        try File.add(qcu, cwd, file_path);
     try qcu.work_queue.add(.{ .link = qcu });
 
     return qcu;
@@ -83,21 +82,27 @@ const AsmFile = struct {
 
     qcu: *Qcu,
     source_location: SourceLocation,
+    index: AsmIr.Index,
     ast: AsmAst = undefined,
     ir: AsmIr = undefined,
     sema: AsmSemanticAir = undefined,
 
-    pub fn init(qcu: *Qcu, cwd: std.fs.Dir, file_path: []const u8) !*AsmFile {
+    pub fn add(qcu: *Qcu, cwd: std.fs.Dir, file_path: []const u8) !void {
         const file = try qcu.allocator.create(AsmFile);
         errdefer qcu.allocator.destroy(file);
+
+        try qcu.files.ensureUnusedCapacity(qcu.allocator, 1);
+        try qcu.work_queue.ensureUnusedCapacity(1);
 
         const source_location = try SourceLocation.init(qcu.allocator, cwd, ".", file_path);
         errdefer source_location.deinit(qcu.allocator);
 
         file.qcu = qcu;
         file.source_location = source_location;
-        try qcu.work_queue.add(.{ .static_analysis = file });
-        return file;
+        file.index = @intCast(qcu.files.items.len);
+
+        qcu.files.appendAssumeCapacity(.{ .@"asm" = file });
+        qcu.work_queue.add(.{ .static_analysis = file }) catch unreachable;
     }
 
     pub fn deinit(self: *AsmFile) void {
@@ -108,6 +113,36 @@ const AsmFile = struct {
     fn dump(self: *AsmFile, tag: []const u8, thing: anytype) !void {
         try stderr.print("{s} ({s}):\n", .{ tag, self.source_location.real_path });
         try thing.dump(self.qcu.allocator, stderr);
+    }
+
+    /// Any root section, noelimination or global noelimination section.
+    fn activate_initable_sections(self: *AsmFile) !void {
+        const root_section = self.qcu.options.rootsection orelse "root";
+
+        next: for (self.ir.blocks, 0..) |block, i| {
+            activate: {
+                if (self.qcu.options.noelimination)
+                    break :activate;
+                if (std.mem.eql(u8, block.name, root_section))
+                    break :activate;
+                switch (block.ty) {
+                    .section => |section| if (section.is_noelimination)
+                        break :activate else
+                        continue :next,
+                    .header => continue :next
+                }
+                comptime unreachable;
+            }
+
+            const block_index: AsmIr.Index = @intCast(i);
+            try self.qcu.work_queue.add(.{ .semantic_analysis = .{ self, block_index } });
+        }
+    }
+
+    fn block_id(self: *AsmFile, block: AsmIr.Index) u64 {
+        const file_index: u64 = @intCast(self.index);
+        const block_index: u64 = @intCast(block);
+        return (file_index << 32) | block_index;
     }
 
     // Assemble passes
@@ -139,30 +174,32 @@ const AsmFile = struct {
             &self.ast,
             &self.ir,
             .{ .vtable = semaTable, .context = self });
-        // if (root_section or noelimination) {
-        //     try qcu.work_queue.add(.{ .semantic_analysis = file });
-
-        //     if (qcu.options.noliveness)
-        //         qcu.work_queue.add(.{ .liveness = file }) catch unreachable;
-        // }
+        try self.activate_initable_sections();
     }
 
     /// Semantic analysis. Illegal to call when any related objects haven't yet
     /// performed static analysis prior to calling this. Semantic analysis
     /// only evaluates one block, which queues other analysis processes.
     pub fn semantic_analysis(self: *AsmFile, block: AsmIr.Index) !void {
+        const the_block_id = self.block_id(block);
+        if (self.qcu.semantically_analysed.contains(the_block_id)) return;
         try self.sema.analyse_block(block);
 
         if (self.qcu.options.dair)
             try self.dump("AIR", &self.sema);
         if (self.qcu.errors.items.len > 0)
             return error.SemanticAnalysis;
+
+        try self.qcu.semantically_analysed.put(self.qcu.allocator, the_block_id, {});
     }
 
     /// Liveness pass. Illegal to call when the file isn't semantically
     /// analysed yet.
     pub fn liveness(self: *AsmFile) !void {
-        _ = self;
+        if (self.qcu.liveness_analysed.contains(self.index)) return;
+        // TODO: liveness
+
+        try self.qcu.liveness_analysed.put(self.qcu.allocator, self.index, {});
     }
 
     // Interfaces
@@ -188,7 +225,7 @@ const AsmFile = struct {
         try self.qcu.errors.append(self.qcu.allocator, err);
     }
 
-    fn flag(context: *anyopaque, name: []const u8) ?isize {
+    fn flag(context: *anyopaque, name: []const u8) ?i32 {
         const self: *AsmFile = @alignCast(@ptrCast(context));
         _ = self;
         _ = name;
@@ -223,6 +260,7 @@ const AsmFile = struct {
 
         file.qcu = self.qcu;
         file.source_location = source_location;
+        file.index = @intCast(self.qcu.files.items.len);
 
         errdefer comptime unreachable;
         const file_index: AsmIr.Index = @intCast(self.qcu.files.items.len);
@@ -241,9 +279,14 @@ const AsmFile = struct {
 
     fn ensure_block_analysis(context: *anyopaque, index: AsmIr.Index, block_index: AsmIr.Index) !void {
         const self: *AsmFile = @alignCast(@ptrCast(context));
-        _ = self;
-        _ = index;
-        _ = block_index;
+        const file = self.qcu.files.items[index];
+
+        switch (file) {
+            .@"asm" => |asm_file| {
+                const job: Job = .{ .semantic_analysis = .{ asm_file, block_index } };
+                try self.qcu.work_queue.add(job);
+            }
+        }
     }
 };
 
@@ -252,11 +295,11 @@ const File = union(enum) {
     @"asm": *AsmFile,
     // bin: *BinFile,
 
-    pub fn init(qcu: *Qcu, cwd: std.fs.Dir, file_path: []const u8) !File {
+    pub fn add(qcu: *Qcu, cwd: std.fs.Dir, file_path: []const u8) !void {
         const extension = std.fs.path.extension(file_path);
 
         if (std.mem.eql(u8, extension, ".s"))
-            return .{ .@"asm" = try AsmFile.init(qcu, cwd, file_path) };
+            return try AsmFile.add(qcu, cwd, file_path);
         return error.FileTypeNotSupported;
     }
 
@@ -304,7 +347,9 @@ pub const Options = struct {
     dast: bool = false,
     dir: bool = false,
     dair: bool = false,
-    noliveness: bool = false
+    noliveness: bool = false,
+    noelimination: bool = false,
+    rootsection: ?[]const u8 = null
 };
 
 const stderr = std.io.getStdErr().writer();

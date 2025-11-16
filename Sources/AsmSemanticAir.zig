@@ -77,14 +77,17 @@ pub const Bridge = struct {
     }
 };
 
-pub const SemanticError = error {
-    Expected
+pub const Error = error {
+    Expected,
+    NoteCalledFromHere,
+    NoteDefinedHere,
+    Note
 };
 
 fn add_error(
     self: *AsmSemanticAir,
-    token: SourceLocation.Token,
-    comptime err: SemanticError,
+    token: Token,
+    comptime err: Error,
     comptime format: []const u8,
     arguments: anytype
 ) !void {
@@ -93,60 +96,28 @@ fn add_error(
     const message = try std.fmt.allocPrint(self.allocator, format, arguments);
     errdefer self.allocator.free(message);
 
-    try self.bridge.emit_error(.{
-        .err = err,
-        .token = token.inner_token,
-        .source_location = token.source_location,
-        .is_note = false,
-        .is_preview = true,
-        .message = message });
-}
-
-pub const SemanticNote = error {
-    NoteDefinedHere,
-    NoteCalledFromHere
-};
-
-fn add_note(
-    self: *AsmSemanticAir,
-    token: SourceLocation.Token,
-    comptime err: SemanticNote,
-    comptime format: []const u8,
-    arguments: anytype
-) !void {
-    @branchHint(.cold);
-
-    const message = try std.fmt.allocPrint(self.allocator, format, arguments);
-    errdefer self.allocator.free(message);
-
-    const is_preview = switch (err) {
-        else => true
+    const is_note = switch (err) {
+        error.NoteCalledFromHere,
+        error.NoteDefinedHere,
+        error.Note => true,
+        else => false
     };
 
     try self.bridge.emit_error(.{
         .err = err,
-        .token = token.inner_token,
-        .source_location = token.source_location,
-        .is_note = true,
-        .is_preview = is_preview,
+        .token = token,
+        .source_location = self.source_location,
+        .is_note = is_note,
+        .is_preview = err != error.Note,
         .message = message });
-}
-
-pub const Error = SemanticError || SemanticNote;
-
-inline fn astgen_assert(ok: bool) void {
-    if (!ok) astgen_failure();
-}
-
-inline fn astgen_failure() noreturn {
-    @panic("AstGen failed to comply to AsmSemanticAir assumption");
 }
 
 const ParseError = std.mem.Allocator.Error;
 
 pub fn analyse_block(self: *AsmSemanticAir, block: AsmIr.Index) ParseError!void {
-    _ = self;
-    _ = block;
+    const section = self.ir.blocks[block];
+    std.log.debug("analyse_block({s}, {s}({}))", .{ self.source_location.file_name, section.name, block });
+    // try self.bridge.ensure_block_analysis(0, 2);
 }
 
 // Tests

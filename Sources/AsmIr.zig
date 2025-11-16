@@ -41,6 +41,8 @@ pub fn deinit(self: *AsmIr, allocator: std.mem.Allocator) void {
     for (self.blocks) |block|
         block.deinit(allocator);
     allocator.free(self.blocks);
+    for (self.link_info) |*info|
+        info.deinit(allocator);
     allocator.free(self.link_info);
     self.symbols.deinit(allocator);
 }
@@ -88,7 +90,7 @@ pub const Bridge = struct {
 
     pub const VTable = struct {
         emit_error: *const fn (*anyopaque, SourceLocation.Error) AllocatorError!void,
-        flag: *const fn (*anyopaque, []const u8) ?isize,
+        flag: *const fn (*anyopaque, []const u8) ?i32,
         import: *const fn (*anyopaque, []const u8) ImportError!Index
     };
 
@@ -96,7 +98,7 @@ pub const Bridge = struct {
         return try self.vtable.emit_error(self.context, err);
     }
 
-    fn flag(self: *Bridge, name: []const u8) ?isize {
+    fn flag(self: *Bridge, name: []const u8) ?i32 {
         return self.vtable.flag(self.context, name);
     }
 
@@ -107,22 +109,7 @@ pub const Bridge = struct {
 
 pub const Macro = union(enum) {
     expression: AsmAst.Index,
-    static: isize
-};
-
-pub const BlockRef = struct {
-    block: Index,
-    index: Index
-};
-
-pub const AddressBaseOffset = struct {
-    block: Index,
-    addresses_start: Index,
-    addresses_end: Index
-};
-
-pub const Import = struct {
-    qcu: ?Index
+    static: i32
 };
 
 pub const Symbol = struct {
@@ -130,6 +117,26 @@ pub const Symbol = struct {
     token: Token,
     ty: Type,
     is_public: bool,
+
+    pub const BlockRef = struct {
+        block: Index,
+        index: Index
+    };
+
+    pub const AddressBaseOffset = struct {
+        block: Index,
+        addresses_start: Index,
+        addresses_end: Index
+    };
+
+    pub const LinkInfoReference = struct {
+        link_info: Index,
+        ty: enum { virt, phys, len }
+    };
+
+    pub const Import = struct {
+        qcu: ?Index
+    };
 
     pub const Type = union(enum) {
         /// Top-level macro.
@@ -142,7 +149,7 @@ pub const Symbol = struct {
         header: Index,
         /// A label defined within a @section or @header.
         label: BlockRef,
-        linkinfo_label: Index,
+        linkinfo_ref: LinkInfoReference,
         /// A base offset defined within a @section or @header.
         base_offset: AddressBaseOffset,
         import_namespace: Import
@@ -154,6 +161,7 @@ pub const Index = u32;
 pub const Address = struct {
 
     index: Index,
+    cond_reason: CondReason, // not to detect conditional reason, but for token
     ty: Type,
 
     pub const Type = union(enum) {
@@ -162,23 +170,65 @@ pub const Address = struct {
     };
 };
 
+pub const CondReason = union(enum) {
+    none,
+    assembletime_cond: Token
+};
+
 pub const LinkInfo = struct {
 
     token: Token,
     ty: Type,
 
-    pub const MemAddress = u32;
-
     pub const SectionPlacement = struct {
-        section: []const u8,
-        unit: MemAddress
+
+        section: []const u8,         // .section (virtual)
+        ld_phys_label: []const u8,   // .physical_section
+        ld_sections_len: []const u8, // @section_len
+        expression: AsmAst.Index,
+
+        pub fn init(
+            allocator: std.mem.Allocator,
+            section: []const u8,
+            expression: AsmAst.Index
+        ) !SectionPlacement {
+            const ld_phys_label = try std.fmt.allocPrint(allocator, "physical_{s}", .{ section });
+            errdefer allocator.free(ld_phys_label);
+
+            const ld_sections_len = try std.fmt.allocPrint(allocator, "{s}_len", .{ section });
+            errdefer allocator.free(ld_sections_len);
+
+            return .{
+                .section = section,
+                .ld_phys_label = ld_phys_label,
+                .ld_sections_len = ld_sections_len,
+                .expression = expression };
+        }
+
+        pub fn deinit(self: *const SectionPlacement, allocator: std.mem.Allocator) void {
+            allocator.free(self.ld_phys_label);
+            allocator.free(self.ld_sections_len);
+        }
     };
 
-    pub const Type = union(enum) {
-        phys: MemAddress,
+    pub const Tag = enum {
+        phys,
+        origin,
+        @"align"
+    };
+
+    pub const Type = union(Tag) {
+        phys: AsmAst.Index,
         origin: SectionPlacement,
         @"align": SectionPlacement
     };
+
+    pub fn deinit(self: *const LinkInfo, allocator: std.mem.Allocator) void {
+        switch (self.ty) {
+            .origin, .@"align" => |*placement| placement.deinit(allocator),
+            .phys => {}
+        }
+    }
 };
 
 pub const Block = struct {
@@ -189,6 +239,7 @@ pub const Block = struct {
     ty: Type,
     /// Public labels, private labels and offsets defined within this block.
     addresses: std.ArrayListUnmanaged(Address) = .empty,
+    scratch_addresses: std.ArrayListUnmanaged(ScratchAddress) = .empty,
     /// Macro @define or @buildinfo which are specific for this block.
     macros: std.ArrayListUnmanaged(Macro) = .empty,
     content: std.ArrayListUnmanaged(Ir) = .empty,
@@ -199,6 +250,13 @@ pub const Block = struct {
             is_noelimination: bool
         },
         header: AsmAst.IndexRange
+    };
+
+    pub const ScratchAddress = struct {
+        namespace_token: Token,
+        address: Address,
+        is_public: bool,
+        is_analysed: bool = false
     };
 
     pub fn init(
@@ -219,6 +277,8 @@ pub const Block = struct {
 
     pub fn deinit(self: *Block, allocator: std.mem.Allocator) void {
         self.addresses.deinit(allocator);
+        std.debug.assert(self.scratch_addresses.items.len == 0);
+        self.scratch_addresses.deinit(allocator);
         self.macros.deinit(allocator);
         self.content.deinit(allocator);
         allocator.destroy(self);
@@ -229,6 +289,17 @@ pub const Block = struct {
             .section => "@section",
             .header => "@header"
         };
+    }
+
+    pub fn add_len(self: *Block, begin_index: Index) void {
+        const end_index: Index = @intCast(self.content.items.len);
+        const len = end_index - begin_index - 1; // exclusive
+
+        switch (self.content.items[begin_index].ty) {
+            inline .@"if", .region => |*scope| scope.body_len = len,
+            .@"else" => |*scope| scope.* = len,
+            else => unreachable
+        }
     }
 };
 
@@ -250,14 +321,14 @@ pub const Ir = struct {
         },
         header: AsmAst.IndexRange,
         @"if": struct {
-            condition: AsmAst.Index,
-            body_len: AsmAst.Index,
-            else_len: AsmAst.Index
+            expression: AsmAst.Index,
+            body_len: AsmAst.Index, // offset
         },
+        @"else": AsmAst.Index, // offset
         instruction: AsmAst.IndexRange,
         region: struct {
-            expression: AsmAst,
-            body_len: AsmAst.Index
+            expression: AsmAst.Index,
+            body_len: AsmAst.Index // offset
         }
     };
 };
@@ -361,6 +432,7 @@ const IrGen = struct {
 
     blocks: std.ArrayListUnmanaged(*Block) = .empty,
     link_info: std.ArrayListUnmanaged(LinkInfo) = .empty,
+    link_info_sections: std.StringHashMapUnmanaged(Token) = .empty,
     symbols: std.StringHashMapUnmanaged(Symbol) = .empty,
     imports: std.AutoHashMapUnmanaged(AsmIr.Index, Token) = .empty,
     current_block_idx: ?Index = null,
@@ -384,6 +456,7 @@ const IrGen = struct {
     pub fn deinit(self: *IrGen) void {
         self.blocks.deinit(self.allocator);
         self.link_info.deinit(self.allocator);
+        self.link_info_sections.deinit(self.allocator);
         self.imports.deinit(self.allocator);
     }
 
@@ -391,6 +464,8 @@ const IrGen = struct {
     pub fn destroy(self: *IrGen) void {
         for (self.blocks.items) |block|
             block.deinit(self.allocator);
+        for (self.link_info.items) |*info|
+            info.deinit(self.allocator);
         self.symbols.deinit(self.allocator);
     }
 
@@ -406,6 +481,8 @@ const IrGen = struct {
         SectionOnly,
         NotConditional,
         FirstEntrypoint,
+        Inconsistent,
+        DuplicateSectionInfo,
         NoteDefinedHere,
         NoteReason,
         Note
@@ -460,7 +537,7 @@ const IrGen = struct {
                 .builtin_buildinfo => try self.emit_build_info(builtin),
                 .builtin_define => try self.emit_define(builtin),
                 .builtin_import => try self.emit_import(builtin),
-                .builtin_linkinfo => @panic("TODO linkinfo"),
+                .builtin_linkinfo => try self.emit_link_info(builtin),
 
                 // nothing to do at root
                 .builtin_align,
@@ -534,6 +611,8 @@ const IrGen = struct {
 
             inline for (@typeInfo(T).@"struct".fields) |field| {
                 if (std.mem.eql(u8, field.name, option)) {
+                    if (@field(options, field.name))
+                        try self.add_error(error.InvalidOption, token, "duplicate option '{s}'", .{ option });
                     @field(options, field.name) = true;
                     continue :options;
                 }
@@ -599,6 +678,7 @@ const IrGen = struct {
 
         try self.add_block(name_token, name, ty);
         try self.lower_opaque_tree(builtin.payload, .none);
+        try self.flush_scratch_addresses(self.current_block_idx.?);
     }
 
     fn lower_copy_block(self: *IrGen, builtin: Builtin) !void {
@@ -617,6 +697,7 @@ const IrGen = struct {
 
         try self.add_block(builtin.token, existing_block.name, ty);
         try self.lower_opaque_tree(builtin.payload, .none);
+        try self.flush_scratch_addresses(self.current_block_idx.?);
     }
 
     const MacroOptions = struct {
@@ -643,7 +724,7 @@ const IrGen = struct {
             const argument_token = self.tree.tokens[argument_node.token];
             const argument_name = self.source_location.content(argument_token);
             const block = self.current_block().?;
-            const macro: BlockRef = .{
+            const macro: Symbol.BlockRef = .{
                 .block = block_index,
                 .index = @intCast(block.macros.items.len) };
             try block.macros.append(self.allocator, .{ .static = 0 });
@@ -658,16 +739,107 @@ const IrGen = struct {
             .ty = .{ .header = block_index },
             .is_public = options.expose });
         try self.lower_opaque_tree(builtin.payload, .none);
+        try self.flush_scratch_addresses(block_index);
         self.current_block_idx = self.current_section_idx; // restore last block
     }
 
-    const EvalReason = union(enum) {
-        none,
-        assembletime_cond: Token
+    const LinkInfoOptions = packed struct {
+
+        const Bits = @typeInfo(LinkInfoOptions).@"struct".backing_integer.?;
+
+        phys: bool = false,
+        origin: bool = false,
+        @"align": bool = false,
+        expose: bool = false,
+
+        pub fn instructions(self: LinkInfoOptions) usize {
+            var instructions_len = @popCount(@as(Bits, @bitCast(self)));
+            if (self.expose) instructions_len -= 1; // expose is not a link instruction
+            return instructions_len;
+        }
+
+        pub fn link_info(self: LinkInfoOptions) LinkInfo.Tag {
+            if (self.phys) return .phys;
+            if (self.origin) return .origin;
+            if (self.@"align") return .@"align";
+            unreachable;
+        }
     };
 
-    fn lower_opaque_tree(self: *IrGen, range: AsmAst.IndexRange, eval_reason: EvalReason) ParseError!void {
-        for (range.lhs..range.rhs) |node_idx| {
+    fn emit_link_info(self: *IrGen, builtin: Builtin) !void {
+        std.debug.assert(builtin.token.tag == .builtin_linkinfo);
+
+        const options = try self.identifier_list(LinkInfoOptions, builtin.options, builtin.token);
+        const instructions_len = options.instructions();
+        var iterator = Iterator(IrGen).init(self, builtin.arguments);
+
+        if (instructions_len != 1)
+            return try self.add_error(error.Expected, builtin.token, "expected 1 link instruction, found {}", .{ instructions_len });
+        const ty = options.link_info();
+
+        switch (ty) {
+            .phys => {
+                if (options.expose)
+                    try self.add_error(error.InvalidOption, builtin.token, "'expose' is not valid for link instruction 'phys'", .{});
+                const expr_node = try iterator.expect_any(builtin.token) orelse return;
+                try iterator.expect_end();
+                try self.link_info.append(self.allocator, .{
+                    .token = builtin.token,
+                    .ty = .{ .phys = expr_node } });
+            },
+
+            .origin => try self.emit_link_info_placement("origin", builtin.token, &iterator, options.expose),
+            .@"align" => try self.emit_link_info_placement("align", builtin.token, &iterator, options.expose)
+        }
+    }
+
+    fn emit_link_info_placement(
+        self: *IrGen,
+        comptime union_type: []const u8,
+        token: Token,
+        iterator: *Iterator(IrGen),
+        expose: bool
+    ) !void {
+        const section_node = try iterator.expect(.identifier, token) orelse return;
+        const expr_node = try iterator.expect_any(token) orelse return;
+        try iterator.expect_end();
+
+        const section_token = self.tree.tokens[section_node.token];
+        const section = self.source_location.content(section_token);
+        const link_info_index: Index = @intCast(self.link_info.items.len);
+
+        if (self.link_info_sections.get(section)) |existing_token| {
+            try self.add_error(error.DuplicateSectionInfo, section_token, "section '{s}' placed multiple times", .{ section });
+            try self.add_error(error.NoteDefinedHere, existing_token, "previously placed here", .{});
+            return; // otherwise duplicate symbol errors will also occur
+        }
+
+        try self.link_info_sections.put(self.allocator, section, section_token);
+        try self.link_info.ensureUnusedCapacity(self.allocator, 1);
+
+        const placement = try LinkInfo.SectionPlacement.init(self.allocator, section, expr_node);
+
+        // this list now manages deinit for placement
+        self.link_info.appendAssumeCapacity(.{
+            .token = token,
+            .ty = @unionInit(LinkInfo.Type, union_type, placement) });
+
+        try self.add_symbol(placement.section, .{
+            .token = token,
+            .ty = .{ .linkinfo_ref = .{ .link_info = link_info_index, .ty = .virt } },
+            .is_public = expose });
+        try self.add_symbol(placement.ld_phys_label, .{
+            .token = token,
+            .ty = .{ .linkinfo_ref = .{ .link_info = link_info_index, .ty = .phys } },
+            .is_public = expose });
+        try self.add_symbol(placement.ld_sections_len, .{
+            .token = token,
+            .ty = .{ .linkinfo_ref = .{ .link_info = link_info_index, .ty = .len } },
+            .is_public = expose });
+    }
+
+    fn lower_opaque_tree(self: *IrGen, range: AsmAst.IndexRange, cond_reason: CondReason) ParseError!void {
+        blk: for (range.lhs..range.rhs) |node_idx| {
             const node = self.tree.nodes[node_idx];
 
             switch (node.tag) {
@@ -676,19 +848,48 @@ const IrGen = struct {
 
                     switch (builtin.token.tag) {
                         .builtin_align, .builtin_alignop => try self.emit_align(builtin),
-                        .builtin_else => {},
                         .builtin_err => try self.emit_assembletime_err(builtin),
-                        .builtin_if => {},
-                        .builtin_offset => {},
-                        .builtin_region => {}, // TODO this stuff
+                        .builtin_offset => try self.emit_scratch_offset(builtin, cond_reason),
+
+                        .builtin_region => {
+                            const block, const region_index = self.create_region(builtin) catch |err| switch (err) {
+                                error.AnalysisFail => continue :blk,
+                                else => |the_err| return the_err
+                            };
+                            try self.lower_opaque_tree(builtin.payload, cond_reason);
+                            block.add_len(region_index);
+                        },
+
+                        .builtin_if => {
+                            const new_cond_reason: CondReason = switch (cond_reason) {
+                                .none => .{ .assembletime_cond = builtin.token },
+                                .assembletime_cond => cond_reason
+                            };
+                            const block, const if_index = self.create_if_scope(builtin) catch |err| switch (err) {
+                                error.AnalysisFail => continue :blk,
+                                else => |the_err| return the_err
+                            };
+                            try self.lower_opaque_tree(builtin.payload, new_cond_reason);
+                            block.add_len(if_index);
+                        },
+
+                        .builtin_else => {
+                            const new_cond_reason: CondReason = switch (cond_reason) {
+                                .none => .{ .assembletime_cond = builtin.token },
+                                .assembletime_cond => cond_reason
+                            };
+                            const block, const else_index = try self.create_else_scope(builtin);
+                            try self.lower_opaque_tree(builtin.payload, new_cond_reason);
+                            block.add_len(else_index);
+                        },
 
                         // only valid in non-conditional contexts
                         .builtin_buildinfo => {
-                            try self.maybe_emit_conditional_error(eval_reason, builtin.token);
+                            try self.maybe_emit_conditional_error(cond_reason, builtin.token);
                             try self.emit_build_info(builtin);
                         },
                         .builtin_define => {
-                            try self.maybe_emit_conditional_error(eval_reason, builtin.token);
+                            try self.maybe_emit_conditional_error(cond_reason, builtin.token);
                             try self.emit_define(builtin);
                         },
 
@@ -702,9 +903,9 @@ const IrGen = struct {
                             try self.lower_header_block(builtin);
                         },
                         .builtin_linkinfo => {
-                            try self.maybe_emit_conditional_error(eval_reason, builtin.token);
+                            try self.maybe_emit_conditional_error(cond_reason, builtin.token);
                             try self.maybe_emit_header_error(builtin.token);
-                            @panic("TODO linkinfo");
+                            try self.emit_link_info(builtin);
                         },
 
                         // by convention, imports are always at root
@@ -721,7 +922,7 @@ const IrGen = struct {
                     }
                 },
 
-                .instruction => try self.emit_instruction(node),
+                .instruction => try self.emit_instruction(node, cond_reason),
 
                 // other tokens are illegal
                 else => AsmAst.failure()
@@ -729,13 +930,13 @@ const IrGen = struct {
         }
     }
 
-    fn maybe_emit_conditional_error(self: *IrGen, eval_reason: EvalReason, token: Token) !void {
-        if (eval_reason == .none) return;
-        try self.add_error(error.NotConditional, token, "unable to evaluate {s} at assemble-time", .{ token.tag.fmt() });
+    fn maybe_emit_conditional_error(self: *IrGen, cond_reason: CondReason, token: Token) !void {
+        if (cond_reason == .none) return;
+        try self.add_error(error.NotConditional, token, "unable to conditionally evaluate {s} at assemble-time", .{ token.tag.fmt() });
 
-        switch (eval_reason) {
-            .none => unreachable,
-            .assembletime_cond => |reason| try self.add_error(error.NoteReason, reason, "{s} forces conditional context", .{ reason.tag.fmt() })
+        switch (cond_reason) {
+            .none => unreachable, // returned above
+            .assembletime_cond => |reason| try self.add_error(error.NoteReason, reason, "{s} enters conditional context", .{ reason.tag.fmt() })
         }
     }
 
@@ -850,7 +1051,7 @@ const IrGen = struct {
         expose: bool
     ) !void {
         if (self.header()) |block| {
-            const outer_macro: BlockRef = .{
+            const outer_macro: Symbol.BlockRef = .{
                 .block = self.current_block_idx.?,
                 .index = @intCast(block.macros.items.len) };
             const symbol: Symbol = .{
@@ -868,7 +1069,7 @@ const IrGen = struct {
         }
     }
 
-    fn add_label(self: *IrGen, token: Token, instruction_index: Index) !void {
+    fn add_label(self: *IrGen, token: Token, instruction_index: Index, cond_reason: CondReason) !void {
         std.debug.assert(self.blocks.items.len > 0);
         const block = self.current_block().?;
         const block_index: Index = @intCast(self.current_block_idx.?);
@@ -876,9 +1077,10 @@ const IrGen = struct {
 
         try block.addresses.append(self.allocator, .{
             .index = instruction_index,
-            .ty = .label });
+            .ty = .label,
+            .cond_reason = cond_reason });
 
-        const label: BlockRef = .{
+        const label: Symbol.BlockRef = .{
             .block = block_index,
             .index = address_index };
         const expose = switch (token.tag) {
@@ -919,7 +1121,7 @@ const IrGen = struct {
         }
     }
 
-    fn emit_instruction(self: *IrGen, node: AsmAst.Node) !void {
+    fn emit_instruction(self: *IrGen, node: AsmAst.Node, cond_reason: CondReason) !void {
         std.debug.assert(node.tag == .instruction);
         AsmAst.assert(self.tree.is_null_or(node.operands.lhs, .label));
         AsmAst.assert(self.tree.is_null_or(node.operands.rhs, .container));
@@ -940,7 +1142,7 @@ const IrGen = struct {
             .ty = instruction });
         if (self.tree.unwrap(node.operands.lhs)) |label_node| {
             const label_token = self.tree.tokens[label_node.token];
-            try self.add_label(label_token, @intCast(instruction_index));
+            try self.add_label(label_token, @intCast(instruction_index), cond_reason);
         }
     }
 
@@ -1005,6 +1207,140 @@ const IrGen = struct {
             .token = builtin.token,
             .ty = ir_err });
     }
+
+    fn create_region(self: *IrGen, builtin: Builtin) !struct { *Block, Index } {
+        std.debug.assert(builtin.token.tag == .builtin_region);
+
+        _ = try self.identifier_list(struct {}, builtin.options, builtin.token);
+        var iterator = Iterator(IrGen).init(self, builtin.arguments);
+
+        const expr_node = try iterator.expect_any(builtin.token) orelse return error.AnalysisFail;
+        try iterator.expect_end();
+
+        const block = self.current_block().?;
+        const region_index: Index = @intCast(block.content.items.len);
+
+        const ir_region: Ir.Type = .{ .region = .{
+            .expression = expr_node,
+            .body_len = 0 } };
+        try block.content.append(self.allocator, .{
+            .token = builtin.token,
+            .ty = ir_region });
+        return .{ block, region_index };
+    }
+
+    fn create_if_scope(self: *IrGen, builtin: Builtin) !struct { *Block, Index } {
+        std.debug.assert(builtin.token.tag == .builtin_if);
+
+        _ = try self.identifier_list(struct {}, builtin.options, builtin.token);
+        var iterator = Iterator(IrGen).init(self, builtin.arguments);
+
+        const expr_node = try iterator.expect_any(builtin.token) orelse return error.AnalysisFail;
+        try iterator.expect_end();
+
+        const block = self.current_block().?;
+        const if_index: Index = @intCast(block.content.items.len);
+
+        const ir_if: Ir.Type = .{ .@"if" = .{
+            .expression = expr_node,
+            .body_len = 0 } };
+        try block.content.append(self.allocator, .{
+            .token = builtin.token,
+            .ty = ir_if });
+        return .{ block, if_index };
+    }
+
+    fn create_else_scope(self: *IrGen, builtin: Builtin) !struct { *Block, Index } {
+        std.debug.assert(builtin.token.tag == .builtin_else);
+
+        _ = try self.identifier_list(struct {}, builtin.options, builtin.token);
+        var iterator = Iterator(IrGen).init(self, builtin.arguments);
+        try iterator.expect_end();
+
+        const block = self.current_block().?;
+        const else_index: Index = @intCast(block.content.items.len);
+
+        try block.content.append(self.allocator, .{
+            .token = builtin.token,
+            .ty = .{ .@"else" = 0 } });
+        return .{ block, else_index };
+    }
+
+    fn emit_scratch_offset(self: *IrGen, builtin: Builtin, cond_reason: CondReason) !void {
+        std.debug.assert(builtin.token.tag == .builtin_offset);
+
+        const options = try self.identifier_list(MacroOptions, builtin.options, builtin.token);
+        var iterator = Iterator(IrGen).init(self, builtin.arguments);
+
+        const namespace_node = try iterator.expect(.identifier, builtin.token) orelse return;
+        const offset_node = try iterator.expect(.identifier, builtin.token) orelse return;
+        try iterator.expect_end();
+
+        const namespace_token = self.tree.tokens[namespace_node.token];
+        const offset_token = self.tree.tokens[offset_node.token];
+        const offset = self.source_location.content(offset_token);
+        const block = self.current_block().?;
+        const instruction_index: Index = @intCast(block.content.items.len);
+
+        const address: Address = .{
+            .index = instruction_index,
+            .cond_reason = cond_reason,
+            .ty = .{ .offset = offset } };
+        // insert at front so the first (addrbase) will be at the last position
+        try block.scratch_addresses.insert(self.allocator, 0, .{
+            .namespace_token = namespace_token,
+            .address = address,
+            .is_public = options.expose });
+    }
+
+    fn flush_scratch_addresses(self: *IrGen, block_index: Index) !void {
+        const block = self.blocks.items[block_index];
+        const base_offset = block.scratch_addresses.getLastOrNull() orelse return;
+        const namespace = self.source_location.content(base_offset.namespace_token);
+        const address_index: Index = @intCast(block.addresses.items.len);
+        var is_already_errored: bool = false;
+
+        if (base_offset.is_analysed) return;
+
+        for (block.scratch_addresses.items) |*offset| {
+            const offsets_namespace = self.source_location.content(offset.namespace_token);
+            if (!std.mem.eql(u8, namespace, offsets_namespace) or offset.is_analysed)
+                continue;
+            if (base_offset.is_public != offset.is_public) {
+                if (!is_already_errored) {
+                    try self.add_error(error.Inconsistent, offset.namespace_token, "inconsistent expose flag for addrbase namespace", .{});
+                    try self.add_error(error.NoteDefinedHere, base_offset.namespace_token, "not the same here", .{});
+                    is_already_errored = true;
+                } else {
+                    try self.add_error(error.NoteDefinedHere, offset.namespace_token, "like here", .{});
+                }
+            }
+            std.debug.assert(offset.address.ty == .offset);
+            try block.addresses.append(self.allocator, offset.address);
+            offset.is_analysed = true;
+        }
+
+        const end_index: Index = @intCast(block.addresses.items.len);
+
+        const addr_base_offset: Symbol.AddressBaseOffset = .{
+            .block = block_index,
+            .addresses_start = address_index,
+            .addresses_end = end_index };
+        const symbol: Symbol = .{
+            .token = base_offset.namespace_token,
+            .ty = .{ .base_offset = addr_base_offset },
+            .is_public = base_offset.is_public };
+        try self.add_symbol(namespace, symbol);
+
+        // next namespace
+        const analysed_index = block.scratch_addresses.items.len - 1;
+        std.debug.assert(block.scratch_addresses.items[analysed_index].is_analysed);
+        _ = block.scratch_addresses.swapRemove(analysed_index);
+        try self.flush_scratch_addresses(block_index);
+
+        // all done for this block
+        block.scratch_addresses.clearAndFree(self.allocator);
+    }
 };
 
 // Tests
@@ -1037,7 +1373,7 @@ const TestBridge = struct {
         try self.errors.append(self.allocator, err);
     }
 
-    fn flag(context: *anyopaque, name: []const u8) ?isize {
+    fn flag(context: *anyopaque, name: []const u8) ?i32 {
         _ = context;
         _ = name;
         return 0xEA;
@@ -1180,4 +1516,78 @@ test "assembletime err" {
     try testIrGen("@section foo\n@err \"hello world\"", &.{});
     try testIrGen("@section foo\n@err \"hello world\" 0", &.{ error.UselessSentinel });
     try testIrGen("@section foo\n@err \"hello world\", arg, arg", &.{});
+}
+
+test "if/else" {
+    try testIrGen("@section foo\n@if\n@end", &.{ error.Expected });
+    try testIrGen("@section foo\n@if 1\n@end", &.{});
+
+    try testIrGen(
+        \\@section foo
+        \\@if 1
+        \\bkpt
+        \\@end
+    , &.{});
+
+    try testIrGen(
+        \\@section foo
+        \\@if 0
+        \\bkpt
+        \\@else
+        \\@end
+    , &.{});
+
+    try testIrGen(
+        \\@section foo
+        \\@if 0
+        \\bkpt
+        \\@else foo
+        \\@end
+    , &.{
+        error.Unexpected,
+        error.Note
+    });
+}
+
+test "buildinfo" {
+    try testIrGen("@buildinfo", &.{ error.Expected });
+    try testIrGen("@buildinfo x, x, x, x", &.{ error.Unexpected, error.Note });
+    try testIrGen("@buildinfo foo, bar, 0", &.{});
+
+    try testIrGen(
+        \\@buildinfo foo, bar, 0
+        \\@define foo, 0
+    , &.{
+        error.DuplicateSymbol,
+        error.NoteDefinedHere
+    });
+}
+
+test "linkinfo" {
+    try testIrGen("@linkinfo", &.{ error.Expected });
+    try testIrGen("@linkinfo(expose)", &.{ error.Expected });
+    try testIrGen("@linkinfo(phys)", &.{ error.Expected });
+    try testIrGen("@linkinfo(phys) 0x0800", &.{});
+
+    try testIrGen(
+        \\@linkinfo(origin) foo, 0x0800
+        \\@linkinfo(align) foo, 256
+    , &.{
+        error.DuplicateSectionInfo,
+        error.NoteDefinedHere
+    });
+
+    try testIrGen(
+        \\@linkinfo(origin) foo, 0x0800
+        \\@define foo, @bar
+        \\@define physical_foo, @bar
+        \\@define foo_len, @bar
+    , &.{
+        error.DuplicateSymbol,
+        error.NoteDefinedHere,
+        error.DuplicateSymbol,
+        error.NoteDefinedHere,
+        error.DuplicateSymbol,
+        error.NoteDefinedHere
+    });
 }

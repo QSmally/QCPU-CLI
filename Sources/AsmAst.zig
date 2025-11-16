@@ -226,16 +226,14 @@ pub const Null = 0;
 pub const Index = u32;
 pub const IndexRange = Node.Operands;
 
-const NodeList = std.ArrayListUnmanaged(Node);
-
 /// Recursive-descent parser that generates the Abstract Syntax Tree.
 const AstGen = struct {
 
     allocator: std.mem.Allocator,
     source_location: *const SourceLocation,
     tokens: []const Token,
-    nodes: NodeList,
-    temporary: NodeList,
+    nodes: std.ArrayListUnmanaged(Node),
+    temporary: std.ArrayListUnmanaged(Node),
     bridge: Bridge,
     cursor: Index,
 
@@ -499,18 +497,23 @@ const AstGen = struct {
             // @sections aren't delimited by @end
             if (token.tag.is_builtin_section())
                 break :blk payload;
+            // it'll shit itself when @else is given out of context
+            const else_scope = token.tag == .builtin_if and self.current_tag() == .builtin_else;
+            const is_end = self.current_tag() == .builtin_end;
 
-            if (self.current_tag() != .builtin_end) {
+            if (!is_end and !else_scope) {
                 try self.add_error(error.Expected, Token.Tag.builtin_end);
                 try self.add_error(error.NoteDefinedHere, token);
             }
 
-            // @else doesn't consume the @end
-            if (token.tag != .builtin_else) {
-                self.advance();
-                try self.expect_newline();
-            }
+            if (!is_end) break :blk payload;
 
+            // @end consumes itself, verify that there's no @end-@else construction
+            self.advance();
+            try self.expect_newline();
+
+            if (self.current_tag() == .builtin_else)
+                try self.add_error(error.Unexpected, .{});
             break :blk payload;
         } else Null;
 
@@ -543,6 +546,7 @@ const AstGen = struct {
             .dollar,
             .reference_label,
             .numeric_literal,
+            .char_literal,
             .string_literal,
             .identifier,
             .instruction,
@@ -735,6 +739,7 @@ const AstGen = struct {
             },
 
             .eof,
+            .builtin_else,
             .builtin_end,
             .builtin_section,
             .builtin_barrier => break,
@@ -744,6 +749,15 @@ const AstGen = struct {
             else => |tag| if (tag.is_builtin()) {
                 const builtin = try self.parse_builtin();
                 try self.add_frame_node(builtin);
+
+                // conditionally parse @else after @if's end
+                if (self.current_tag() == .builtin_else) {
+                    const builtin_token = self.tokens[builtin.token];
+                    if (builtin_token.tag != .builtin_if)
+                        try self.add_error(error.Unexpected, .{});
+                    const else_builtin = try self.parse_builtin();
+                    try self.add_frame_node(else_builtin);
+                }
             } else {
                 try self.add_error(error.Unexpected, .{});
                 self.advance();
@@ -1013,13 +1027,11 @@ test "sections" {
     try testAstGen(
         \\@entrypoint
         \\@err "hello world!"
+        \\@section foo
         \\@if @foo
-        \\@offset q, b
         \\@else
         \\@end
-        \\@section foo
     , &.{
-        error.RootBuiltin,
         error.RootBuiltin,
         error.RootBuiltin
     });
