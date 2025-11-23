@@ -53,19 +53,19 @@ pub const Operation = union(Tag) {
         };
     }
 
-    // /// instr r1, r2
-    // const RegReg2 = struct {
-    //     r1: Register,
-    //     r2: Register
-    // };
+    /// instr r1, r2
+    const RegReg2 = struct {
+        r1: Register,
+        r2: Register
+    };
 
-    // /// instr rb, uimm
-    // fn Memory2(comptime immediateType: ImmediateType) type {
-    //     return struct {
-    //         rb: Register,
-    //         imm: Immediate(immediateType, .unsigned)
-    //     };
-    // }
+    /// instr rb, uimm
+    fn Memory2(comptime immediateType: ImmediateType) type {
+        return struct {
+            rb: Register,
+            imm: Immediate(immediateType, .unsigned)
+        };
+    }
 
     add: RegReg,
     addc: RegReg,
@@ -116,39 +116,39 @@ pub const Operation = union(Tag) {
     xch: Memory(.b5),
     xchw: Memory(.b5a2),
 
-    // bkpt,
-    // mov: RegReg2,
-    // @"test": Register,
-    // neg: RegReg2,
-    // cmp: RegReg2,
-    // nop,
-    // inc: Register,
-    // dec: Register,
-    // alloc: Immediate(.b8, .signed),
-    // ip: Register,
-    // clri,
-    // sneg: RegReg2,
-    // spos: RegReg2,
-    // snez: RegReg2,
-    // cut4: Register,
-    // cut8: Register,
-    // clrl: Register,
-    // not: Register,
-    // not8: Register,
-    // clr: Register,
-    // sysc: Immediate(.b8, .unsigned),
-    // ret,
-    // fence,
-    // ftlb,
-    // rfi,
-    // wfi,
-    // scf,
-    // rscf,
-    // //
-    // //
-    // prfd: Memory2(.b5a2),
-    // mclr: Memory2(.b5),
-    // mclrw: Memory2(.b5a2),
+    bkpt,
+    mov: RegReg2,
+    @"test": Register,
+    neg: RegReg2,
+    cmp: RegReg2,
+    nop,
+    inc: Register,
+    dec: Register,
+    alloc: Immediate(.b8, .signed),
+    ip: Register,
+    clri,
+    sneg: RegReg2,
+    spos: RegReg2,
+    snez: RegReg2,
+    cut4: Register,
+    cut8: Register,
+    clrl: Register,
+    not: Register,
+    not8: Register,
+    clr: Register,
+    sysc: Immediate(.b8, .unsigned),
+    ret,
+    fence,
+    ftlb,
+    rfi,
+    wfi,
+    scf,
+    rscf,
+    //
+    //
+    prfd: Memory2(.b5a2),
+    mclr: Memory2(.b5),
+    mclrw: Memory2(.b5a2),
 
     u8: Immediate(.b8, .unsigned),
     u16: Immediate(.b16, .unsigned),
@@ -157,9 +157,7 @@ pub const Operation = union(Tag) {
     i8: Immediate(.b8, .signed),
     i16: Immediate(.b16, .signed),
     i24: Immediate(.b24, .signed),
-    i32: Immediate(.b32, .signed),
-
-    ld_padding: usize
+    i32: Immediate(.b32, .signed)
 };
 
 pub const Tag = enum {
@@ -213,40 +211,40 @@ pub const Tag = enum {
     xch,
     xchw,
 
-    // // Alias Instructions
-    // bkpt,
-    // mov,
-    // @"test",
-    // neg,
-    // cmp,
-    // nop,
-    // inc,
-    // dec,
-    // alloc,
-    // ip,
-    // clri,
-    // sneg,
-    // spos,
-    // snez,
-    // cut4,
-    // cut8,
-    // clrl,
-    // not,
-    // not8,
-    // clr,
-    // sysc,
-    // ret,
-    // fence,
-    // ftlb,
-    // rfi,
-    // wfi,
-    // scf,
-    // rscf,
-    // //
-    // //
-    // prfd,
-    // mclr,
-    // mclrw,
+    // Alias Instructions
+    bkpt,       // *add 0, 0, 0 (interrupt)
+    mov,        // add rd, rs1, 0
+    @"test",    // add 0, rs1, 0
+    neg,        // sub rd, 0, rs1
+    cmp,        // sub 0, rs1, rs2
+    nop,        // *addi 0, 0 (flags disable)
+    inc,        // addi rw, 1
+    dec,        // addi rw, -1
+    alloc,      // addi sp, x
+    ip,         // csrr rd, ip
+    clri,       // csrw 0, pen
+    sneg,       // slt rd, rs1, 0
+    spos,       // slt rd, 0, rs1
+    snez,       // sltu rd, 0, rs1
+    cut4,       // andiu rd, 0xF
+    cut8,       // andiu rd, 0xFF
+    clrl,       // andiu rd, 0
+    not,        // xori rd, -1
+    not8,       // xoriu rd, -1
+    clr,        // lui rd, 0
+    sysc,       // *jmpd 0, x
+    ret,        // jmpd rp, 0
+    fence,      // *jmpdl 0, 1
+    ftlb,       // *jmpdl 0, 2
+    rfi,        // *jmpdl 0, 4
+    wfi,        // *jmpdl 0, 8
+    scf,        // *jmpdl 0, 16
+    rscf,       // *jmpdl 0, 32
+    //
+    //
+    prfd,       // mldw 0, rs1, x
+    mclr,       // mst 0, rs1, x
+    mclrw,      // mstw 0, rs1, x
 
     // Pseudo Instructions
     u8,
@@ -258,7 +256,15 @@ pub const Tag = enum {
     i24,
     i32,
 
-    ld_padding
+    pub fn size(self: Tag) usize {
+        return switch (self) {
+            .u8, .i8 => 1,
+            .u16, .i16 => 2,
+            .u24, .i24 => 3,
+            .u32, .i32 => 4,
+            else => 2 // all instructions
+        };
+    }
 };
 
 pub const List = std.ArrayListUnmanaged(Instruction);

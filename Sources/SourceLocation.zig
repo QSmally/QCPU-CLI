@@ -70,6 +70,16 @@ pub fn default_token(self: *const SourceLocation) Token {
         .source_location = self };
 }
 
+pub fn qualified_token(self: *const SourceLocation, token: InnerToken) Token {
+    return .{
+        .inner_token = token,
+        .source_location = self };
+}
+
+pub fn qualified_namespace(self: *const SourceLocation) []const u8 {
+    return std.fs.path.stem(self.file_name);
+}
+
 pub fn content(self: *const SourceLocation, token: InnerToken) []const u8 {
     return token.content_slice(self.buffer);
 }

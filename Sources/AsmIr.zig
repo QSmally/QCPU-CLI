@@ -54,7 +54,7 @@ pub fn dump(self: *AsmIr, _: std.mem.Allocator, writer: anytype) !void {
         const name = entry.key_ptr.*;
         const symbol = entry.value_ptr;
         try writer.print("@define{s} {s} {any}\n", .{
-            if (symbol.is_public) "(expose)" else "",
+            if (symbol.privacy == .public) "(expose)" else "",
             name,
             symbol.ty });
     }
@@ -64,14 +64,6 @@ pub fn dump(self: *AsmIr, _: std.mem.Allocator, writer: anytype) !void {
 
         for (block.content.items, 0..) |ir, index| {
             try writer.print("  {} {s} {any}\n", .{ index, @tagName(ir.ty), ir.ty });
-        }
-
-        for (block.addresses.items, 0..) |addr, index| {
-            const name = switch (addr.ty) {
-                .label => "label",
-                .offset => |offset| offset
-            };
-            try writer.print("  {s} {} -> {}\n", .{ name, index, addr.index });
         }
     }
 }
@@ -107,72 +99,88 @@ pub const Bridge = struct {
     }
 };
 
-pub const Macro = union(enum) {
-    expression: AsmAst.Index,
-    static: i32
-};
-
+/// A tiny sketch of the data architecture:
+///
+/// symbol table -> block (label)          for triggering lazy analysis)
+/// symbol table -> block / header (label) for symbol look-up and triggering lazy analysis)
+/// symbol table -> linkinfo (label)       for linkinfo
+/// symbol table -> block (offset)         namespace for triggering lazy analysis)
+/// symbol table -> block (header)         for header unrolling)
+/// symbol table -> macro (define)         for expression evaluation)
+/// symbol table -> file (import)          for file traversal
+/// symbol table register, non-look-up (arguments)
+///
+/// headers may not have local macros, apart from its arguments
+/// headers' argument bindings are managed in sema, but duplicate defines in the file are managed here
+/// label/offsets can be duplicate if owned by the same block, otherwise errors (single lazy analysis)
+/// sema's emit_label/offset checks for duplicates after @if evaluation when doing rel. addr. resolving
+/// linker checks for undefined labels during resolution as a result of conditional evaluation
+///
+/// block -> ir
+///
+/// ir -> label name -> resolved rel. addr. for linking
+/// ir -> base/offset name -> resolved rel. addr. for linking
 pub const Symbol = struct {
 
     token: Token,
     ty: Type,
-    is_public: bool,
+    privacy: Privacy,
 
-    pub const BlockRef = struct {
-        block: Index,
-        index: Index
+    pub const Privacy = enum {
+        public,
+        private
     };
 
-    pub const AddressBaseOffset = struct {
-        block: Index,
-        addresses_start: Index,
-        addresses_end: Index
+    pub const Macro = union(enum) {
+        expression: AsmAst.Index,
+        static: i32
     };
 
     pub const LinkInfoReference = struct {
-        link_info: Index,
-        ty: enum { virt, phys, len }
-    };
+        /// Index into link_info
+        li: Index,
+        ty: SymType,
 
-    pub const Import = struct {
-        qcu: ?Index
+        pub const SymType = enum { virt, phys, size, len };
     };
 
     pub const Type = union(enum) {
-        /// Top-level macro.
+        /// A macro.
+        /// token: the name
         macro: Macro,
-        /// Macro defined within a @header. Asserts .ty == .header.
-        header_macro: BlockRef,
-        /// Macro (as argument) defined within a @header. Asserts .ty == .header.
-        header_arg: BlockRef,
-        /// A header. Asserts .ty == .header.
+        /// A header.
+        /// token: the name
+        /// index: block index
+        /// asserts .ty == .header
         header: Index,
-        /// A label defined within a @section or @header.
-        label: BlockRef,
-        linkinfo_ref: LinkInfoReference,
-        /// A base offset defined within a @section or @header.
-        base_offset: AddressBaseOffset,
-        import_namespace: Import
+        /// A label defined within a @section or @header. (Only first.)
+        /// token: the label
+        /// index: block index
+        label: Index,
+        /// A base offset defined within a @section or @header. (Only first.)
+        /// token: the offset (to indicate the base addr)
+        /// index: block index
+        base_offset: Index,
+        /// A label defined within a @section or @header referencing a header.
+        /// The referenced header is included, unlike an .label symbol.
+        /// token: the label
+        /// block: block index
+        /// header: node of the @header call
+        header_label: struct {
+            block: Index,
+            header: Index
+        },
+        /// A linkinfo definition (e.g. placement).
+        /// token: the @linkinfo
+        /// ref: index into link_info
+        linkinfo: LinkInfoReference,
+        /// A (successfully) imported file as namespace.
+        /// token: the namespace
+        /// index: file index
+        import: Index,
+        /// Non-traversable symbol, but must be kept to reserve a symbol name.
+        reserved
     };
-};
-
-pub const Index = u32;
-
-pub const Address = struct {
-
-    index: Index,
-    cond_reason: CondReason, // not to detect conditional reason, but for token
-    ty: Type,
-
-    pub const Type = union(enum) {
-        label,
-        offset: []const u8
-    };
-};
-
-pub const CondReason = union(enum) {
-    none,
-    assembletime_cond: Token
 };
 
 pub const LinkInfo = struct {
@@ -182,9 +190,10 @@ pub const LinkInfo = struct {
 
     pub const SectionPlacement = struct {
 
-        section: []const u8,         // .section (virtual)
-        ld_phys_label: []const u8,   // .physical_section
-        ld_sections_len: []const u8, // @section_len
+        section: []const u8,          // .section (virtual)
+        ld_phys_label: []const u8,    // .physical_section
+        ld_sections_size: []const u8, // .section_size
+        ld_sections_len: []const u8,  // @section_len (constant)
         expression: AsmAst.Index,
 
         pub fn init(
@@ -195,18 +204,23 @@ pub const LinkInfo = struct {
             const ld_phys_label = try std.fmt.allocPrint(allocator, "physical_{s}", .{ section });
             errdefer allocator.free(ld_phys_label);
 
+            const ld_sections_size = try std.fmt.allocPrint(allocator, "{s}_size", .{ section });
+            errdefer allocator.free(ld_sections_size);
+
             const ld_sections_len = try std.fmt.allocPrint(allocator, "{s}_len", .{ section });
             errdefer allocator.free(ld_sections_len);
 
             return .{
                 .section = section,
                 .ld_phys_label = ld_phys_label,
+                .ld_sections_size = ld_sections_size,
                 .ld_sections_len = ld_sections_len,
                 .expression = expression };
         }
 
         pub fn deinit(self: *const SectionPlacement, allocator: std.mem.Allocator) void {
             allocator.free(self.ld_phys_label);
+            allocator.free(self.ld_sections_size);
             allocator.free(self.ld_sections_len);
         }
     };
@@ -237,26 +251,17 @@ pub const Block = struct {
     token: Token,
     name: []const u8,
     ty: Type,
-    /// Public labels, private labels and offsets defined within this block.
-    addresses: std.ArrayListUnmanaged(Address) = .empty,
-    scratch_addresses: std.ArrayListUnmanaged(ScratchAddress) = .empty,
-    /// Macro @define or @buildinfo which are specific for this block.
-    macros: std.ArrayListUnmanaged(Macro) = .empty,
     content: std.ArrayListUnmanaged(Ir) = .empty,
+    is_conditional: bool = false,
 
     pub const Type = union(enum) {
         section: struct {
             is_entrypoint: bool = false,
             is_noelimination: bool
         },
+        /// argument: the range of arguments (identifiers), which are
+        /// guaranteed to be unique in this file
         header: AsmAst.IndexRange
-    };
-
-    pub const ScratchAddress = struct {
-        namespace_token: Token,
-        address: Address,
-        is_public: bool,
-        is_analysed: bool = false
     };
 
     pub fn init(
@@ -276,10 +281,6 @@ pub const Block = struct {
     }
 
     pub fn deinit(self: *Block, allocator: std.mem.Allocator) void {
-        self.addresses.deinit(allocator);
-        std.debug.assert(self.scratch_addresses.items.len == 0);
-        self.scratch_addresses.deinit(allocator);
-        self.macros.deinit(allocator);
         self.content.deinit(allocator);
         allocator.destroy(self);
     }
@@ -308,30 +309,61 @@ pub const Ir = struct {
     token: Token,
     ty: Type,
 
-    pub const AlignType = enum { bkpt, nop };
-
     pub const Type = union(enum) {
-        @"align": struct {
-            expression: AsmAst.Index,
-            ty: AlignType
-        },
-        err: struct {
-            message: []const u8,
-            arguments: AsmAst.IndexRange
-        },
-        header: AsmAst.IndexRange,
+        /// token: @align
+        /// argument: constant alignment expression
+        @"align": AsmAst.Index,
+        /// token: @alignop
+        /// argument: constant alignment expression
+        alignop: AsmAst.Index,
+        /// token: @err
+        /// argument[0]: guaranteed to be the message node
+        /// argument: the range of @err arguments
+        err: AsmAst.IndexRange,
+        /// token: @if
+        /// expression: constant expression to be evaluated
+        /// body_len: length of scoped IR instructions
         @"if": struct {
             expression: AsmAst.Index,
-            body_len: AsmAst.Index, // offset
+            body_len: AsmAst.Index,
         },
-        @"else": AsmAst.Index, // offset
-        instruction: AsmAst.IndexRange,
+        /// token: @else
+        /// argument: length of scoped IR instructions
+        @"else": AsmAst.Index,
+        /// token: @region
+        /// expression: constant size expression
+        /// body_len: length of scoped IR instructions
         region: struct {
             expression: AsmAst.Index,
-            body_len: AsmAst.Index // offset
-        }
+            body_len: AsmAst.Index
+        },
+        /// token: the instruction
+        /// argument: the range of arguments
+        instruction: AsmAst.IndexRange,
+        /// token; @header identifier
+        /// argument: the range of header arguments
+        header: AsmAst.IndexRange,
+        /// token: the reserve instruction
+        /// type_expression: type-resolving expression
+        /// len_expression: constant len expression
+        reserve: struct {
+            type_expression: AsmAst.Index,
+            len_expression: AsmAst.Index
+        },
+        /// token: the ascii instruction
+        /// argument: the string expression
+        ascii: AsmAst.Index,
+        /// token: the (private) label
+        label,
+        /// token: the discarding label (value '_', public)
+        discard_label,
+        /// token: the namespace
+        /// offset: offset identifier token
+        base_offset: AsmAst.Index
     };
 };
+
+pub const Index = u32;
 
 pub fn Iterator(comptime T: type) type {
     return struct {
@@ -372,24 +404,34 @@ pub fn Iterator(comptime T: type) type {
             return if (!self.is_end()) self.next() else null;
         }
 
-        pub fn expect(
+        pub fn expect_index(
             self: *IteratorType,
             tag: AsmAst.Node.Tag,
             context_token: Token
-        ) !?AsmAst.Node {
+        ) !?AsmAst.Index {
             if (self.is_end()) {
                 try self.host.add_error(error.Expected, context_token, "{s} expects {s}", .{ context_token.tag.fmt(), tag.fmt() });
                 return null;
             }
 
-            return self.expect_or_end(tag, context_token);
+            return self.expect_or_end_index(tag, context_token);
         }
 
-        pub fn expect_or_end(
+        pub fn expect(
             self: *IteratorType,
             tag: AsmAst.Node.Tag,
             context_token: Token
         ) !?AsmAst.Node {
+            return if (try self.expect_index(tag, context_token)) |idx|
+                self.host.tree.nodes[idx] else
+                null;
+        }
+
+        pub fn expect_or_end_index(
+            self: *IteratorType,
+            tag: AsmAst.Node.Tag,
+            context_token: Token
+        ) !?AsmAst.Index {
             if (self.is_end())
                 return null;
             const node = self.host.tree.nodes[self.index()];
@@ -400,8 +442,17 @@ pub fn Iterator(comptime T: type) type {
                 return null;
             }
 
-            const idx = self.next();
-            return self.host.tree.nodes[idx];
+            return self.next();
+        }
+
+        pub fn expect_or_end(
+            self: *IteratorType,
+            tag: AsmAst.Node.Tag,
+            context_token: Token
+        ) !?AsmAst.Node {
+            return if (try self.expect_or_end_index(tag, context_token)) |idx|
+                self.host.tree.nodes[idx] else
+                null;
         }
 
         pub fn expect_any(self: *IteratorType, context_token: Token) !?AsmAst.Index {
@@ -432,7 +483,7 @@ const IrGen = struct {
 
     blocks: std.ArrayListUnmanaged(*Block) = .empty,
     link_info: std.ArrayListUnmanaged(LinkInfo) = .empty,
-    link_info_sections: std.StringHashMapUnmanaged(Token) = .empty,
+    link_sections: std.StringHashMapUnmanaged(Token) = .empty,
     symbols: std.StringHashMapUnmanaged(Symbol) = .empty,
     imports: std.AutoHashMapUnmanaged(AsmIr.Index, Token) = .empty,
     current_block_idx: ?Index = null,
@@ -456,7 +507,7 @@ const IrGen = struct {
     pub fn deinit(self: *IrGen) void {
         self.blocks.deinit(self.allocator);
         self.link_info.deinit(self.allocator);
-        self.link_info_sections.deinit(self.allocator);
+        self.link_sections.deinit(self.allocator);
         self.imports.deinit(self.allocator);
     }
 
@@ -474,7 +525,10 @@ const IrGen = struct {
         Unexpected,
         InvalidOption,
         Barrier,
+        InvalidSymbol,
         DuplicateSymbol,
+        MismatchedPrivacy,
+        PrivateDiscardLabel,
         UselessSentinel,
         ImportFailed,
         DuplicateImport,
@@ -534,6 +588,7 @@ const IrGen = struct {
                 .builtin_section => try self.lower_new_block(builtin),
                 .builtin_barrier => try self.lower_copy_block(builtin),
                 .builtin_header => try self.lower_header_block(builtin),
+
                 .builtin_buildinfo => try self.emit_build_info(builtin),
                 .builtin_define => try self.emit_define(builtin),
                 .builtin_import => try self.emit_import(builtin),
@@ -635,6 +690,7 @@ const IrGen = struct {
 
         const index: AsmIr.Index = @intCast(self.blocks.items.len);
         try self.blocks.append(self.allocator, new_block);
+        errdefer comptime unreachable;
 
         if (new_block.ty == .section)
             self.current_section_idx = index;
@@ -678,7 +734,6 @@ const IrGen = struct {
 
         try self.add_block(name_token, name, ty);
         try self.lower_opaque_tree(builtin.payload, .none);
-        try self.flush_scratch_addresses(self.current_block_idx.?);
     }
 
     fn lower_copy_block(self: *IrGen, builtin: Builtin) !void {
@@ -697,7 +752,6 @@ const IrGen = struct {
 
         try self.add_block(builtin.token, existing_block.name, ty);
         try self.lower_opaque_tree(builtin.payload, .none);
-        try self.flush_scratch_addresses(self.current_block_idx.?);
     }
 
     const MacroOptions = struct {
@@ -723,23 +777,17 @@ const IrGen = struct {
         while (try iterator.expect_or_end(.identifier, builtin.token)) |argument_node| {
             const argument_token = self.tree.tokens[argument_node.token];
             const argument_name = self.source_location.content(argument_token);
-            const block = self.current_block().?;
-            const macro: Symbol.BlockRef = .{
-                .block = block_index,
-                .index = @intCast(block.macros.items.len) };
-            try block.macros.append(self.allocator, .{ .static = 0 });
             try self.add_symbol(argument_name, .{
                 .token = argument_token,
-                .ty = .{ .header_arg = macro },
-                .is_public = false });
+                .ty = .reserved,
+                .privacy = .private }, .unique);
         }
 
         try self.add_symbol(name, .{
             .token = name_token,
             .ty = .{ .header = block_index },
-            .is_public = options.expose });
+            .privacy = if (options.expose) .public else .private }, .unique);
         try self.lower_opaque_tree(builtin.payload, .none);
-        try self.flush_scratch_addresses(block_index);
         self.current_block_idx = self.current_section_idx; // restore last block
     }
 
@@ -776,10 +824,11 @@ const IrGen = struct {
         if (instructions_len != 1)
             return try self.add_error(error.Expected, builtin.token, "expected 1 link instruction, found {}", .{ instructions_len });
         const ty = options.link_info();
+        const privacy: Symbol.Privacy = if (options.expose) .public else .private;
 
         switch (ty) {
             .phys => {
-                if (options.expose)
+                if (privacy == .public)
                     try self.add_error(error.InvalidOption, builtin.token, "'expose' is not valid for link instruction 'phys'", .{});
                 const expr_node = try iterator.expect_any(builtin.token) orelse return;
                 try iterator.expect_end();
@@ -788,8 +837,8 @@ const IrGen = struct {
                     .ty = .{ .phys = expr_node } });
             },
 
-            .origin => try self.emit_link_info_placement("origin", builtin.token, &iterator, options.expose),
-            .@"align" => try self.emit_link_info_placement("align", builtin.token, &iterator, options.expose)
+            .origin => try self.emit_link_info_placement("origin", builtin.token, &iterator, privacy),
+            .@"align" => try self.emit_link_info_placement("align", builtin.token, &iterator, privacy)
         }
     }
 
@@ -798,7 +847,7 @@ const IrGen = struct {
         comptime union_type: []const u8,
         token: Token,
         iterator: *Iterator(IrGen),
-        expose: bool
+        privacy: Symbol.Privacy
     ) !void {
         const section_node = try iterator.expect(.identifier, token) orelse return;
         const expr_node = try iterator.expect_any(token) orelse return;
@@ -806,15 +855,15 @@ const IrGen = struct {
 
         const section_token = self.tree.tokens[section_node.token];
         const section = self.source_location.content(section_token);
-        const link_info_index: Index = @intCast(self.link_info.items.len);
+        const info_index: Index = @intCast(self.link_info.items.len);
 
-        if (self.link_info_sections.get(section)) |existing_token| {
+        if (self.link_sections.get(section)) |existing_token| {
             try self.add_error(error.DuplicateSectionInfo, section_token, "section '{s}' placed multiple times", .{ section });
             try self.add_error(error.NoteDefinedHere, existing_token, "previously placed here", .{});
             return; // otherwise duplicate symbol errors will also occur
         }
 
-        try self.link_info_sections.put(self.allocator, section, section_token);
+        try self.link_sections.put(self.allocator, section, section_token);
         try self.link_info.ensureUnusedCapacity(self.allocator, 1);
 
         const placement = try LinkInfo.SectionPlacement.init(self.allocator, section, expr_node);
@@ -823,19 +872,17 @@ const IrGen = struct {
         self.link_info.appendAssumeCapacity(.{
             .token = token,
             .ty = @unionInit(LinkInfo.Type, union_type, placement) });
-
-        try self.add_symbol(placement.section, .{
-            .token = token,
-            .ty = .{ .linkinfo_ref = .{ .link_info = link_info_index, .ty = .virt } },
-            .is_public = expose });
-        try self.add_symbol(placement.ld_phys_label, .{
-            .token = token,
-            .ty = .{ .linkinfo_ref = .{ .link_info = link_info_index, .ty = .phys } },
-            .is_public = expose });
-        try self.add_symbol(placement.ld_sections_len, .{
-            .token = token,
-            .ty = .{ .linkinfo_ref = .{ .link_info = link_info_index, .ty = .len } },
-            .is_public = expose });
+        for (&[_]struct { []const u8, Symbol.LinkInfoReference.SymType } {
+            .{ placement.section, .virt },
+            .{ placement.ld_phys_label, .phys },
+            .{ placement.ld_sections_size, .size },
+            .{ placement.ld_sections_len, .len }
+        }) |li| {
+            try self.add_symbol(li[0], .{
+                .token = token,
+                .ty = .{ .linkinfo = .{ .li = info_index, .ty = li[1] } },
+                .privacy = privacy }, .unique);
+        }
     }
 
     fn lower_opaque_tree(self: *IrGen, range: AsmAst.IndexRange, cond_reason: CondReason) ParseError!void {
@@ -849,7 +896,7 @@ const IrGen = struct {
                     switch (builtin.token.tag) {
                         .builtin_align, .builtin_alignop => try self.emit_align(builtin),
                         .builtin_err => try self.emit_assembletime_err(builtin),
-                        .builtin_offset => try self.emit_scratch_offset(builtin, cond_reason),
+                        .builtin_offset => try self.emit_offset(builtin),
 
                         .builtin_region => {
                             const block, const region_index = self.create_region(builtin) catch |err| switch (err) {
@@ -883,17 +930,17 @@ const IrGen = struct {
                             block.add_len(else_index);
                         },
 
-                        // only valid in non-conditional contexts
+                        // conditional builtins
                         .builtin_buildinfo => {
+                            try self.maybe_emit_header_error(builtin.token);
                             try self.maybe_emit_conditional_error(cond_reason, builtin.token);
                             try self.emit_build_info(builtin);
                         },
                         .builtin_define => {
+                            try self.maybe_emit_header_error(builtin.token);
                             try self.maybe_emit_conditional_error(cond_reason, builtin.token);
                             try self.emit_define(builtin);
                         },
-
-                        // only in sections, not headers
                         .builtin_entrypoint => {
                             try self.maybe_emit_header_error(builtin.token);
                             try self.mark_entrypoint(builtin);
@@ -922,7 +969,8 @@ const IrGen = struct {
                     }
                 },
 
-                .instruction => try self.emit_instruction(node, cond_reason),
+                .instruction => try self.emit_instruction(node),
+                .label => try self.emit_label(node),
 
                 // other tokens are illegal
                 else => AsmAst.failure()
@@ -930,9 +978,14 @@ const IrGen = struct {
         }
     }
 
+    const CondReason = union(enum) {
+        none,
+        assembletime_cond: Token
+    };
+
     fn maybe_emit_conditional_error(self: *IrGen, cond_reason: CondReason, token: Token) !void {
         if (cond_reason == .none) return;
-        try self.add_error(error.NotConditional, token, "unable to conditionally evaluate {s} at assemble-time", .{ token.tag.fmt() });
+        try self.add_error(error.NotConditional, token, "unable to evaluate {s} at assemble-time", .{ token.tag.fmt() });
 
         switch (cond_reason) {
             .none => unreachable, // returned above
@@ -976,7 +1029,7 @@ const IrGen = struct {
         const flag_token = self.tree.tokens[flag_node.token];
         const flag = self.source_location.content(flag_token);
 
-        const macro: Macro = if (self.bridge.flag(flag)) |value| blk: {
+        const macro: Symbol.Macro = if (self.bridge.flag(flag)) |value| blk: {
             break :blk .{ .static = value };
         } else if (default_expr_node) |node| blk: {
             break :blk .{ .expression = node };
@@ -984,7 +1037,10 @@ const IrGen = struct {
             break :blk .{ .static = 0 };
         };
 
-        try self.add_scoped_macro(name_token, name, macro, options.expose);
+        try self.add_symbol(name, .{
+            .token = name_token,
+            .ty = .{ .macro = macro },
+            .privacy = if (options.expose) .public else .private }, .unique);
     }
 
     fn emit_define(self: *IrGen, builtin: Builtin) !void {
@@ -1000,7 +1056,10 @@ const IrGen = struct {
         const name_token = self.tree.tokens[name_node.token];
         const name = self.source_location.content(name_token);
 
-        try self.add_scoped_macro(name_token, name, .{ .expression = expr_node }, options.expose);
+        try self.add_symbol(name, .{
+            .token = name_token,
+            .ty = .{ .macro = .{ .expression = expr_node } },
+            .privacy = if (options.expose) .public else .private }, .unique);
     }
 
     fn emit_import(self: *IrGen, builtin: Builtin) !void {
@@ -1036,103 +1095,91 @@ const IrGen = struct {
             result.value_ptr.* = path_token;
         }
 
-        const symbol: Symbol = .{
+        try self.add_symbol(namespace, .{
             .token = namespace_token,
-            .ty = .{ .import_namespace = .{ .qcu = file_index } },
-            .is_public = options.expose };
-        try self.add_symbol(namespace, symbol);
+            .ty = .{ .import = file_index },
+            .privacy = if (options.expose) .public else .private }, .unique);
     }
 
-    fn add_scoped_macro(
+    fn add_symbol(
         self: *IrGen,
-        token: Token,
         name: []const u8,
-        macro: Macro,
-        expose: bool
+        symbol: Symbol,
+        uniqueness: enum { unique, not_unique, block_unique }
     ) !void {
-        if (self.header()) |block| {
-            const outer_macro: Symbol.BlockRef = .{
-                .block = self.current_block_idx.?,
-                .index = @intCast(block.macros.items.len) };
-            const symbol: Symbol = .{
-                .token = token,
-                .ty = .{ .header_macro = outer_macro },
-                .is_public = expose };
-            try block.macros.append(self.allocator, macro);
-            try self.add_symbol(name, symbol);
-        } else {
-            const symbol: Symbol = .{
-                .token = token,
-                .ty = .{ .macro = macro },
-                .is_public = expose };
-            try self.add_symbol(name, symbol);
+        if (name.len == 0 or name[0] == '@') {
+            try self.add_error(error.InvalidSymbol, symbol.token, "invalid symbol name '{s}'", .{ name });
         }
-    }
 
-    fn add_label(self: *IrGen, token: Token, instruction_index: Index, cond_reason: CondReason) !void {
-        std.debug.assert(self.blocks.items.len > 0);
-        const block = self.current_block().?;
-        const block_index: Index = @intCast(self.current_block_idx.?);
-        const address_index: Index = @intCast(block.addresses.items.len);
-
-        try block.addresses.append(self.allocator, .{
-            .index = instruction_index,
-            .ty = .label,
-            .cond_reason = cond_reason });
-
-        const label: Symbol.BlockRef = .{
-            .block = block_index,
-            .index = address_index };
-        const expose = switch (token.tag) {
-            .label => true,
-            .private_label => false,
-            else => AsmAst.failure()
-        };
-        const symbol: Symbol = .{
-            .token = token,
-            .ty = .{ .label = label },
-            .is_public = expose };
-        const name = self.source_location.content(token);
-        try self.add_symbol(name, symbol);
-    }
-
-    fn add_symbol(self: *IrGen, name: []const u8, symbol: Symbol) !void {
         const existing_symbol = self.symbols.get(name) orelse
             return try self.symbols.put(self.allocator, name, symbol);
-        if (existing_symbol.ty == .header_arg or symbol.ty == .header_arg or
-            existing_symbol.ty == .header_macro or symbol.ty == .header_macro)
-        {
-            // header local arguments always show up as notes
-            const global_token: Token,
-            const shadowing_token: Token = if (existing_symbol.ty == .header_arg or existing_symbol.ty == .header_macro)
-                .{ symbol.token, existing_symbol.token } else
-                .{ existing_symbol.token, symbol.token };
-            try self.add_error(error.DuplicateSymbol, shadowing_token, "local symbol shadows declaration of '{s}'", .{ name });
+        const is_error = switch (uniqueness) {
+            .unique => true,
+            .not_unique => false,
+            .block_unique => switch (symbol.ty) {
+                .label => |bi| !(existing_symbol.ty == .label and bi == existing_symbol.ty.label),
+                .base_offset => |bi| !(existing_symbol.ty == .base_offset and bi == existing_symbol.ty.base_offset),
+                else => true
+            }
+        };
 
-            const block: ?*Block =
-                if (existing_symbol.ty == .header_macro) self.blocks.items[existing_symbol.ty.header_macro.block] else
-                if (symbol.ty == .header_macro) self.blocks.items[symbol.ty.header_macro.block] else
-                null;
-            if (block) |the_block| try self.add_error(error.Note, the_block.token, "in header '{s}'", .{ the_block.name });
-            try self.add_error(error.NoteDefinedHere, global_token, "previously declared here", .{});
-        } else {
+        if (is_error) {
             try self.add_error(error.DuplicateSymbol, symbol.token, "duplicate symbol '{s}'", .{ name });
             try self.add_error(error.NoteDefinedHere, existing_symbol.token, "previously declared here", .{});
         }
+
+        if (uniqueness == .block_unique) {
+            const is_block_mismatch = switch (symbol.ty) {
+                .label => |bi| (existing_symbol.ty == .label and bi != existing_symbol.ty.label),
+                .base_offset => |bi| (existing_symbol.ty == .base_offset and bi != existing_symbol.ty.base_offset),
+                else => false
+            };
+
+            if (is_error and is_block_mismatch) {
+                try self.add_error(error.Note, symbol.token, "conditionally-dependent symbols must reside in the same block", .{});
+            }
+
+            if (symbol.privacy != existing_symbol.privacy) {
+                try self.add_error(error.MismatchedPrivacy, symbol.token, "conditionally-dependent symbols have mismatching privacies", .{});
+                try self.add_error(error.NoteDefinedHere, existing_symbol.token, "initially declared {s} here", .{ @tagName(existing_symbol.privacy) });
+            }
+        }
     }
 
-    fn emit_instruction(self: *IrGen, node: AsmAst.Node, cond_reason: CondReason) !void {
+    const Encoding = enum {
+        reserve,
+        ascii,
+        __none
+    };
+
+    fn emit_instruction(self: *IrGen, node: AsmAst.Node) !void {
         std.debug.assert(node.tag == .instruction);
-        AsmAst.assert(self.tree.is_null_or(node.operands.lhs, .label));
-        AsmAst.assert(self.tree.is_null_or(node.operands.rhs, .container));
+        AsmAst.assert(self.tree.is_null_or(node.operands.lhs, .container));
+        AsmAst.assert(node.operands.rhs == AsmAst.Null);
 
         const token = self.tree.tokens[node.token];
+        const encoding = std.meta.stringToEnum(Encoding, self.source_location.content(token)) orelse .__none;
         const block = self.current_block().?;
-        const instruction_index = block.content.items.len;
-        const arguments = self.tree.optional_range(node.operands.rhs);
+        const arguments = self.tree.optional_range(node.operands.lhs);
+        var iterator = Iterator(IrGen).init(self, arguments);
 
         const instruction: Ir.Type = switch (token.tag) {
-            .instruction => .{ .instruction = arguments },
+            .instruction => switch (encoding) {
+                .reserve => blk: {
+                    const type_expression = try iterator.expect_any(token) orelse return;
+                    const len_expression = try iterator.expect_any(token) orelse return;
+                    try iterator.expect_end();
+                    break :blk .{ .reserve = .{
+                        .type_expression = type_expression,
+                        .len_expression = len_expression } };
+                },
+                .ascii => blk: {
+                    const string = try iterator.expect_index(.string, token) orelse return;
+                    try iterator.expect_end();
+                    break :blk .{ .ascii = string };
+                },
+                .__none => .{ .instruction = arguments }
+            },
             .identifier => .{ .header = arguments },
             else => AsmAst.failure()
         };
@@ -1140,10 +1187,68 @@ const IrGen = struct {
         try block.content.append(self.allocator, .{
             .token = token,
             .ty = instruction });
-        if (self.tree.unwrap(node.operands.lhs)) |label_node| {
-            const label_token = self.tree.tokens[label_node.token];
-            try self.add_label(label_token, @intCast(instruction_index), cond_reason);
+    }
+
+    fn emit_label(self: *IrGen, node: AsmAst.Node) !void {
+        std.debug.assert(node.tag == .label);
+        AsmAst.assert(node.operands.lhs == AsmAst.Null);
+        AsmAst.assert(node.operands.rhs == AsmAst.Null);
+
+        const token = self.tree.tokens[node.token];
+        const name = self.source_location.content(token);
+        const block = self.current_block().?;
+        const block_index = self.current_block_idx.?;
+
+        const privacy: Symbol.Privacy = switch (token.tag) {
+            .label => .public,
+            .private_label => .private,
+            else => AsmAst.failure()
+        };
+
+        // a so-called discarding label, to silence liveness
+        // mostly only used by root sections
+        const is_discarding = std.mem.eql(u8, name, "_");
+
+        const ir: Ir.Type = if (!is_discarding)
+            .label else
+            .discard_label;
+        if (is_discarding and privacy == .private) {
+            try self.add_error(error.PrivateDiscardLabel, token, "discard label must not be private", .{});
         }
+
+        try block.content.append(self.allocator, .{
+            .token = token,
+            .ty = ir });
+        if (!is_discarding) {
+            try self.add_symbol(name, .{
+                .token = token,
+                .ty = .{ .label = block_index },
+                .privacy = privacy }, .block_unique);
+        }
+    }
+
+    fn emit_offset(self: *IrGen, builtin: Builtin) !void {
+        std.debug.assert(builtin.token.tag == .builtin_offset);
+
+        const options = try self.identifier_list(MacroOptions, builtin.options, builtin.token);
+        var iterator = Iterator(IrGen).init(self, builtin.arguments);
+
+        const namespace_node = try iterator.expect(.identifier, builtin.token) orelse return;
+        const offset_node = try iterator.expect(.identifier, builtin.token) orelse return;
+        try iterator.expect_end();
+
+        const namespace_token = self.tree.tokens[namespace_node.token];
+        const namespace = self.source_location.content(namespace_token);
+        const block = self.current_block().?;
+        const block_index = self.current_block_idx.?;
+
+        try block.content.append(self.allocator, .{
+            .token = namespace_token,
+            .ty = .{ .base_offset = offset_node.token } });
+        try self.add_symbol(namespace, .{
+            .token = namespace_token,
+            .ty = .{ .base_offset = block_index },
+            .privacy = if (options.expose) .public else .private }, .block_unique);
     }
 
     fn emit_align(self: *IrGen, builtin: Builtin) !void {
@@ -1153,19 +1258,16 @@ const IrGen = struct {
         const expr_node = try iterator.expect_any(builtin.token) orelse return;
         try iterator.expect_end();
 
-        const ty: Ir.AlignType = switch (builtin.token.tag) {
-            .builtin_align => .bkpt,
-            .builtin_alignop => .nop,
+        const ir: Ir.Type = switch (builtin.token.tag) {
+            .builtin_align => .{ .@"align" = expr_node },
+            .builtin_alignop => .{ .alignop = expr_node },
             else => AsmAst.failure()
         };
         const block = self.current_block().?;
 
-        const ir_align: Ir.Type = .{ .@"align" = .{
-            .expression = expr_node,
-            .ty = ty } };
         try block.content.append(self.allocator, .{
             .token = builtin.token,
-            .ty = ir_align });
+            .ty = ir });
     }
 
     fn mark_entrypoint(self: *IrGen, builtin: Builtin) !void {
@@ -1191,21 +1293,16 @@ const IrGen = struct {
         _ = try self.identifier_list(struct {}, builtin.options, builtin.token);
         var iterator = Iterator(IrGen).init(self, builtin.arguments);
 
-        const message_node = try iterator.expect(.string, builtin.token) orelse return;
         const arguments = iterator.range();
-
-        const message_token = self.tree.tokens[message_node.token];
-        const message = self.source_location.content(message_token);
-        const block = self.current_block().?;
+        const message_node = try iterator.expect(.string, builtin.token) orelse return;
 
         try self.maybe_emit_sentinel_error(message_node);
 
-        const ir_err: Ir.Type = .{ .err = .{
-            .message = message,
-            .arguments = arguments } };
+        const block = self.current_block().?;
+
         try block.content.append(self.allocator, .{
             .token = builtin.token,
-            .ty = ir_err });
+            .ty = .{ .err = arguments } });
     }
 
     fn create_region(self: *IrGen, builtin: Builtin) !struct { *Block, Index } {
@@ -1247,6 +1344,7 @@ const IrGen = struct {
         try block.content.append(self.allocator, .{
             .token = builtin.token,
             .ty = ir_if });
+        block.is_conditional = true;
         return .{ block, if_index };
     }
 
@@ -1264,82 +1362,6 @@ const IrGen = struct {
             .token = builtin.token,
             .ty = .{ .@"else" = 0 } });
         return .{ block, else_index };
-    }
-
-    fn emit_scratch_offset(self: *IrGen, builtin: Builtin, cond_reason: CondReason) !void {
-        std.debug.assert(builtin.token.tag == .builtin_offset);
-
-        const options = try self.identifier_list(MacroOptions, builtin.options, builtin.token);
-        var iterator = Iterator(IrGen).init(self, builtin.arguments);
-
-        const namespace_node = try iterator.expect(.identifier, builtin.token) orelse return;
-        const offset_node = try iterator.expect(.identifier, builtin.token) orelse return;
-        try iterator.expect_end();
-
-        const namespace_token = self.tree.tokens[namespace_node.token];
-        const offset_token = self.tree.tokens[offset_node.token];
-        const offset = self.source_location.content(offset_token);
-        const block = self.current_block().?;
-        const instruction_index: Index = @intCast(block.content.items.len);
-
-        const address: Address = .{
-            .index = instruction_index,
-            .cond_reason = cond_reason,
-            .ty = .{ .offset = offset } };
-        // insert at front so the first (addrbase) will be at the last position
-        try block.scratch_addresses.insert(self.allocator, 0, .{
-            .namespace_token = namespace_token,
-            .address = address,
-            .is_public = options.expose });
-    }
-
-    fn flush_scratch_addresses(self: *IrGen, block_index: Index) !void {
-        const block = self.blocks.items[block_index];
-        const base_offset = block.scratch_addresses.getLastOrNull() orelse return;
-        const namespace = self.source_location.content(base_offset.namespace_token);
-        const address_index: Index = @intCast(block.addresses.items.len);
-        var is_already_errored: bool = false;
-
-        if (base_offset.is_analysed) return;
-
-        for (block.scratch_addresses.items) |*offset| {
-            const offsets_namespace = self.source_location.content(offset.namespace_token);
-            if (!std.mem.eql(u8, namespace, offsets_namespace) or offset.is_analysed)
-                continue;
-            if (base_offset.is_public != offset.is_public) {
-                if (!is_already_errored) {
-                    try self.add_error(error.Inconsistent, offset.namespace_token, "inconsistent expose flag for addrbase namespace", .{});
-                    try self.add_error(error.NoteDefinedHere, base_offset.namespace_token, "not the same here", .{});
-                    is_already_errored = true;
-                } else {
-                    try self.add_error(error.NoteDefinedHere, offset.namespace_token, "like here", .{});
-                }
-            }
-            std.debug.assert(offset.address.ty == .offset);
-            try block.addresses.append(self.allocator, offset.address);
-            offset.is_analysed = true;
-        }
-
-        const end_index: Index = @intCast(block.addresses.items.len);
-
-        const addr_base_offset: Symbol.AddressBaseOffset = .{
-            .block = block_index,
-            .addresses_start = address_index,
-            .addresses_end = end_index };
-        const symbol: Symbol = .{
-            .token = base_offset.namespace_token,
-            .ty = .{ .base_offset = addr_base_offset },
-            .is_public = base_offset.is_public };
-        try self.add_symbol(namespace, symbol);
-
-        // next namespace
-        const analysed_index = block.scratch_addresses.items.len - 1;
-        std.debug.assert(block.scratch_addresses.items[analysed_index].is_analysed);
-        _ = block.scratch_addresses.swapRemove(analysed_index);
-        try self.flush_scratch_addresses(block_index);
-
-        // all done for this block
-        block.scratch_addresses.clearAndFree(self.allocator);
     }
 };
 
@@ -1470,6 +1492,33 @@ test "symbols" {
     });
 }
 
+test "labels" {
+    try testIrGen("@section foo\n.label:", &.{});
+    try testIrGen("@section foo\n.label: .foo:", &.{});
+    try testIrGen("@section foo\n.label: .label:", &.{});
+    try testIrGen("@define label, 5\n@section foo\n.label:", &.{ error.DuplicateSymbol, error.NoteDefinedHere });
+
+    try testIrGen(
+        \\@section foo
+        \\.label:
+        \\@section bar
+        \\.label:
+    , &.{
+        error.DuplicateSymbol,
+        error.NoteDefinedHere,
+        error.Note
+    });
+
+    try testIrGen(
+        \\@section foo
+        \\label:
+        \\.label:
+    , &.{
+        error.MismatchedPrivacy,
+        error.NoteDefinedHere
+    });
+}
+
 test "headers" {
     try testIrGen("@header\n@end", &.{ error.Expected });
     try testIrGen("@header foo\n@end", &.{});
@@ -1490,8 +1539,8 @@ test "headers" {
         \\@end
         \\@define len, 5
     , &.{
+        error.SectionOnly,
         error.DuplicateSymbol,
-        error.Note,
         error.NoteDefinedHere
     });
 

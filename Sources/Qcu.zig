@@ -32,8 +32,6 @@ files: std.ArrayListUnmanaged(File) = .empty,
 work_queue: std.PriorityQueue(Job, void, Job.before),
 /// [file index] << 32 | [block index]
 semantically_analysed: std.AutoHashMapUnmanaged(u64, void) = .empty,
-/// [file index]
-liveness_analysed: std.AutoHashMapUnmanaged(u32, void) = .empty,
 errors: std.ArrayListUnmanaged(SourceLocation.Error) = .empty,
 // linker: Linker,
 
@@ -83,9 +81,8 @@ const AsmFile = struct {
     qcu: *Qcu,
     source_location: SourceLocation,
     index: AsmIr.Index,
-    ast: AsmAst = undefined,
-    ir: AsmIr = undefined,
-    sema: AsmSemanticAir = undefined,
+    ast: ?AsmAst = null,
+    ir: ?AsmIr = null,
 
     pub fn add(qcu: *Qcu, cwd: std.fs.Dir, file_path: []const u8) !void {
         const file = try qcu.allocator.create(AsmFile);
@@ -97,15 +94,17 @@ const AsmFile = struct {
         const source_location = try SourceLocation.init(qcu.allocator, cwd, ".", file_path);
         errdefer source_location.deinit(qcu.allocator);
 
-        file.qcu = qcu;
-        file.source_location = source_location;
-        file.index = @intCast(qcu.files.items.len);
-
+        file.* = .{
+            .qcu = qcu,
+            .source_location = source_location,
+            .index = @intCast(qcu.files.items.len) };
         qcu.files.appendAssumeCapacity(.{ .@"asm" = file });
         qcu.work_queue.add(.{ .static_analysis = file }) catch unreachable;
     }
 
     pub fn deinit(self: *AsmFile) void {
+        if (self.ast) |*ast| ast.deinit(self.qcu.allocator);
+        if (self.ir) |*ir| ir.deinit(self.qcu.allocator);
         self.source_location.deinit(self.qcu.allocator);
         self.qcu.allocator.destroy(self);
     }
@@ -115,11 +114,22 @@ const AsmFile = struct {
         try thing.dump(self.qcu.allocator, stderr);
     }
 
+    fn create_semantic_analysis(self: *AsmFile, namespace: []const u8) AsmSemanticAir {
+        return AsmSemanticAir.init(
+            self.qcu.allocator,
+            &self.source_location,
+            &self.ast.?,
+            &self.ir.?,
+            namespace,
+            .{ .vtable = semaTable, .context = self });
+    }
+
     /// Any root section, noelimination or global noelimination section.
     fn activate_initable_sections(self: *AsmFile) !void {
+        std.debug.assert(self.ir != null);
         const root_section = self.qcu.options.rootsection orelse "root";
 
-        next: for (self.ir.blocks, 0..) |block, i| {
+        next: for (self.ir.?.blocks, 0..) |block, i| {
             activate: {
                 if (self.qcu.options.noelimination)
                     break :activate;
@@ -149,32 +159,36 @@ const AsmFile = struct {
 
     /// Tokenisation, AstGen and IrGen (static analysis).
     pub fn static_analysis(self: *AsmFile) !void {
+        std.debug.assert(self.ast == null);
+        std.debug.assert(self.ir == null);
+
         self.ast = try AsmAst.init(
             self.qcu.allocator,
             &self.source_location,
             .{ .vtable = astTable, .context = self });
         if (self.qcu.options.dast)
-            try self.dump("AST", &self.ast);
+            try self.dump("AST", &self.ast.?);
         if (self.qcu.errors.items.len > 0)
             return error.AbstractSyntaxTree;
 
         self.ir = try AsmIr.init(
             self.qcu.allocator,
             &self.source_location,
-            &self.ast,
+            &self.ast.?,
             .{ .vtable = irTable, .context = self });
         if (self.qcu.options.dir)
-            try self.dump("IR", &self.ir);
+            try self.dump("IR", &self.ir.?);
         if (self.qcu.errors.items.len > 0)
             return error.StaticAnalysis;
-
-        self.sema = AsmSemanticAir.init(
-            self.qcu.allocator,
-            &self.source_location,
-            &self.ast,
-            &self.ir,
-            .{ .vtable = semaTable, .context = self });
         try self.activate_initable_sections();
+    }
+
+    pub fn link_script(self: *AsmFile) !void {
+        var sema = self.create_semantic_analysis(self.source_location.qualified_namespace());
+        defer sema.deinit();
+        const link_info = try sema.analyse_link_script();
+        _ = link_info;
+        // TODO: add linkinfo to linker
     }
 
     /// Semantic analysis. Illegal to call when any related objects haven't yet
@@ -183,23 +197,33 @@ const AsmFile = struct {
     pub fn semantic_analysis(self: *AsmFile, block: AsmIr.Index) !void {
         const the_block_id = self.block_id(block);
         if (self.qcu.semantically_analysed.contains(the_block_id)) return;
-        try self.sema.analyse_block(block);
+
+        var sema = self.create_semantic_analysis(self.source_location.qualified_namespace());
+        defer sema.deinit();
+
+        sema.analyse_block(block) catch |err| switch (err) {
+            // error.AnalysisFail => std.debug.assert(self.qcu.errors.items.len > 0),
+            else => |the_err| return the_err
+        };
 
         if (self.qcu.options.dair)
-            try self.dump("AIR", &self.sema);
+            try self.dump("AIR", &sema);
         if (self.qcu.errors.items.len > 0)
             return error.SemanticAnalysis;
-
         try self.qcu.semantically_analysed.put(self.qcu.allocator, the_block_id, {});
+        // TODO: own generated section and push to linker
+
+        if (!self.qcu.options.noliveness) {
+            try self.qcu.work_queue.add(.{ .liveness = .{ self, block } });
+        }
     }
 
     /// Liveness pass. Illegal to call when the file isn't semantically
     /// analysed yet.
-    pub fn liveness(self: *AsmFile) !void {
-        if (self.qcu.liveness_analysed.contains(self.index)) return;
+    pub fn liveness(self: *AsmFile, block: AsmIr.Index) !void {
+        _ = self;
+        _ = block;
         // TODO: liveness
-
-        try self.qcu.liveness_analysed.put(self.qcu.allocator, self.index, {});
     }
 
     // Interfaces
@@ -216,8 +240,8 @@ const AsmFile = struct {
 
     const semaTable = AsmSemanticAir.Bridge.VTable {
         .emit_error = emit_error,
-        .file_evaluation_context = file_evaluation_context,
-        .ensure_block_analysis = ensure_block_analysis
+        .file_context = file_context,
+        .ensure_block_analysed = ensure_block_analysed
     };
 
     fn emit_error(context: *anyopaque, err: SourceLocation.Error) !void {
@@ -256,37 +280,33 @@ const AsmFile = struct {
             return error.SemanticsNotSupported;
 
         const file = try self.qcu.allocator.create(AsmFile);
-        errdefer self.qcu.allocator.destroy(file);
-
-        file.qcu = self.qcu;
-        file.source_location = source_location;
-        file.index = @intCast(self.qcu.files.items.len);
-
         errdefer comptime unreachable;
-        const file_index: AsmIr.Index = @intCast(self.qcu.files.items.len);
-        self.qcu.work_queue.add(.{ .static_analysis = file }) catch unreachable;
-        self.qcu.files.appendAssumeCapacity(.{ .@"asm" = file });
 
+        file.* = .{
+            .qcu = self.qcu,
+            .source_location = source_location,
+            .index = @intCast(self.qcu.files.items.len) };
+
+        const file_index: AsmIr.Index = @intCast(self.qcu.files.items.len);
+        self.qcu.files.appendAssumeCapacity(.{ .@"asm" = file });
+        self.qcu.work_queue.add(.{ .static_analysis = file }) catch unreachable;
         return file_index;
     }
 
-    fn file_evaluation_context(context: *anyopaque, index: AsmIr.Index) !?*AsmSemanticAir {
+    fn file_context(context: *anyopaque, index: AsmIr.Index, namespace: []const u8) AsmSemanticAir {
         const self: *AsmFile = @alignCast(@ptrCast(context));
-        _ = self;
-        _ = index;
-        return null;
+        const other_file = self.qcu.files.items[index];
+        std.debug.assert(other_file == .@"asm");
+        return other_file.@"asm".create_semantic_analysis(namespace);
     }
 
-    fn ensure_block_analysis(context: *anyopaque, index: AsmIr.Index, block_index: AsmIr.Index) !void {
+    fn ensure_block_analysed(context: *anyopaque, index: AsmIr.Index, block_index: AsmIr.Index) !void {
         const self: *AsmFile = @alignCast(@ptrCast(context));
         const file = self.qcu.files.items[index];
+        std.debug.assert(file == .@"asm");
 
-        switch (file) {
-            .@"asm" => |asm_file| {
-                const job: Job = .{ .semantic_analysis = .{ asm_file, block_index } };
-                try self.qcu.work_queue.add(job);
-            }
-        }
+        const job: Job = .{ .semantic_analysis = .{ file.@"asm", block_index } };
+        try self.qcu.work_queue.add(job);
     }
 };
 
@@ -319,8 +339,9 @@ const File = union(enum) {
 const Job = union(enum) {
 
     static_analysis: *AsmFile,
-    semantic_analysis: struct { *AsmFile, u32 },
-    liveness: *AsmFile,
+    link_script: *AsmFile,
+    semantic_analysis: struct { *AsmFile, AsmIr.Index },
+    liveness: struct { *AsmFile, AsmIr.Index },
     link: *Qcu,
 
     pub fn before(_: void, self: Job, other: Job) std.math.Order {
@@ -336,8 +357,9 @@ const Job = union(enum) {
     pub fn execute(self: Job) !void {
         return switch (self) {
             .static_analysis => |file| try file.static_analysis(),
+            .link_script => |file| try file.link_script(),
             .semantic_analysis => |t| try t[0].semantic_analysis(t[1]),
-            .liveness => |file| try file.liveness(),
+            .liveness => |t| try t[0].liveness(t[1]),
             .link => |qcu| try qcu.link()
         };
     }

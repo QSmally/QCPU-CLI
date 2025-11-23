@@ -78,7 +78,8 @@ fn dump_node(self: *AsmAst, ais: anytype, pm: anytype, index: Index) !void {
         },
 
         .negation,
-        .inversion => try self.dump_node(ais, pm, @intCast(node.operands.lhs)),
+        .inversion,
+        .mask => try self.dump_node(ais, pm, @intCast(node.operands.lhs)),
 
         .string,
         .reference => if (node.operands.lhs > 0)
@@ -88,7 +89,6 @@ fn dump_node(self: *AsmAst, ais: anytype, pm: anytype, index: Index) !void {
         .identifier,
         .integer,
         .character,
-        .modifier,
         .argument => {}
     }
 }
@@ -154,6 +154,9 @@ pub const Node = struct {
         /// lhs: unary operand
         /// token: the unary operator
         inversion,
+        /// lhs: unary operand
+        /// token: the post unary operator
+        mask,
         /// lhs: left binary operand
         /// rhs: right binary operand
         /// token: the binary operator
@@ -189,11 +192,8 @@ pub const Node = struct {
         /// lhs: sentinel operand, optional
         /// token: the string literal
         string,
-        /// lhs: modifier, optional
         /// token: the label
         reference,
-        /// token: the modifier
-        modifier,
         /// token: the argument
         argument,
 
@@ -616,23 +616,38 @@ const AstGen = struct {
             .operands = .{ .lhs = lhs, .rhs = rhs } };
     }
 
-    /// UnaryExpression <- UnaryOperator? PrimaryExpression
+    /// UnaryExpression <- UnaryOperator? PostUnaryExpression
     /// UnaryOperator <- '-' / '!'
     fn parse_unary_expression(self: *AstGen) ParseError!Node {
         const unary_tag: Node.Tag = switch (self.current_tag()) {
             .minus => .negation,
             .bang => .inversion,
-            else => return try self.parse_primary_expression()
+            else => return try self.parse_post_unary_expression()
         };
 
         const unary_cursor = self.next_cursor();
-        const expression = try self.parse_primary_expression();
+        const expression = try self.parse_post_unary_expression();
         const rhs = try self.add_node(expression);
 
         return .{
             .tag = unary_tag,
             .token = unary_cursor,
             .operands = .{ .lhs = rhs } };
+    }
+
+    /// PostUnaryExpression <- PrimaryExpression PostUnaryOperation?
+    /// PostUnaryOperation <- Modifier
+    /// Modifier <- Apostrophe .
+    fn parse_post_unary_expression(self: *AstGen) ParseError!Node {
+        const primary_expression = try self.parse_primary_expression();
+
+        return switch (self.current_tag()) {
+            .modifier => .{
+                .tag = .mask,
+                .token = self.next_cursor(),
+                .operands = .{ .lhs = try self.add_node(primary_expression) } },
+            else => primary_expression
+        };
     }
 
     /// PrimaryExpression <-
@@ -672,7 +687,7 @@ const AstGen = struct {
 
             else => {
                 try self.add_error(error.Expected, "an expression");
-                self.advance();
+                self.consume_line();
                 return .none;
             }
         };
@@ -683,22 +698,18 @@ const AstGen = struct {
             .operands = .none };
     }
 
-    /// Reference <- (ReferenceLabel / CurrentAddress) (Apostrophe AddressModifier)?
+    /// Reference <- ReferenceLabel / CurrentAddress
     /// ReferenceLabel <- Dot Identifier
     /// CurrentAddress <- '$'
-    /// AddressModifier <- 'l' / 'h'
     fn parse_reference_expression(self: *AstGen) ParseError!Node {
         const hosted_tag = self.current_tag();
         std.debug.assert(hosted_tag == .reference_label or hosted_tag == .dollar);
         const reference_cursor = self.next_cursor();
 
-        const modifier = if (try self.eat(.modifier, .silent)) |modifier_cursor|
-            try self.add_node(.{ .tag = .modifier, .token = modifier_cursor, .operands = .none }) else
-            Null;
         return .{
             .tag = .reference,
             .token = reference_cursor,
-            .operands = .{ .lhs = modifier } };
+            .operands = .none };
     }
 
     /// String <- '"' .* '"' Integer?
@@ -729,8 +740,8 @@ const AstGen = struct {
 
             .label,
             .private_label => {
-                const instruction = try self.parse_labeled_instruction();
-                try self.add_frame_node(instruction);
+                const label = try self.parse_label();
+                try self.add_frame_node(label);
             },
 
             .builtin_import => {
@@ -781,45 +792,20 @@ const AstGen = struct {
         return .{
             .tag = .instruction,
             .token = instruction_cursor,
-            .operands = .{ .rhs = arguments } };
+            .operands = .{ .lhs = arguments } };
     }
 
     /// Label <- PublicLabel / PrivateLabel
     /// PublicLabel <- Identifier Colon
     /// PrivateLabel <- Dot Identifier Colon
-    fn parse_labeled_instruction(self: *AstGen) ParseError!Node {
+    fn parse_label(self: *AstGen) ParseError!Node {
         const hosted_tag = self.current_tag();
         std.debug.assert(hosted_tag == .label or hosted_tag == .private_label);
 
-        const label_cursor = self.next_cursor();
-
-        const label_node = try self.add_node(.{
-            .tag = .label,
-            .token = label_cursor,
-            .operands = .none });
-        const instruction = search: while (true) switch (self.current_tag()) {
-            .identifier,
-            .instruction => break :search try self.parse_instruction(),
-
-            .newline => self.advance(),
-
-            else => |tag| {
-                try self.add_error(error.Expected, Token.Tag.instruction);
-                try self.add_error(error.NoteDefinedHere, self.tokens[label_cursor]);
-
-                if (tag.is_builtin_section() or tag == .builtin_end)
-                    try self.add_error(error.Note, "use 'reserve <type>, <len>' to occupy opaque space")
-                else if (tag.is_builtin())
-                    try self.add_error(error.Note, "label cannot bind to builtin or opaque without assembletime-known size");
-                self.consume_line();
-                break :search Node.none;
-            }
-        };
-
         return .{
-            .tag = .instruction,
-            .token = instruction.token,
-            .operands = .{ .lhs = label_node, .rhs = instruction.operands.rhs } };
+            .tag = .label,
+            .token = self.next_cursor(),
+            .operands = .none };
     }
 
     // Dot <- '.'
@@ -959,28 +945,22 @@ test "expressions" {
     try testAstGen("@define foo, (5 + 3) << 8", &.{});
     try testAstGen("@define foo, -5 + 3", &.{});
     try testAstGen("@define foo, !5", &.{});
-    try testAstGen("@define foo, 5'l", &.{ error.Expected });
     try testAstGen("@define foo, -5 3", &.{ error.Expected });
     try testAstGen("@define foo, +3", &.{ error.Expected });
+    try testAstGen("@define foo, 5'l", &.{});
+    try testAstGen("@define foo, 5 + 1'l", &.{});
+    try testAstGen("@define foo, 5'l + 1", &.{});
     try testAstGen("@define foo, ($ - .label) << 2", &.{});
+    try testAstGen("@define foo, ($ - .label) << 2'u", &.{});
     try testAstGen("@define foo, ($ - .label'u) << 2", &.{});
-    try testAstGen("@define foo, \"Hello world!\"", &.{});
-    try testAstGen("@define foo, \"Hello world!\" 1 + 2", &.{}); // string sentinel + integer
+    try testAstGen("@define foo, ($ - .label)'l << 2", &.{});
+    try testAstGen("@define foo, ($ - .label) <<'u 2", &.{ error.Expected });
 }
 
 test "labels" {
-    try testAstGen(
-        \\@section foo
-        \\.label:       kbpt
-    , &.{});
-
-    try testAstGen(
-        \\@section foo
-        \\.label:
-    , &.{
-        error.Expected,
-        error.NoteDefinedHere
-    });
+    try testAstGen("@section foo\n.label: kbpt", &.{});
+    try testAstGen("@section foo\n.label:", &.{});
+    try testAstGen("@section foo\nlabel:", &.{});
 
     try testAstGen(
         \\@section foo
@@ -995,11 +975,15 @@ test "labels" {
         \\@section foo
         \\.label:
         \\@define foo, bar
-    , &.{
-        error.Expected,
-        error.NoteDefinedHere,
-        error.Note
-    });
+    , &.{});
+}
+
+test "strings" {
+    try testAstGen("@define foo, \"foo bar roo\"", &.{});
+    try testAstGen("@define foo, \"foo bar roo\" 0", &.{});
+    try testAstGen("@define foo, \"foo bar roo\" 0 + 5", &.{}); // string sentinel + integer
+    try testAstGen("@define foo, \"foo bar roo\" -1", &.{});
+    try testAstGen("@section foo\nascii \"foo bar roo\" -1", &.{});
 }
 
 test "sections" {
