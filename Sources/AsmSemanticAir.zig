@@ -34,6 +34,9 @@ reference_pool: std.ArrayListUnmanaged(struct {
 /// section of this Sema, or further propagated.
 lowering_block: ?*AsmSemanticAir = null,
 
+/// Assemble-time conditional reason, for error info.
+cond_reason: CondReason = .none,
+
 /// Tracked by headers to skip @align padding for first Air.
 is_first_air: bool = true,
 
@@ -353,7 +356,7 @@ fn analyse_body_inner(self: *AsmSemanticAir, body: []const AsmIr.Ir) AnalysisErr
         switch (body[cursor].ty) {
             .@"if" => {
                 const if_body = body[(cursor + 1)..];
-                const analysed_len = try self.ir_cond_eval(body[cursor], if_body);
+                const analysed_len = try self.ir_conditional_block(body[cursor], if_body);
                 cursor += analysed_len;
             },
             .@"else" => unreachable, // handled by if
@@ -380,6 +383,20 @@ fn analyse_body_inner(self: *AsmSemanticAir, body: []const AsmIr.Ir) AnalysisErr
     for (self.reference_pool.items) |reference|
         try self.add_error(error.UnlinkedReference, reference.token, "reference '{s}' not bound to an opaque", .{ reference.name });
     self.reference_pool.clearRetainingCapacity();
+}
+
+const CondReason = union(enum) {
+    none,
+    assembletime_cond: SourceLocation.Token,
+    assembletime_false: SourceLocation.Token
+};
+
+fn analyse_body_cond(self: *AsmSemanticAir, body: []const AsmIr.Ir, cond_reason: CondReason) AnalysisError!void {
+    const old_cond_reason = self.cond_reason;
+    self.cond_reason = cond_reason;
+    defer self.cond_reason = old_cond_reason;
+
+    try self.analyse_body_inner(body);
 }
 
 fn current_section(self: *AsmSemanticAir) *Section {
@@ -454,8 +471,9 @@ fn emit_air(
     }
 }
 
-fn ir_cond_eval(self: *AsmSemanticAir, ir: AsmIr.Ir, body: []const AsmIr.Ir) !Index {
+fn ir_conditional_block(self: *AsmSemanticAir, ir: AsmIr.Ir, body: []const AsmIr.Ir) !Index {
     std.debug.assert(ir.ty == .@"if");
+    const token = self.source_location.qualified_token(ir.token);
     const expr = ir.ty.@"if".expression;
     const true_len = ir.ty.@"if".body_len;
 
@@ -463,7 +481,7 @@ fn ir_cond_eval(self: *AsmSemanticAir, ir: AsmIr.Ir, body: []const AsmIr.Ir) !In
     const condition = true;
 
     if (condition)
-        try self.analyse_body_inner(body[0..true_len]);
+        try self.analyse_body_cond(body[0..true_len], .{ .assembletime_cond = token });
     if (true_len == body.len or body[true_len].ty != .@"else")
         return true_len;
     const false_len = body[true_len].ty.@"else";
@@ -473,7 +491,7 @@ fn ir_cond_eval(self: *AsmSemanticAir, ir: AsmIr.Ir, body: []const AsmIr.Ir) !In
     std.debug.assert(body.len >= full_body_len);
 
     if (!condition)
-        try self.analyse_body_inner(body[else_start..full_body_len]);
+        try self.analyse_body_cond(body[else_start..full_body_len], .{ .assembletime_false = token });
     return full_body_len;
 }
 
@@ -554,7 +572,7 @@ fn ir_err(self: *AsmSemanticAir, ir: AsmIr.Ir) !void {
     };
 
     if (argument != arguments_len) {
-        try self.add_error(
+        return try self.add_error(
             error.InvalidFormat,
             self.source_location.qualified_token(token),
             "expected {} formatting arguments, found {}",
@@ -571,6 +589,11 @@ fn ir_err(self: *AsmSemanticAir, ir: AsmIr.Ir) !void {
         .is_note = false,
         .is_preview = true,
         .message = message });
+    switch (self.cond_reason) {
+        .none => {},
+        .assembletime_cond => |cond_prong| try self.add_error(error.NoteCalledFromHere, cond_prong, "conditionally evaluated from here", .{}),
+        .assembletime_false => |false_prong| try self.add_error(error.NoteCalledFromHere, false_prong, "conditionally evaluated false from here", .{})
+    }
 }
 
 fn ir_label(self: *AsmSemanticAir, ir: AsmIr.Ir) !void {
@@ -729,11 +752,7 @@ fn Loc(comptime T: type) type {
 
 const Numeric = struct {
 
-    label: struct {
-        qualified_name: []const u8,
-        mask: u16
-    },
-    offset: struct {
+    label: ?struct {
         qualified_name: []const u8,
         mask: u16
     },

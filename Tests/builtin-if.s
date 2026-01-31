@@ -10,6 +10,7 @@
                   ascii "Hello world" 0xFF
 @offset(expose) foo, bbb
                   bkpt
+                  @err "hello"
                   bkpt
 @else
                   bkpt
