@@ -1,73 +1,134 @@
 
 const std = @import("std");
+const indexable_list = @import("indexable_list.zig");
+const instruction = @import("instruction.zig");
 
 const Token = @This();
+
+pub const List = indexable_list.IndexableList(Token);
 
 pub const Tag = enum {
 
     invalid,
-    unexpected_eof,
-    eof,
     newline,
+    eof,
 
     l_paran,
     r_paran,
     comma,
     plus,
+    plusplus,
     minus,
+    minusminus,
     bang,
+    asterisk,
+    pipe,
+    ampersand,
+    dollar,
     lsh,
+    lt,
     rsh,
-    mult,
+    gt,
+    eq,
 
     label,
+    local_label,
     private_label,
     reference_label,
+    difference_label,
+    modifier,
     numeric_literal,
     char_literal,
     string_literal,
-    modifier,
 
     identifier,
-    option,
     instruction,
-    pseudo_instruction,
-    reserved_argument,
+    argument,
 
+    builtin_invalid,
     builtin_align,
     builtin_barrier,
     builtin_define,
+    builtin_else,
     builtin_end,
+    builtin_err,
     builtin_header,
+    builtin_if,
     builtin_import,
     builtin_linkinfo,
     builtin_region,
     builtin_section,
 
-    pub fn builtin_opaque(self: Tag) bool {
+    pub fn isBuiltinOpaque(self: Tag) bool {
         return switch (self) {
             .builtin_align,
             .builtin_define,
             .builtin_end,
+            .builtin_err,
             .builtin_import,
             .builtin_linkinfo => false,
 
+            .builtin_barrier,
+            .builtin_else,
             .builtin_header,
+            .builtin_if,
             .builtin_region,
-            .builtin_section,
-            .builtin_barrier => true,
+            .builtin_section => true,
 
             else => unreachable
         };
     }
 
-    pub fn is_builtin(self: Tag) bool {
+    pub fn isBuiltinScoped(self: Tag) bool {
+        return switch (self) {
+            .builtin_barrier,
+            .builtin_define,
+            .builtin_header,
+            .builtin_import,
+            .builtin_linkinfo,
+            .builtin_section => false,
+
+            .builtin_align,
+            .builtin_else,
+            .builtin_end,
+            .builtin_err,
+            .builtin_if,
+            .builtin_region => true,
+
+            else => false
+        };
+    }
+
+    pub fn isBuiltinSection(self: Tag) bool {
+        return switch (self) {
+            .builtin_align,
+            .builtin_define,
+            .builtin_else,
+            .builtin_end,
+            .builtin_err,
+            .builtin_header,
+            .builtin_if,
+            .builtin_import,
+            .builtin_linkinfo,
+            .builtin_region => false,
+
+            .builtin_barrier,
+            .builtin_section => true,
+
+            else => false
+        };
+    }
+
+    pub fn isBuiltin(self: Tag) bool {
         return switch (self) {
             .builtin_align,
             .builtin_barrier,
             .builtin_define,
+            .builtin_else,
             .builtin_end,
+            .builtin_err,
             .builtin_header,
+            .builtin_if,
             .builtin_import,
             .builtin_linkinfo,
             .builtin_region,
@@ -80,214 +141,163 @@ pub const Tag = enum {
     pub fn fmt(self: Tag) []const u8 {
         return switch (self) {
             .invalid => "an invalid symbol",
-            .unexpected_eof => "an unexpected EOF",
-            .eof => "EOF",
             .newline => "a newline",
+            .eof => "EOF",
 
             .l_paran => "'('",
             .r_paran => "')'",
             .comma => "a comma",
             .plus => "a plus sign",
+            .plusplus => "an increment operator",
             .minus => "a minus sign",
+            .minusminus => "a decrement operator",
             .bang => "an exclamation point",
+            .asterisk => "an asterisk",
+            .pipe => "a pipe",
+            .ampersand => "an ampersand",
+            .dollar => "a dollar sign",
             .lsh => "a left-shift operator",
             .rsh => "a right-shift operator",
-            .mult => "a multiplication operator",
+            .lt => "a less-than operator",
+            .gt => "a greater-than operator",
+            .eq => "an equal sign",
 
             .label => "a label",
+            .local_label => "a local label",
             .private_label => "a private label",
             .reference_label => "a reference label",
+            .difference_label => "a difference label",
+            .modifier => "a modifier",
             .numeric_literal => "a numeric literal",
             .char_literal => "a character literal",
             .string_literal => "a string literal",
-            .modifier => "a modifier",
 
             .identifier => "an identifier",
-            .option => "an option",
-            .instruction,
-            .pseudo_instruction => "an instruction",
-            .reserved_argument => "a reserved argument",
+            .instruction => "an instruction",
+            .argument => "an argument",
 
+            .builtin_invalid => "an invalid builtin",
             .builtin_align => "@align",
             .builtin_barrier => "@barrier",
             .builtin_define => "@define",
+            .builtin_else => "@else",
             .builtin_end => "@end",
+            .builtin_err => "@err",
             .builtin_header => "@header",
+            .builtin_if => "@if",
             .builtin_import => "@import",
             .builtin_linkinfo => "@linkinfo",
             .builtin_region => "@region",
             .builtin_section => "@section"
         };
     }
+
+    pub fn operationFmt(self: Tag) []const u8 {
+        return switch (self) {
+            .plus => "addition",
+            .plusplus => "increment",
+            .minus => "subtraction",
+            .minusminus => "decrement",
+            .bang => "negation",
+            .asterisk => "multiplication",
+            .pipe => "bitwise OR",
+            .ampersand => "bitwise AND",
+            .lsh => "left-shift",
+            .rsh => "right-shift",
+            .modifier => "bitwise AND",
+            else => self.fmt()
+        };
+    }
 };
 
 pub const Location = struct {
 
-    start_byte: usize,
-    end_byte: usize,
+    start: usize,
+    end: usize,
 
     pub fn eql(self: Location, location: Location) bool {
-        return self.start_byte == location.start_byte and
-            self.end_byte == location.end_byte;
+        return self.start == location.start and self.end == location.end;
     }
 
-    pub fn slice(self: Location, from_buffer: [:0]const u8) []const u8 {
-        return from_buffer[self.start_byte..self.end_byte];
+    pub fn slice(self: Location, buffer: [:0]const u8) []const u8 {
+        return buffer[self.start..self.end];
     }
 };
 
 tag: Tag,
 location: Location,
 
-pub fn content_slice(self: Token, from_buffer: [:0]const u8) []const u8 {
-    const slice = self.location.slice(from_buffer);
+pub fn slice(self: Token, buffer: [:0]const u8) []const u8 {
+    const string = self.location.slice(buffer);
     return switch (self.tag) {
-        .label => slice[0..(slice.len - 1)],            // remove punctuation
-        .private_label,                                 // remove punctuation
-        .char_literal,                                  // remove quotes
-        .string_literal => slice[1..(slice.len - 1)],   // remove quotes
-        .modifier => slice[1..],                        // remove leading quote
-        .reference_label => blk: {                      // remove dots/namespace
-            const last_index = std.mem.lastIndexOfScalar(u8, slice, '.') orelse unreachable;
-            break :blk slice[(last_index + 1)..];
-        },
-        else => slice
+        .label => string[0..(string.len - 1)],              // remove punctuation
+        .local_label,                                       // remove punctuation
+        .private_label,                                     // remove punctuation
+        .char_literal,                                      // remove quotes
+        .string_literal => string[1..(string.len - 1)],     // remove quotes
+        .reference_label, .difference_label => string[1..], // remove prefix dot
+        .modifier => string[1..],                           // remove leading quote
+        else => string
     };
 }
 
-// Precheck list used in the generation of the Abstract Syntax Tree. There's
-// probably a corresponding section in SemAir to further support a keyword,
-// e.g. builtin, option, instruction, etc.
-const keywords = std.StaticStringMap(Tag).initComptime(.{
-    // Builtins
+pub fn keyword(identifier: []const u8) ?Tag {
+    if (std.meta.stringToEnum(instruction.MachineInstr.Tag, identifier) != null)
+        return .instruction;
+    if (std.meta.stringToEnum(instruction.Register, identifier) != null)
+        return .argument;
+    if (std.meta.stringToEnum(instruction.Flag, identifier) != null)
+        return .argument;
+    return null;
+}
+
+const builtins = std.StaticStringMap(Tag).initComptime(.{
     .{ "@align", .builtin_align },
-    .{ "@barrier", .builtin_barrier },
-    .{ "@define", .builtin_define },
-    .{ "@end", .builtin_end },
-    .{ "@header", .builtin_header },
-    .{ "@import", .builtin_import },
-    .{ "@linkinfo", .builtin_linkinfo },
-    .{ "@region", .builtin_region },
-    .{ "@section", .builtin_section },
-
-    .{ "expose", .option },
-    .{ "noelimination", .option },
-    .{ "origin", .option },
-    .{ "align", .option },
-    .{ "maxlen", .option },
-    .{ "maxaddr", .option },
-
-    // Instructions
-    .{ "bkpt", .instruction },
-    .{ "sysc", .instruction },
-    .{ "ret", .instruction },
-    .{ "msp", .instruction },
-    .{ "nta", .instruction },
-    .{ "ast", .instruction },
-    .{ "clr", .instruction },
-    .{ "xch", .instruction },
-    .{ "stg", .instruction },
-    .{ "rst", .instruction },
-    .{ "inc", .instruction },
-    .{ "dec", .instruction },
-    .{ "neg", .instruction },
-    .{ "rsh", .instruction },
-    .{ "add", .instruction },
-    .{ "addc", .instruction },
-    .{ "sub", .instruction },
-    .{ "subb", .instruction },
-    .{ "ior", .instruction },
-    .{ "and", .instruction },
-    .{ "xor", .instruction },
-    .{ "bsl", .instruction },
-    .{ "bsld", .instruction },
-    .{ "bsr", .instruction },
-    .{ "bsrd", .instruction },
-    .{ "imm", .instruction },
-    .{ "brh", .instruction },
-    .{ "jmp", .instruction },
-    .{ "jmpl", .instruction },
-    .{ "jmpr", .instruction },
-    .{ "jmprl", .instruction },
-    .{ "jmpd", .instruction },
-    .{ "jmpdl", .instruction },
-    .{ "prf", .instruction },
-    .{ "amr", .instruction },
-    .{ "mst", .instruction },
-    .{ "mstw", .instruction },
-    .{ "mld", .instruction },
-    .{ "mldw", .instruction },
-
-    .{ "ascii", .pseudo_instruction },
-    .{ "i16", .pseudo_instruction },
-    .{ "i24", .pseudo_instruction },
-    .{ "i8", .pseudo_instruction },
-    .{ "u16", .pseudo_instruction },
-    .{ "u24", .pseudo_instruction },
-    .{ "u8", .pseudo_instruction },
-
-    .{ "reserve", .instruction },
-
-    // Operators
-    .{ "lsh", .lsh },
-    .{ "rsh", .rsh },
-
-    // Operands
-    .{ "c", .reserved_argument },   // carry out
-    .{ "s", .reserved_argument },   // sign
-    .{ "u", .reserved_argument },   // underflow
-    .{ "z", .reserved_argument },   // zero
-    .{ "nc", .reserved_argument },  // not carry out
-    .{ "ns", .reserved_argument },  // not sign
-    .{ "nu", .reserved_argument },  // not underflow
-    .{ "nz", .reserved_argument },  // not zero
-
-    // Registers
-    .{ "sf", .reserved_argument },  // stack frame
-    .{ "sp", .reserved_argument },  // stack pointer
-    .{ "xy", .reserved_argument },  // index reg
-    .{ "zr", .reserved_argument },  // zero reg
-    .{ "mah", .reserved_argument }, // async a l/h
-    .{ "mal", .reserved_argument },
-    .{ "mbh", .reserved_argument }, // async b l/h
-    .{ "mbl", .reserved_argument },
-    .{ "mch", .reserved_argument }, // async c l/h
-    .{ "mcl", .reserved_argument },
-    .{ "mdh", .reserved_argument }, // async d l/h
-    .{ "mdl", .reserved_argument },
-    .{ "zr", .reserved_argument },
-    .{ "ra", .reserved_argument },
-    .{ "rb", .reserved_argument },
-    .{ "rc", .reserved_argument },
-    .{ "rd", .reserved_argument },
-    .{ "rx", .reserved_argument },
-    .{ "ry", .reserved_argument },
-    .{ "rz", .reserved_argument }
+    .{ "@barrier", .builtin_barrier, },
+    .{ "@define", .builtin_define, },
+    .{ "@else", .builtin_else, },
+    .{ "@end", .builtin_end, },
+    .{ "@err", .builtin_err, },
+    .{ "@header", .builtin_header, },
+    .{ "@if", .builtin_if, },
+    .{ "@import", .builtin_import, },
+    .{ "@linkinfo", .builtin_linkinfo, },
+    .{ "@region", .builtin_region, },
+    .{ "@section", .builtin_section, }
 });
 
-comptime {
-    const AsmSemanticAir = @import("AsmSemanticAir.zig");
-    @setEvalBranchQuota(999_999_999);
-
-    for (keywords.keys()) |keyword| {
-        const value = keywords.get(keyword) orelse unreachable;
-        if (value != .instruction and value != .pseudo_instruction)
-            continue;
-        if (std.meta.stringToEnum(AsmSemanticAir.Instruction.Tag, keyword) == null)
-            @compileError("bug: unmapped instruction: " ++ keyword);
-    }
+pub fn builtin(identifier: []const u8) ?Tag {
+    return builtins.get(identifier);
 }
 
-pub fn reserved(identifier: []const u8) ?Tag {
-    return keywords.get(identifier);
+// Tests
+
+const test_buffer = "aaaaa\nhello\n";
+
+fn testTokenSlice(tag: Tag, content: [:0]const u8) []const u8 {
+    const location = Location { .start = 0, .end = content.len };
+    const token = Token { .tag = tag, .location = location };
+    return token.slice(content);
 }
 
-// For use in errors, where the argument is expected to be a struct containing
-// a fmt() method.
-pub fn string(argument: []const u8) type {
-    return struct {
-        pub fn fmt() []const u8 {
-            return argument;
-        }
-    };
+test "location" {
+    const location_a = Location { .start = 6, .end = 9 };
+    const location_b = Location { .start = 6, .end = 9 };
+
+    try std.testing.expect(location_a.eql(location_b));
+    try std.testing.expectEqualSlices(u8, "hel", location_a.slice(test_buffer));
+}
+
+test "slices" {
+    try std.testing.expectEqualSlices(u8, testTokenSlice(.identifier, "foo"), "foo");
+    try std.testing.expectEqualSlices(u8, testTokenSlice(.instruction, "bkpt"), "bkpt");
+    try std.testing.expectEqualSlices(u8, testTokenSlice(.builtin_end, "@end"), "@end");
+    try std.testing.expectEqualSlices(u8, testTokenSlice(.label, "label:"), "label");
+    try std.testing.expectEqualSlices(u8, testTokenSlice(.local_label, "_label:"), "label");
+    try std.testing.expectEqualSlices(u8, testTokenSlice(.private_label, ".label:"), "label");
+    try std.testing.expectEqualSlices(u8, testTokenSlice(.reference_label, ".label"), "label");
+    try std.testing.expectEqualSlices(u8, testTokenSlice(.difference_label, "&label"), "label");
+    try std.testing.expectEqualSlices(u8, testTokenSlice(.char_literal, "'a'"), "a");
+    try std.testing.expectEqualSlices(u8, testTokenSlice(.string_literal, "\"foo\""), "foo");
+    try std.testing.expectEqualSlices(u8, testTokenSlice(.modifier, "'f"), "f");
 }

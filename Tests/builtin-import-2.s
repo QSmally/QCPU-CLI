@@ -1,3 +1,0 @@
-
-@section example
-foo:              bkpt

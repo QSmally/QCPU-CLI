@@ -2,6 +2,7 @@
     .name = .QCPU,
     .version = "0.0.0",
     .fingerprint = 0x81937c6db284ab3c,
+    .minimum_zig_version = "0.17.0",
 
     .dependencies = .{},
 

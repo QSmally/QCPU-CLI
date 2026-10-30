@@ -1,17 +1,273 @@
 
+// Tokeniser
+
 const Token = @import("Token.zig");
 
 const AsmTokeniser = @This();
+
+buffer: [:0]const u8,
+cursor: usize = 0,
+
+pub fn init(buffer: [:0]const u8) AsmTokeniser {
+    return .{ .buffer = buffer };
+}
+
+pub fn isEof(self: *AsmTokeniser) bool {
+    return self.cursor == self.buffer.len;
+}
+
+const State = enum {
+    start,
+    invalid,
+    identifier,
+    builtin,
+    underscore,
+    plus,
+    minus,
+    label,
+    ampersand,
+    difference_label,
+    left_angled_bracket,
+    right_angled_bracket,
+    slash,
+    comment,
+    numeric_literal,
+    string_literal,
+    apostrophe
+};
+
+pub fn next(self: *AsmTokeniser) Token {
+    var result = Token {
+        .tag = undefined,
+        .location = .{
+            .start = self.cursor,
+            .end = undefined } };
+    var helper = Helper.init(self, &result);
+
+    state: switch (State.start) {
+        .start => switch (helper.current()) {
+            0 => if (self.isEof())
+                helper.tag(.eof) else
+                helper.tagNext(.invalid),
+
+            ' ', '\t', '\r' => {
+                helper.discard();
+                continue :state .start;
+            },
+
+            // single character tags
+            '\n' => helper.tagNext(.newline),
+            '(' => helper.tagNext(.l_paran),
+            ')' => helper.tagNext(.r_paran),
+            ',' => helper.tagNext(.comma),
+            '!' => helper.tagNext(.bang),
+            '*' => helper.tagNext(.asterisk),
+            '|' => helper.tagNext(.pipe),
+            '$' => helper.tagNext(.dollar),
+            '=' => helper.tagNext(.eq),
+
+            // beginning of tags
+            'a'...'z', 'A'...'Z' => continue :state .identifier,
+            '@' => continue :state .builtin,
+            '_' => continue :state .underscore,
+            '+' => continue :state .plus,
+            '-' => continue :state .minus,
+            '.' => continue :state .label,
+            '&' => continue :state .ampersand,
+            '<' => continue :state .left_angled_bracket,
+            '>' => continue :state .right_angled_bracket,
+            '/' => continue :state .slash,
+            ';' => continue :state .comment,
+            '0'...'9' => continue :state .numeric_literal,
+            '"' => continue :state .string_literal,
+            '\'' => continue :state .apostrophe,
+
+            else => continue :state .invalid
+        },
+
+        // Mark current token as invalid until a boundary character, after
+        // which the tokeniser can continue (either providing as many errors to
+        // the user, or abort the process).
+        .invalid => switch (helper.current()) {
+            0, '\n', '\t', '\r' => helper.tag(.invalid),
+            else => if (helper.isNextBoundary())
+                helper.tagPrevious(.invalid) else
+                continue :state .invalid
+        },
+
+        // Tags any token starting with a-zA-Z_ and continuing with a-zA-Z0-9_
+        // as identifier, or if found, a (pseudo)instruction or other reserved
+        // identifier.
+        .identifier => switch (helper.next()) {
+            'a'...'z', 'A'...'Z', '0'...'9', '_' => continue :state .identifier,
+            '.' => switch (helper.peek()) {
+                'a'...'z', 'A'...'Z', '_' => continue :state .identifier,
+                else => continue :state .invalid
+            },
+            ':' => helper.tagNext(.label),
+            else => {
+                const identifier = self.buffer[result.location.start..self.cursor];
+                helper.tagPrevious(if (Token.keyword(identifier)) |keyword|
+                    keyword else
+                    .identifier);
+            }
+        },
+
+        .builtin => switch (helper.next()) {
+            'a'...'z', 'A'...'Z', '0'...'9', '_' => continue :state .builtin,
+            else => {
+                const identifier = self.buffer[result.location.start..self.cursor];
+                helper.tagPrevious(if (Token.builtin(identifier)) |builtin|
+                    builtin else
+                    .builtin_invalid);
+            }
+        },
+
+        // Tokens starting with an underscore can only be local labels.
+        .underscore => switch (helper.next()) {
+            'a'...'z', 'A'...'Z', '0'...'9', '_' => continue :state .underscore,
+            '.' => switch (helper.peek()) {
+                'a'...'z', 'A'...'Z', '_' => continue :state .underscore,
+                else => continue :state .invalid
+            },
+            ':' => helper.tagNext(.local_label),
+            else => continue :state .identifier
+        },
+
+        // A plus sign can either really be a plus sign, or the increment
+        // operator.
+        .plus => switch (helper.next()) {
+            '+' => helper.tagNext(.plusplus),
+            else => helper.tagPrevious(.plus)
+        },
+
+        // A minus sign can either really be a minus sign, or the decrement
+        // operator.
+        .minus => switch (helper.next()) {
+            '-' => helper.tagNext(.minusminus),
+            else => helper.tagPrevious(.minus)
+        },
+
+        // A private label starts with a period and ends with a colon, whilst
+        // references end with a boundary character. Public labels start as
+        // identifiers.
+        .label => switch (helper.next()) {
+            'a'...'z', 'A'...'Z', '0'...'9', '_' => continue :state .label,
+            '.' => switch (helper.peek()) {
+                'a'...'z', 'A'...'Z', '_' => continue :state .label,
+                else => continue :state .invalid
+            },
+            ':' => helper.tagNext(.private_label),
+            else => if (helper.isBoundary())
+                helper.tagPrevious(.reference_label) else
+                continue :state .invalid
+        },
+
+        // An ampersand can either be a difference label when it is followed
+        // by a-zA-Z_ or just a regular ampersand otherwise.
+        .ampersand => switch (helper.next()) {
+            'a'...'z', 'A'...'Z', '_' => continue :state .difference_label,
+            else => helper.tagPrevious(.ampersand)
+        },
+
+        .difference_label => switch (helper.next()) {
+            'a'...'z', 'A'...'Z', '0'...'9', '_' => continue :state .difference_label,
+            '.' => switch (helper.peek()) {
+                'a'...'z', 'A'...'Z', '_' => continue :state .difference_label,
+                else => continue :state .invalid
+            },
+            else => if (helper.isBoundary())
+                helper.tagPrevious(.difference_label) else
+                continue :state .invalid
+        },
+
+        // A less-than (<) or left shift (<<) operator.
+        .left_angled_bracket => switch (helper.next()) {
+            '<' => helper.tagNext(.lsh),
+            else => helper.tagPrevious(.lt)
+        },
+
+        // A greater-than (>) or right shift (>>) operator.
+        .right_angled_bracket => switch (helper.next()) {
+            '>' => helper.tagNext(.rsh),
+            else => helper.tagPrevious(.gt)
+        },
+
+        // A type of comment starts with two forward slashes.
+        .slash => switch (helper.next()) {
+            '/' => continue :state .comment,
+            else => continue :state .invalid
+        },
+
+        .comment => switch (helper.next()) {
+            0 => continue :state .start,
+            '\n' => helper.tagNext(.newline),
+            else => continue :state .comment
+        },
+
+        // Any decimal, hexadecimal or octal numeric literal. Further
+        // validation is done during semantic analysis.
+        .numeric_literal => switch (helper.next()) {
+            '0'...'9', 'A'...'F', 'x', 'b' => continue :state .numeric_literal,
+            else => if (helper.isBoundary())
+                helper.tagPrevious(.numeric_literal) else
+                continue :state .invalid
+        },
+
+        // A string literal is just a range of characters until the second
+        // double quotes delimiter.
+        .string_literal => switch (helper.next()) {
+            '"' => helper.tagNext(.string_literal),
+            0, '\n' => continue :state .invalid,
+            else => continue :state .string_literal
+        },
+
+        // An apostrophe can mean a character literal ('a') or a modifier ('u),
+        // which is mainly used in address masking.
+        .apostrophe => switch (helper.next()) {
+            // TODO: support \ escape notation
+            ' '...'[', ']'...'`', '{'...'~' => switch (helper.next()) {
+                '\'' => helper.tagNext(.char_literal),
+                else => continue :state .invalid
+            },
+            'a'...'z' => switch (helper.next()) {
+                '\'' => helper.tagNext(.char_literal),
+                else => if (helper.isBoundary())
+                    helper.tagPrevious(.modifier) else
+                    continue :state .invalid
+            },
+            else => continue :state .invalid
+        }
+    }
+
+    return result;
+}
 
 const Helper = struct {
 
     tokeniser: *AsmTokeniser,
     token: *Token,
 
-    pub fn init(tokeniser_: *AsmTokeniser, token_: *Token) Helper {
+    pub fn init(tokeniser: *AsmTokeniser, token: *Token) Helper {
         return .{
-            .tokeniser = tokeniser_,
-            .token = token_ };
+            .tokeniser = tokeniser,
+            .token = token };
+    }
+
+    pub inline fn isBoundary(self: *Helper) bool {
+        return switch (self.current()) {
+            0, '\n', '\t', '\r', ' ',
+            ',', '(', ')',
+            '+', '-', '!', '*', '|', '&', '$', '<', '>',
+            '\'' => true,
+
+            else => false
+        };
+    }
+
+    pub inline fn isNextBoundary(self: *Helper) bool {
+        self.tokeniser.cursor += 1;
+        return self.isBoundary();
     }
 
     pub inline fn current(self: *Helper) u8 {
@@ -27,197 +283,30 @@ const Helper = struct {
         return self.current();
     }
 
-    pub inline fn tag(self: *Helper, tag_: Token.Tag) void {
-        self.token.tag = tag_;
-        self.token.location.end_byte = self.tokeniser.cursor + 1;
+    pub inline fn tag(self: *Helper, tagged: Token.Tag) void {
+        self.token.tag = tagged;
+        self.token.location.end = self.tokeniser.cursor + 1;
     }
 
-    pub inline fn tag_lookahead(self: *Helper, tag_: Token.Tag) void {
-        self.token.tag = tag_;
-        self.token.location.end_byte = self.tokeniser.cursor;
+    pub inline fn tagPrevious(self: *Helper, tagged: Token.Tag) void {
+        self.token.tag = tagged;
+        self.token.location.end = self.tokeniser.cursor;
     }
 
-    pub inline fn tag_next(self: *Helper, tag_: Token.Tag) void {
-        self.tag(tag_);
+    pub inline fn tagNext(self: *Helper, tagged: Token.Tag) void {
+        self.tag(tagged);
         self.tokeniser.cursor += 1;
     }
 
     pub inline fn discard(self: *Helper) void {
         self.tokeniser.cursor += 1;
-        self.token.location.start_byte = self.tokeniser.cursor;
+        self.token.location.start = self.tokeniser.cursor;
     }
 };
-
-buffer: [:0]const u8,
-cursor: usize = 0,
-
-pub fn init(buffer_: [:0]const u8) AsmTokeniser {
-    return .{ .buffer = buffer_ };
-}
-
-fn is_eof(self: *AsmTokeniser) bool {
-    return self.cursor == self.buffer.len;
-}
-
-const State = enum {
-    start,
-    invalid,
-    identifier,
-    label,
-    slash,
-    comment,
-    numeric_literal,
-    string_literal,
-    apostrophe
-};
-
-pub fn next(self: *AsmTokeniser) Token {
-    var result: Token = .{
-        .tag = undefined,
-        .location = .{
-            .start_byte = self.cursor,
-            .end_byte = undefined } };
-    var helper = Helper.init(self, &result);
-
-    state: switch (State.start) {
-        .start => switch (helper.current()) {
-            0 => if (self.is_eof())
-                helper.tag(.eof) else
-                helper.tag_next(.unexpected_eof),
-
-            ' ', '\t', '\r' => {
-                helper.discard();
-                continue :state .start;
-            },
-
-            // single character tags
-            '\n' => helper.tag_next(.newline),
-            '(' => helper.tag_next(.l_paran),
-            ')' => helper.tag_next(.r_paran),
-            ',' => helper.tag_next(.comma),
-            '+' => helper.tag_next(.plus),
-            '-' => helper.tag_next(.minus),
-            '!' => helper.tag_next(.bang),
-            '*' => helper.tag_next(.mult),
-
-            // beginning of tags
-            'a'...'z', 'A'...'Z', '_', '@' => continue :state .identifier,
-            '.' => continue :state .label,
-            '/' => continue :state .slash,
-            ';' => continue :state .comment,
-            '0'...'9' => continue :state .numeric_literal,
-            '"' => continue :state .string_literal,
-            '\'' => continue :state .apostrophe,
-
-            else => continue :state .invalid
-        },
-
-        // Mark current token as invalid until a barrier character, after which
-        // the tokeniser can continue (either providing as many errors to the
-        // user, or abort the process).
-        //
-        // A barrier character is a universal list, including:
-        // - eof/newlines/spaces
-        // - parenthesis
-        // - commas
-        // - binary operators
-        .invalid => switch (helper.next()) {
-            0, '\n', ' ', '(', ')', ',', '+', '-', '*' => helper.tag_lookahead(.invalid),
-            else => continue :state .invalid
-        },
-
-        // Tags any token starting with a-zA-Z_ and continuing with a-zA-Z0-9_
-        // as identifier, or if found, a (pseudo)instruction or builtin.
-        .identifier => switch (helper.next()) {
-            'a'...'z', 'A'...'Z', '0'...'9', '_'  => continue :state .identifier,
-            '.' => switch (helper.peek()) {
-                'a'...'z', 'A'...'Z', '_' => continue :state .identifier,
-                else => continue :state .invalid
-            },
-            ':' => helper.tag_next(.label),
-            else => {
-                const identifier_ = self.buffer[result.location.start_byte..self.cursor];
-                helper.tag_lookahead(if (Token.reserved(identifier_)) |reserved|
-                    reserved else
-                    .identifier);
-            }
-        },
-
-        // A private label is started with a period, but public labels are
-        // identifiers until a colon. An address reference 
-        .label => switch (helper.next()) {
-            'a'...'z', 'A'...'Z', '0'...'9', '_', '.' => continue :state .label,
-            ':' => helper.tag_next(.private_label),
-            0, '\n', ' ', '(', ')', ',', '+', '-', '*', '\'' => helper.tag_lookahead(.reference_label),
-            else => continue :state .invalid
-        },
-
-        // A slash is the beginning of a comment, which extends to the end of
-        // the line.
-        .slash => switch (helper.next()) {
-            0 => helper.tag(.unexpected_eof),
-            '/' => continue :state .comment,
-            else => continue :state .invalid
-        },
-
-        .comment => switch (helper.next()) {
-            0 => continue :state .start,
-            // newline tokens have a start-byte at the comment, which doesn't
-            // really matter as they're not used anyway
-            // tag:newline-comment
-            '\n' => helper.tag_next(.newline),
-            else => continue :state .comment
-        },
-
-        // Any; decimal, hexadecimal. Further validation of the numeric literal
-        // is done at a later stage based on prefixing (like 0x and 0b).
-        .numeric_literal => switch (helper.next()) {
-            '0'...'9', 'A'...'F', 'x', 'b' => continue :state .numeric_literal,
-            0, '\n', ' ', '(', ')', ',', '+', '-', '*' => helper.tag_lookahead(.numeric_literal),
-            else => continue :state .invalid
-        },
-
-        // A string literal is just a range of characters. There's no null byte
-        // added automatically, which must be added by the programmer:
-        //  ascii 'foo bar' 0
-        //  ascii 'foo bar' 0x00
-        .string_literal => switch (helper.next()) {
-            '"' => helper.tag_next(.string_literal),
-            0 => helper.tag(.unexpected_eof),
-            '\n' => continue :state .invalid,
-            else => continue :state .string_literal
-        },
-
-        // An apostrophe can mean a character literal or a(n) (address)
-        // modifier.
-        // An address modifier is a ' character with an identifier, like 'u.
-        // How something is interpreted depends on the type context in relation
-        // to the parent's content. For example, a u16 interpreting a
-        // .reference will fit just fine, but a u8 interpreting a .reference
-        // will need an explicit modifier.
-        .apostrophe => switch (helper.next()) {
-            // fixme: only a-zA-Z0-9 available
-            'a'...'z', 'A'...'Z', '0'...'9' => switch (helper.next()) {
-                '\'' => helper.tag_next(.char_literal),
-                0, '\n', ' ', '(', ')', ',', '+', '-', '*' => helper.tag_lookahead(.modifier),
-                else => continue :state .invalid
-            },
-            0, '\n', ' ', '(', ')', ',', '+', '-', '*' => helper.tag_lookahead(.modifier),
-            else => continue :state .invalid
-        }
-    }
-
-    return result;
-}
 
 // Tests
 
 const std = @import("std");
-const options = @import("options");
-
-const stderr = std.io
-    .getStdErr()
-    .writer();
 
 fn testTokenise(input: [:0]const u8, expected_tokens: []const Token.Tag) !void {
     var tokeniser = AsmTokeniser.init(input);
@@ -228,33 +317,29 @@ fn testTokenise(input: [:0]const u8, expected_tokens: []const Token.Tag) !void {
 const SlicedToken = struct { Token.Tag, []const u8 };
 
 fn testTokeniseSlices(input: [:0]const u8, expected_slices: []const SlicedToken) !void {
+    const stderr_file = std.Io.File.stderr();
+    var stderr_buffer: [4096]u8 = undefined;
+    var stderr = stderr_file.writer(std.testing.io, &stderr_buffer);
+    defer stderr.flush() catch {};
+
     var tokeniser = AsmTokeniser.init(input);
 
-    for (expected_slices, 0..) |expected_slice, idx| {
+    for (expected_slices) |expected_slice| {
         const token = tokeniser.next();
-        if (options.dump) {
-            const slice = if (token.tag != .newline)
-                token.location.slice(input) else
-                "\\n";
-            try stderr.print("{}: {s}={s}\n", .{
-                idx,
-                @tagName(token.tag),
-                slice });
-        }
 
         try std.testing.expectEqual(expected_slice[0], token.tag);
 
-        // see tag:newline-comment
-        if (token.tag != .newline)
+        if (token.tag != .newline) {
             try std.testing.expectEqualSlices(u8, expected_slice[1], token.location.slice(input));
+        }
     }
 }
 
 test "eof" {
     try testTokenise("", &.{ .eof });
     try testTokenise("   ", &.{ .eof });
-    try testTokenise("%", &.{ .invalid, .eof });
-    try testTokenise("\x00", &.{ .unexpected_eof, .eof });
+    try testTokenise("\n", &.{ .newline, .eof });
+    try testTokenise("\x00", &.{ .invalid, .eof });
     try testTokenise("", &.{ .eof, .eof, .eof, .eof });
 }
 
@@ -266,21 +351,22 @@ test "identifiers" {
     try testTokenise("x,y", &.{ .identifier, .comma, .identifier, .eof });
     try testTokenise("x, y", &.{ .identifier, .comma, .identifier, .eof });
     try testTokenise("  x", &.{ .identifier, .eof });
-    try testTokenise("ascii", &.{ .pseudo_instruction, .eof });
-    try testTokenise("ast, ascii", &.{ .instruction, .comma, .pseudo_instruction, .eof });
+    try testTokenise("ascii", &.{ .instruction, .eof });
+    try testTokenise("lui, ascii", &.{ .instruction, .comma, .instruction, .eof });
+}
 
+test "builtins" {
     try testTokenise("@import", &.{ .builtin_import, .eof });
-    try testTokenise("@define(expose) boob", &.{ .builtin_define, .l_paran, .option, .r_paran, .identifier, .eof });
+    try testTokenise("@define(expose) boob", &.{ .builtin_define, .l_paran, .identifier, .r_paran, .identifier, .eof });
     try testTokenise("@define(0x00) boob", &.{ .builtin_define, .l_paran, .numeric_literal, .r_paran, .identifier, .eof });
     try testTokenise("@define(.reference) boob", &.{ .builtin_define, .l_paran, .reference_label, .r_paran, .identifier, .eof });
     try testTokenise("@define(.label:) boob", &.{ .builtin_define, .l_paran, .private_label, .r_paran, .identifier, .eof });
     try testTokenise("@section", &.{ .builtin_section, .eof });
     try testTokenise("@section foo", &.{ .builtin_section, .identifier, .eof });
-    try testTokenise("@import&", &.{ .builtin_import, .invalid, .eof });
-    try testTokenise("@nevergonnagiveyouup", &.{ .identifier, .eof });
+    try testTokenise("@import&", &.{ .builtin_import, .ampersand, .eof });
 
-    // validated at a later stage
-    try testTokenise("@", &.{ .identifier, .eof });
+    try testTokenise("@nevergonnagiveyouup", &.{ .builtin_invalid, .eof });
+    try testTokenise("@", &.{ .builtin_invalid, .eof });
 }
 
 test "labels" {
@@ -288,22 +374,29 @@ test "labels" {
     try testTokenise("public_label:", &.{ .label, .eof });
     try testTokenise("public_label:,", &.{ .label, .comma, .eof });
     try testTokenise("public_label,:", &.{ .identifier, .comma, .invalid, .eof });
-    try testTokenise(".public_label:", &.{ .private_label, .eof });
-    try testTokenise(".public_label: ast", &.{ .private_label, .instruction, .eof });
+    try testTokenise("public_label.", &.{ .invalid, .eof });
+    try testTokenise(".private_label:", &.{ .private_label, .eof });
+    try testTokenise("._private_internal_label:", &.{ .private_label, .eof }); // disallow this?
+    try testTokenise(".private_label.offset:", &.{ .private_label, .eof });
+    try testTokenise(".private_label: lui", &.{ .private_label, .instruction, .eof });
+    try testTokenise("_local_label: lui", &.{ .local_label, .instruction, .eof });
+    try testTokenise("_local_label.foo:", &.{ .local_label, .eof });
+    try testTokenise("_:", &.{ .local_label, .eof });
     try testTokenise(".reference_label", &.{ .reference_label, .eof });
+    try testTokenise(".reference_label(0)", &.{ .reference_label, .l_paran, .numeric_literal, .r_paran, .eof });
+    try testTokenise(".reference_label.", &.{ .invalid, .eof });
     try testTokenise("bar .reference_label // foo", &.{ .identifier, .reference_label, .eof });
     try testTokenise(".bar.reference_label", &.{ .reference_label, .eof });
-
-    // check whether used, this is for categorised references
-    try testTokenise("bar.kinky_identifier", &.{ .identifier, .eof });
-
-    // validated at a later stage
-    try testTokenise("@weird_label:", &.{ .label, .eof });
+    try testTokenise(".bar..reference_label", &.{ .invalid, .eof });
+    try testTokenise("&bar.difference_label", &.{ .difference_label, .eof });
+    try testTokenise("&bar.", &.{ .invalid, .eof });
+    try testTokenise("_xd,", &.{ .identifier, .eof });
+    try testTokenise("_xd:", &.{ .local_label, .eof });
 }
 
 test "comments" {
-    try testTokenise("/", &.{ .unexpected_eof, .eof });
-    try testTokenise("/\n", &.{ .invalid, .eof });
+    try testTokenise("/", &.{ .invalid, .eof });
+    try testTokenise("/\n", &.{ .invalid, .newline, .eof });
     try testTokenise("/ ", &.{ .invalid, .eof });
     try testTokenise("/f", &.{ .invalid, .eof });
     try testTokenise("//", &.{ .eof });
@@ -319,6 +412,7 @@ test "comments" {
     try testTokenise("foo, ; bar doo", &.{ .identifier, .comma, .eof });
     try testTokenise("foo, ; roo doo\nbar,", &.{ .identifier, .comma, .newline, .identifier, .comma, .eof });
 }
+
 
 test "numeric literals" {
     try testTokenise("6", &.{ .numeric_literal, .eof });
@@ -342,17 +436,26 @@ test "numeric operators" {
     try testTokenise("5-3", &.{ .numeric_literal, .minus, .numeric_literal, .eof });
     try testTokenise("5 -3", &.{ .numeric_literal, .minus, .numeric_literal, .eof });
     try testTokenise("-24", &.{ .minus, .numeric_literal, .eof });
-    try testTokenise("1 * 1", &.{ .numeric_literal, .mult, .numeric_literal, .eof });
-    try testTokenise("1 lsh 1", &.{ .numeric_literal, .lsh, .numeric_literal, .eof });
+    try testTokenise("++3", &.{ .plusplus, .numeric_literal, .eof });
+    try testTokenise("(5)++", &.{ .l_paran, .numeric_literal, .r_paran, .plusplus, .eof });
+    try testTokenise("++(5)++", &.{ .plusplus, .l_paran, .numeric_literal, .r_paran, .plusplus, .eof });
+    try testTokenise("--(5)--", &.{ .minusminus, .l_paran, .numeric_literal, .r_paran, .minusminus, .eof });
+    try testTokenise("--.foo", &.{ .minusminus, .reference_label, .eof });
+    try testTokenise("1 * 1", &.{ .numeric_literal, .asterisk, .numeric_literal, .eof });
+    try testTokenise("1 << 1", &.{ .numeric_literal, .lsh, .numeric_literal, .eof });
+    try testTokenise("1 >> 1", &.{ .numeric_literal, .rsh, .numeric_literal, .eof });
+    try testTokenise("1 <", &.{ .numeric_literal, .lt, .eof });
+    try testTokenise("1 <>", &.{ .numeric_literal, .lt, .gt, .eof });
+    try testTokenise("1 <\n", &.{ .numeric_literal, .lt, .newline, .eof });
 }
 
 test "string literals" {
     try testTokenise(" \" foo bar \" ", &.{ .string_literal, .eof });
     try testTokenise(" \" foo, bar, \" ", &.{ .string_literal, .eof });
     try testTokenise("\" foo bar \" 0x00 ", &.{ .string_literal, .numeric_literal, .eof });
-    try testTokenise("\" foo bar ", &.{ .unexpected_eof, .eof });
-    try testTokenise("\" foo bar \n", &.{ .invalid, .eof });
-    try testTokenise("\" foo bar '", &.{ .unexpected_eof, .eof });
+    try testTokenise("\" foo bar ", &.{ .invalid, .eof });
+    try testTokenise("\" foo bar \n", &.{ .invalid, .newline, .eof });
+    try testTokenise("\" foo bar '", &.{ .invalid, .eof });
 }
 
 test "modifiers" {
@@ -361,12 +464,13 @@ test "modifiers" {
     try testTokenise("'upper", &.{ .invalid, .eof });
     try testTokenise("'u foo", &.{ .modifier, .identifier, .eof });
     try testTokenise("'u, foo", &.{ .modifier, .comma, .identifier, .eof });
+    try testTokenise("'u+5", &.{ .modifier, .plus, .numeric_literal, .eof });
     try testTokenise("foo'u foo", &.{ .identifier, .modifier, .identifier, .eof });
     try testTokenise(".foo'u foo", &.{ .reference_label, .modifier, .identifier, .eof });
-
-    // validated at a later stage
-    try testTokenise("'", &.{ .modifier, .eof });
-    try testTokenise("' foo", &.{ .modifier, .identifier, .eof });
+    try testTokenise(".foo'u(a1)", &.{ .reference_label, .modifier, .l_paran, .argument, .r_paran, .eof });
+    try testTokenise("'", &.{ .invalid, .eof });
+    // might be confusing
+    // try testTokenise("' foo", &.{ .invalid, .eof });
 }
 
 test "char literals" {
@@ -375,48 +479,51 @@ test "char literals" {
     try testTokenise("'a'+", &.{ .char_literal, .plus, .eof });
     try testTokenise("-'a'", &.{ .minus, .char_literal, .eof });
     try testTokenise(".foo'u' foo", &.{ .reference_label, .char_literal, .identifier, .eof });
-    try testTokenise("'foo' foo", &.{ .invalid, .identifier, .eof });
+    // might be confusing
+    // try testTokenise("'foo' foo", &.{ .invalid, .invalid, .eof });
 }
 
 test "full fledge" {
     try testTokeniseSlices(
         \\
-        \\@import not_implemented_yet
+        \\@import foo, "path/to/foo.s"
         \\
-        \\ascii "foo bar roo" 0x00 // comment
+        \\@section text
+        \\@align 2
         \\
-        \\.label:     ast ; comment foo(bar)
-        \\            ast @callable(a, b) ; only verified in AstGen
-        \\label:      ast .ref
-        \\0xZZ        ast
+        \\_:                lua a1, .label'u
+        \\                  ioriu a1, 'aa'
+        \\.label:           bkpt
     , &.{
         .{ .newline, "" },
         .{ .builtin_import, "@import" },
-        .{ .identifier, "not_implemented_yet" },
+        .{ .identifier, "foo" },
+        .{ .comma, "," },
+        .{ .string_literal, "\"path/to/foo.s\"" },
         .{ .newline, "" },
         .{ .newline, "" },
-        .{ .pseudo_instruction, "ascii" },
-        .{ .string_literal, "\"foo bar roo\"" },
-        .{ .numeric_literal, "0x00" },
+        .{ .builtin_section, "@section" },
+        .{ .identifier, "text" },
         .{ .newline, "" },
+        .{ .builtin_align, "@align" },
+        .{ .numeric_literal, "2" },
+        .{ .newline, "" },
+        .{ .newline, "" },
+        .{ .local_label, "_:" },
+        .{ .instruction, "lua" },
+        .{ .argument, "a1" },
+        .{ .comma, "," },
+        .{ .reference_label, ".label" },
+        .{ .modifier, "'u" },
+        .{ .newline, "" },
+        .{ .instruction, "ioriu" },
+        .{ .argument, "a1" },
+        .{ .comma, "," },
+        .{ .invalid, "'aa" }, // because ' is a boundary
+        .{ .invalid, "'\n" },
         .{ .newline, "" },
         .{ .private_label, ".label:" },
-        .{ .instruction, "ast" },
-        .{ .newline, "" },
-        .{ .instruction, "ast" },
-        .{ .identifier, "@callable" },
-        .{ .l_paran, "(" },
-        .{ .identifier, "a" },
-        .{ .comma, "," },
-        .{ .identifier, "b" },
-        .{ .r_paran, ")" },
-        .{ .newline, "" },
-        .{ .label, "label:" },
-        .{ .instruction, "ast" },
-        .{ .reference_label, ".ref" },
-        .{ .newline, "" },
-        .{ .invalid, "0xZZ" },
-        .{ .instruction, "ast" },
+        .{ .instruction, "bkpt" },
         .{ .eof, "\x00" }
     });
 }

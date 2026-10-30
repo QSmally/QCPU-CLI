@@ -1,22 +1,20 @@
 
-@header cs, reg, offset
-                  ast @reg
-                  mst sf, @offset
+@header Queue, xd
+@align 2
+
+@define aaa, xd
+
+tail:             reserve u16, 1
+head:             reserve u16, 1
+mem:              reserve u8, aaa
 @end
 
 @section root
-@region 256
 @align 2
 
-_:                u16 .foo
+@define roo, 24
+@define bar, .my_queue
+@define theheader, Queue
 
-@end
-
-@linkinfo(origin) root, 0
-@linkinfo(align) example, 256
-
-@section example
-foo:              clr
-                  @cs ra, 4
-                  @cs rb, 8
-                  bkpt
+my_queue:         Queue roo
+my_queue_1:       theheader bar

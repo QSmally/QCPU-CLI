@@ -1,16 +1,14 @@
 
-@import library, "builtin-import-2.s"
+@import foo, "builtin-define.s"
+
+@define bar, foo.bar
 
 @section root
-@region 256
-@align 2
+@align foo.aaa
 
-_:                u16 .foo
+                  bkpt
 
-@end
+@barrier
+@align bar
 
-@linkinfo(origin) root, 0
-@linkinfo(align) example, 256
-
-@section example
-foo:              jmpr .library.foo
+                  bkpt

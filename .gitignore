@@ -8,6 +8,11 @@
 Session.vim
 *.swp
 
+# Source references
+OldSources
+OldOldSources
+
 # Zig
 zig-out
+zig-pkg
 .zig-cache

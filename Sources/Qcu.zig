@@ -1,458 +1,377 @@
 
 // QCPU Compilation Unit
 //
-//  A complete assemble/linking pipeline looks like:
-//  - allocate/read file                -> buffer
-//  - tokenisation                      -> tokens
-//  - abstract syntax tree              -> nodes
-//    - recursive descent parser
-//  - static analysis                   -> symbols
-//    - prepare symbols
-//    - exchange imports
-//  - semantic analysis                 -> sections
-//    - <3 of the assembler
-//  - liveness
-//  - link sections                     -> blocks
-//    - reference tree elimination
-//    - block and byte generation
-//    - address resolution
+//  A complete assemble/linking pipeline:
+//
+//  - Allocate/read file                -> buffer
+//  - Tokenisation                      -> tokens
+//  - Abstract Syntax Tree              -> AST nodes
+//      - recursive descent parser
+//  - Intermediate Representation gen   -> IR blocks, symbols, imports
+//  - Semantic Analysis                 -> AIR blocks
+//      - <3 of the assembler
+//      - lazy evaluation
+//      - compute expression tree
+//  - Liveness
+//      - point out stupid assembly
+//  - Linker                            -> sections
+//      - section layouts
+//      - lazy address resolution
+//      - word gen
 
 const std = @import("std");
-const AsmAst = @import("AsmAst.zig");
-const AsmLiveness = @import("AsmLiveness.zig");
-const AsmSemanticAir = @import("AsmSemanticAir.zig");
-const AsmTokeniser = @import("AsmTokeniser.zig");
+const indexable_list = @import("indexable_list.zig");
+const SourceFile = @import("SourceFile.zig");
 const Error = @import("Error.zig");
-const Source = @import("Source.zig");
+const AsmAst = @import("AsmAst.zig");
+const AsmIr = @import("AsmIr.zig");
+const AsmSemanticAir = @import("AsmSemanticAir.zig");
+const AsmLiveness = @import("AsmLiveness.zig");
 const Linker = @import("Linker.zig");
 
 const Qcu = @This();
 
-const stderr = std.io
-    .getStdErr()
-    .writer();
-
+io: std.Io,
 allocator: std.mem.Allocator,
-cwd: std.fs.Dir,
-files: FileList,
 options: Options,
-work_queue: JobQueue,
-errors: ErrorList,
+stderr: *std.Io.Writer,
 linker: Linker,
+work_queue: std.PriorityQueue(Job, void, Job.before) = .empty,
+files: File.List = .empty,
+errors: std.ArrayListUnmanaged(Error) = .empty,
+semantically_analysed: std.AutoHashMapUnmanaged(u64, void) = .empty,
 
-/// Each run of QCPU-CLI contains exactly one Qcu. From a list of input files,
-/// it performs tokenisation, AstGen, and lastly, both passes of semantic
-/// analysis on each file. Finally, linking is performed. Filepaths and cwd are
-/// borrowed until deinit.
+const log = std.log.scoped(.Qcu);
+
+// Each module contains exactly one Compilation Unit, responsible for static
+// analysis, semantic analysis, liveness and linking. It forms one memory
+// layout. Its output can be combined with other Compilation Units to form a
+// memory layout consisting of multiple independent binaries.
 pub fn init(
+    io: std.Io,
     allocator: std.mem.Allocator,
-    cwd: std.fs.Dir,
-    file_paths: []const []const u8,
-    options: Options
+    pwd: std.Io.Dir,
+    root_file_path: []const u8,
+    options: Options,
+    stderr: *std.Io.Writer
 ) !*Qcu {
     const qcu = try allocator.create(Qcu);
-    errdefer allocator.destroy(qcu);
 
     qcu.* = .{
+        .io = io,
         .allocator = allocator,
-        .cwd = cwd,
-        .files = .empty,
         .options = options,
-        .work_queue = .init(allocator, {}),
-        .errors = .empty,
-        .linker = .init(allocator, options) };
+        .stderr = stderr,
+        .linker = .init(allocator) };
     errdefer qcu.deinit();
 
-    try qcu.files.ensureUnusedCapacity(allocator, file_paths.len);
-    for (file_paths) |file_path|
-        qcu.files.appendAssumeCapacity(try File.init_work(qcu, cwd, file_path));
-    try qcu.work_queue.add(.{ .link_generate = qcu });
+    try File.add(qcu, pwd, root_file_path);
+    try qcu.work_queue.push(allocator, .{ .link = qcu });
 
     return qcu;
 }
 
 pub fn deinit(self: *Qcu) void {
-    for (self.files.items) |file|
+    self.work_queue.deinit(self.allocator);
+    for (self.files.list.items) |file|
         file.deinit();
     self.files.deinit(self.allocator);
-    self.work_queue.deinit();
-    for (self.errors.items) |lerr|
-        self.allocator.free(lerr.err.message);
+    for (self.errors.items) |err|
+        err.deinit(self.allocator);
     self.errors.deinit(self.allocator);
-    self.linker.deinit();
+    self.semantically_analysed.deinit(self.allocator);
+    // Self-destruct
     self.allocator.destroy(self);
 }
 
 pub const Options = struct {
-    dload: bool = false,
-    dtokens: bool = false,
     dast: bool = false,
+    dir: bool = false,
     dair: bool = false,
     dlinker: bool = false,
-    dnotrace: bool = false,
     noliveness: bool = false,
     noelimination: bool = false,
-    noautoalign: bool = false,
-    nodepthoptimisation: bool = false,
-    nolinkwarnings: bool = false,
-    rootsection: []const u8 = "root",
-    l1: u32 = 32,
-    page: u32 = 256,
-    pagelen: u32 = 256
+    rootsection: []const u8 = "root"
 };
 
 pub const File = struct {
 
-    allocator: std.mem.Allocator,
     qcu: *Qcu,
-    pwd: std.fs.Dir,
-    file_name: []const u8,
-    real_path: []const u8,
-    buffer: [:0]const u8,
-    sha256: [Sha256.digest_length]u8,
+    index: List.Index,
+    source_file: SourceFile,
 
-    source: ?Source = null,
     ast: ?AsmAst = null,
-    sema: ?AsmSemanticAir = null,
+    ir: ?AsmIr = null,
 
-    pub fn init_work(qcu: *Qcu, cwd: std.fs.Dir, file_path: []const u8) !*File {
-        const file = try File.init(qcu, cwd, ".", file_path);
-        errdefer file.deinit();
+    pub const List = indexable_list.IndexableList(*File);
 
-        try qcu.work_queue.ensureUnusedCapacity(3);
-        qcu.work_queue.add(.{ .static_analysis = file }) catch unreachable;
-        qcu.work_queue.add(.{ .semantic_analysis = file }) catch unreachable;
-
-        if (!qcu.options.noliveness)
-            qcu.work_queue.add(.{ .liveness = file }) catch unreachable;
-        return file;
-    }
-
-    fn init_from(self: *Qcu.File, file_path: []const u8) !*File {
-        const base_name = std.fs.path.dirname(self.real_path) orelse ".";
-        return try File.init(self.qcu, self.pwd, base_name, file_path);
-    }
-
-    pub fn init(qcu: *Qcu, cwd: std.fs.Dir, from_path: []const u8, file_path: []const u8) !*File {
-        const base_name = std.fs.path.dirname(file_path) orelse ".";
-        var pwd = try cwd.openDir(base_name, .{});
-        errdefer pwd.close();
-
-        const file_name = std.fs.path.basename(file_path);
-        const real_path = try std.fs.path.resolve(qcu.allocator, &.{ from_path, base_name, file_name });
-        errdefer qcu.allocator.free(real_path);
-
+    pub fn add(qcu: *Qcu, pwd: std.Io.Dir, file_path: []const u8) !void {
         const file = try qcu.allocator.create(File);
         errdefer qcu.allocator.destroy(file);
 
-        file.* = .{
-            .allocator = qcu.allocator,
-            .qcu = qcu,
-            .pwd = pwd,
-            .file_name = file_name,
-            .real_path = real_path,
-            .buffer = undefined,
-            .sha256 = undefined };
-        file.buffer = try file.get_source();
-        file.sha256 = file.get_hash_source();
+        try qcu.files.ensureUnusedCapacity(qcu.allocator, 1);
+        try qcu.work_queue.ensureUnusedCapacity(qcu.allocator, 1);
 
-        if (qcu.options.dload)
-            try stderr.print("File load '{s}' ({}) ({s})\n", .{
-                file_path,
-                std.fmt.fmtIntSizeBin(file.buffer.len),
-                std.fmt.bytesToHex(file.sha256, .lower) });
-        return file;
+        const source_file = try SourceFile.init(qcu.io, qcu.allocator, pwd, ".", file_path);
+        errdefer source_file.deinit(qcu.allocator);
+
+        const file_type = source_file.fileType();
+
+        log.debug("add file {s} (file type {s})", .{ source_file.real_path, @tagName(file_type) });
+
+        file.* = .{
+            .qcu = qcu,
+            .source_file = source_file,
+            .index = .at(qcu.files.len()) };
+
+        const job: Job = switch (file_type) {
+            .assembly => .{ .static_analysis = file },
+            .unknown => return error.FileTypeNotSupported
+        };
+
+        qcu.work_queue.push(qcu.allocator, job) catch unreachable;
+        qcu.files.appendAssumeCapacity(file);
     }
 
     pub fn deinit(self: *File) void {
-        if (self.source) |*source| {
-            source.deinit();
-            self.source = null;
-        }
-        if (self.ast) |*ast| {
-            self.allocator.free(ast.nodes);
-            self.ast = null;
-        }
-        if (self.sema) |*sema| {
-            sema.deinit();
-            self.sema = null;
-        }
-
-        self.pwd.close();
-        self.allocator.free(self.real_path);
-        self.allocator.free(self.buffer);
-        self.allocator.destroy(self);
+        if (self.ir) |*ir| ir.deinit(self.qcu.allocator);
+        if (self.ast) |*ast| ast.deinit(self.qcu.allocator);
+        self.source_file.deinit(self.qcu.allocator);
+        // Self-destruct
+        self.qcu.allocator.destroy(self);
     }
 
-    fn dump(self: *File, tag: []const u8, thing: anytype) !void {
-        try stderr.print("{s} ({s}):\n", .{ tag, self.real_path });
-        try thing.dump(stderr);
+    fn dump(self: *const File, tag: []const u8, thing: anytype) !void {
+        defer self.qcu.stderr.flush() catch {};
+        try self.qcu.stderr.print("{s} ({s}):\n", .{ tag, self.source_file.real_path });
+        try thing.dump(self.qcu.allocator, self.qcu.stderr);
     }
 
-    // From SemanticAir (and Liveness)
-
-    /// From this file's parent directory, resolves a file path and - if
-    /// necessary - adds a static analysis job to the Qcu's work queue.
-    pub fn resolve(self: *File, file_path: []const u8) !*?AsmSemanticAir {
-        try self.qcu.work_queue.ensureUnusedCapacity(3);
-        try self.qcu.files.ensureUnusedCapacity(self.qcu.allocator, 1);
-        const file = try File.init_from(self, file_path);
-        errdefer file.deinit();
-
-        // fixme: is this really the best way of knowing that two files are the same?
-        // what if it's a copy in a different location so @symbols paths don't match up anymore?
-        for (self.qcu.files.items) |existing_file| {
-            if (!std.mem.eql(u8, &existing_file.sha256, &file.sha256))
-                continue;
-            file.deinit();
-            return &existing_file.sema;
-        }
-
-        self.qcu.work_queue.add(.{ .static_analysis = file }) catch unreachable;
-        self.qcu.work_queue.add(.{ .semantic_analysis = file }) catch unreachable;
-        if (!self.qcu.options.noliveness)
-            self.qcu.work_queue.add(.{ .liveness = file }) catch unreachable;
-        self.qcu.files.appendAssumeCapacity(file);
-        return &file.sema;
-    }
-
-    pub fn add_error(self: *File, err_data: Error) !void {
-        try self.qcu.errors.append(self.allocator, .{
-            .err = err_data,
-            .file = self });
-    }
-
-    // Assemble passes
-
-    /// Tokenisation, AstGen and first-pass semantic analysis.
-    pub fn static_analysis(self: *File) !void {
-        std.debug.assert(self.source == null);
+    // Tokenisation, AstGen, and IrGen (per-file static analysis).
+    pub fn staticAnalysis(self: *File) !void {
         std.debug.assert(self.ast == null);
-        std.debug.assert(self.sema == null);
+        std.debug.assert(self.ir == null);
 
-        var tokeniser = AsmTokeniser.init(self.buffer);
-        self.source = try Source.init(self.allocator, &tokeniser);
-        if (self.qcu.options.dtokens) try self.dump("Tokens", &self.source.?);
+        log.debug("static analysis {s}", .{ self.source_file.fileName() });
 
-        self.ast = try AsmAst.init(self.allocator, self.source.?);
-        defer self.ast.?.allocator.free(self.ast.?.errors); // not nodes or error messages
-        if (self.qcu.options.dast) try self.dump("AST", &self.ast.?);
+        self.ast = try AsmAst.init(
+            self.qcu.allocator,
+            &self.source_file,
+            .{ .vtable = astTable, .context = self });
 
-        if (self.ast.?.errors.len > 0) {
-            try self.qcu.errors.ensureUnusedCapacity(self.allocator, self.ast.?.errors.len);
-            for (self.ast.?.errors) |err|
-                self.qcu.errors.appendAssumeCapacity(.{ .err = err, .file = self });
-            return error.AbstractSyntaxTree;
+        if (self.qcu.options.dast)
+            try self.dump("AST", &self.ast.?);
+        if (self.qcu.errors.items.len > 0)
+            return error.Break;
+
+        self.ir = try AsmIr.init(
+            self.qcu.allocator,
+            &self.source_file,
+            &self.ast.?,
+            .{ .vtable = irTable, .context = self });
+
+        if (self.qcu.options.dir)
+            try self.dump("IR", &self.ir.?);
+        if (self.qcu.errors.items.len > 0)
+            return error.Break;
+
+        const root_section = self.qcu.options.rootsection;
+
+        for (self.ir.?.blocks.items, 0..) |block, index| {
+            const evaluate = switch (block.ty) {
+                .section => |section|
+                    section.is_noelimination or
+                    self.qcu.options.noelimination or
+                    std.mem.eql(u8, block.name, root_section),
+                .header => false
+            };
+
+            log.debug("block[{}] {s}{s}", .{
+                index,
+                block.name,
+                if (evaluate) " EVALUATE" else "" });
+
+            if (evaluate) {
+                const block_index: AsmIr.Block.List.Index = .at(@intCast(index));
+                try self.qcu.work_queue.push(self.qcu.allocator, .{ .semantic_analysis = .{ self, block_index } });
+            }
+        }
+    }
+
+    // Semantic analysis is the heart of the QCPU 2 assembler. Illegal to call
+    // when any related files haven't performed static analysis prior to
+    // calling this. Semantic analysis only evaluates one block, which queues
+    // other semantic analysis processes. This is done lazily; only the root
+    // section as well as noelimination sections are initially evaluated.
+    pub fn semanticAnalysis(self: *File, block_index: AsmIr.Block.List.Index) !void {
+        std.debug.assert(self.ast != null);
+        std.debug.assert(self.ir != null);
+
+        const block_id = self.blockId(block_index);
+        if (self.qcu.semantically_analysed.contains(block_id)) return;
+        try self.qcu.semantically_analysed.put(self.qcu.allocator, block_id, {});
+
+        log.debug("semantic analysis {}", .{ block_index.raw() });
+
+        const namespace = self.source_file.qualifiedNamespace();
+        var sema = self.createSemanticAnalyser(namespace);
+        defer sema.deinit();
+
+        try sema.analyseBlock(block_index);
+
+        std.debug.assert(sema.output == .owned);
+
+        if (self.qcu.options.dair)
+            try self.dump("AIR", &sema);
+        if (self.qcu.errors.items.len > 0)
+            return error.Break;
+
+        const linker_index = try self.qcu.linker.provisionSection(sema.output.owned);
+
+        if (!self.qcu.options.noliveness) {
+            try self.qcu.work_queue.push(self.qcu.allocator, .{ .liveness = .{ self, linker_index } });
+        }
+    }
+
+    fn blockId(self: *const File, block_index: AsmIr.Block.List.Index) u64 {
+        const file_untyped_index: u64 = @intCast(self.index.raw());
+        const block_untyped_index: u64 = @intCast(block_index.raw());
+        return (file_untyped_index << 32) | block_untyped_index;
+    }
+
+    fn createSemanticAnalyser(self: *File, namespace: []const u8) AsmSemanticAir {
+        return AsmSemanticAir.init(
+            self.qcu.allocator,
+            self.index,
+            &self.source_file,
+            &self.ast.?,
+            &self.ir.?,
+            namespace,
+            .{ .vtable = semaTable, .context = self });
+    }
+
+    pub fn liveness(self: *File, section_index: Linker.SectionList.Index) !void {
+        log.debug("liveness {}", .{ section_index.raw() });
+        const section = self.qcu.linker.link_list.get(section_index);
+        const instance = AsmLiveness.init(self.qcu.allocator, .{ .vtable = livenessTable, .context = self });
+
+        try instance.analyseSection(section);
+
+        if (self.qcu.errors.items.len > 0)
+            return error.Break;
+    }
+
+    const astTable = AsmAst.Bridge.VTable {
+        .emitError = emitError
+    };
+
+    const irTable = AsmIr.Bridge.VTable {
+        .emitError = emitError,
+        .import = import
+    };
+
+    const semaTable = AsmSemanticAir.Bridge.VTable {
+        .emitError = emitError,
+        .createScope = createScope,
+        .ensureBlockAnalysed = ensureBlockAnalysed
+    };
+
+    const livenessTable = AsmLiveness.Bridge.VTable {
+        .emitError = emitError
+    };
+
+    fn emitError(context: *anyopaque, err: Error) !void {
+        const self: *File = @alignCast(@ptrCast(context));
+        try self.qcu.errors.append(self.qcu.allocator, err);
+    }
+
+    fn import(context: *anyopaque, file_path: []const u8) !List.Index {
+        const self: *File = @alignCast(@ptrCast(context));
+        try self.qcu.work_queue.ensureUnusedCapacity(self.qcu.allocator, 1);
+        try self.qcu.files.ensureUnusedCapacity(self.qcu.allocator, 1);
+
+        // TODO: Lazily read into buffer, but keep stat call for eql
+        const source_file = try self.source_file.initFrom(self.qcu.io, self.qcu.allocator, file_path);
+        errdefer source_file.deinit(self.qcu.allocator);
+
+        for (self.qcu.files.list.items, 0..) |existing_file, file_index| {
+            if (!source_file.eql(&existing_file.source_file))
+                continue;
+            if (self.source_file.eql(&existing_file.source_file))
+                return error.CircularImport;
+
+            errdefer comptime unreachable;
+            source_file.deinit(self.qcu.allocator);
+            return .at(@intCast(file_index));
         }
 
-        std.debug.assert(self.qcu.errors.items.len == 0);
+        const file = try self.qcu.allocator.create(File);
+        errdefer self.qcu.allocator.destroy(file);
 
-        self.sema = try AsmSemanticAir.init(self, self.source.?, self.ast.?.nodes);
-        std.debug.assert(self.sema.?.errors.items.len == 0);
-        try self.qcu.verify_errorless_or(error.StaticAnalysis);
-        std.debug.assert(self.qcu.errors.items.len == 0);
+        const index: File.List.Index = .at(@intCast(self.qcu.files.list.items.len));
+        const file_type = source_file.fileType();
+
+        log.debug("resolve file {s} (file type {s})", .{ source_file.real_path, @tagName(file_type) });
+
+        file.* = .{
+            .qcu = self.qcu,
+            .source_file = source_file,
+            .index = index };
+
+        const job: Job = switch (file_type) {
+            .assembly => .{ .static_analysis = file },
+            .unknown => return error.FileTypeNotSupported
+        };
+
+        self.qcu.work_queue.push(self.qcu.allocator, job) catch unreachable;
+        self.qcu.files.appendAssumeCapacity(file);
+        return index;
     }
 
-    /// Second-pass semantic analysis. Illegal to call when any related files
-    /// haven't done a static analysis pass prior to calling this routine.
-    pub fn semantic_analysis(self: *File) !void {
-        std.debug.assert(self.source != null);
-        std.debug.assert(self.ast != null);
-        std.debug.assert(self.sema != null);
-        std.debug.assert(self.sema.?.sections.count() == 0);
-
-        try self.sema.?.semantic_analyse();
-        if (self.qcu.options.dair) try self.dump("AIR", &self.sema.?);
-
-        std.debug.assert(self.sema.?.errors.items.len == 0);
-        try self.qcu.verify_errorless_or(error.SemanticAnalysis);
-        std.debug.assert(self.qcu.errors.items.len == 0);
-
-        // imports aren't added to the link list as they're not being
-        // semantically analysed
-        try self.qcu.linker.append(self);
+    fn createScope(context: *anyopaque, file_index: File.List.Index, namespace: []const u8) AsmSemanticAir {
+        const self: *File = @alignCast(@ptrCast(context));
+        const other_file = self.qcu.files.get(file_index);
+        std.debug.assert(other_file.ir != null);
+        return other_file.createSemanticAnalyser(namespace);
     }
 
-    /// Liveness pass. Illegal to call when both passes of semantic analysis
-    /// haven't been performed.
-    pub fn liveness(self: *File) !void {
-        std.debug.assert(self.source != null);
-        std.debug.assert(self.sema != null);
-
-        var liveness_pass = try AsmLiveness.init(
-            self,
-            self.source.?,
-            &self.sema.?.symbols,
-            &self.sema.?.sections);
-        defer liveness_pass.deinit();
-
-        std.debug.assert(liveness_pass.errors.items.len == 0);
-        try self.qcu.verify_errorless_or(error.Liveness);
-        std.debug.assert(self.qcu.errors.items.len == 0);
-    }
-
-    /// Memory returned is owned by caller.
-    fn get_source(self: *File) ![:0]const u8 {
-        var file = try self.pwd.openFile(self.file_name, .{});
-        defer file.close();
-        const stat = try file.stat();
-
-        if (stat.size > std.math.maxInt(u32))
-            return error.FileTooBig;
-        const buffer = try self.allocator.allocSentinel(u8, stat.size, 0);
-        errdefer self.allocator.free(buffer);
-
-        if (try file.readAll(buffer) != stat.size)
-            return error.UnexpectedEndOfFile;
-        return buffer;
-    }
-
-    const Sha256 = std.crypto.hash.sha2.Sha256;
-
-    fn get_hash_source(self: *File) [Sha256.digest_length]u8 {
-        var result = Sha256.init(.{});
-        result.update(self.buffer);
-        return result.finalResult();
+    fn ensureBlockAnalysed(
+        context: *anyopaque,
+        file_index: File.List.Index,
+        block_index: AsmIr.Block.List.Index
+    ) !void {
+        const self: *File = @alignCast(@ptrCast(context));
+        log.debug("ensureBlockAnalysed {} {}", .{ file_index.raw(), block_index.raw() });
+        const other_file = self.qcu.files.get(file_index);
+        std.debug.assert(other_file.ir != null);
+        try self.qcu.work_queue.push(self.qcu.allocator, .{ .semantic_analysis = .{ other_file, block_index } });
     }
 };
 
-fn verify_errorless_or(self: *Qcu, throw_error: anyerror) !void {
-    if (self.errors.items.len > 0)
-        return throw_error;
-}
+const Job = union(enum) {
 
-pub const LocatableError = struct {
-
-    err: Error,
-    file: *const File,
-
-    pub fn write(self: *const LocatableError, writer: anytype) !void {
-        try self.err.write(self.file.real_path, self.file.source.?.buffer, writer);
-    }
-};
-
-pub const JobType = union(enum) {
-
-    /// buffer -> symbols
-    /// - tokenisation
-    /// - astgen
-    /// - first pass semantic analysis
     static_analysis: *File,
-    /// buffer + symbols -> sections
-    /// - second pass semantic analysis
-    semantic_analysis: *File,
-    liveness: *File,
-    /// sections + sections -> sections
-    link_generate: *Qcu,
+    semantic_analysis: struct { *File, AsmIr.Block.List.Index },
+    liveness: struct { *File, Linker.SectionList.Index },
+    link: *Qcu,
 
-    /// Jobs higher in the list are performed earlier and at the same time as
-    /// each other.
-    pub fn before(_: void, self: JobType, other: JobType) std.math.Order {
-        const me = @intFromEnum(self);
-        const you = @intFromEnum(other);
+    pub fn before(_: void, self: Job, other: Job) std.math.Order {
+        const me = @backingInt(self);
+        const you = @backingInt(other);
         return std.math.order(me, you);
     }
 
-    comptime {
-        std.debug.assert(before({}, .{ .static_analysis = undefined }, .{ .semantic_analysis = undefined }) == .lt);
-    }
-
-    pub fn execute(self: JobType) !void {
+    pub fn execute(self: Job) !void {
         return switch (self) {
-            .static_analysis => |file| try file.static_analysis(),
-            .semantic_analysis => |file| try file.semantic_analysis(),
-            .liveness => |file| try file.liveness(),
-            .link_generate => |qcu| {
-                std.debug.assert(qcu.errors.items.len == 0);
-                try qcu.linker.generate();
-                try qcu.verify_errorless_or(error.Linker);
-
-                if (qcu.options.dlinker) {
-                    _ = try stderr.writeAll("Linker:\n");
-                    try qcu.linker.dump(stderr);
-                }
-            }
+            .static_analysis => |file| try file.staticAnalysis(),
+            .semantic_analysis => |obj| try obj[0].semanticAnalysis(obj[1]),
+            .liveness => |obj| try obj[0].liveness(obj[1]),
+            .link => |qcu| try qcu.linker.performLink()
         };
     }
 };
 
-const FileList = std.ArrayListUnmanaged(*File);
-const JobQueue = std.PriorityQueue(JobType, void, JobType.before);
-const SymbolMap = std.StringHashMapUnmanaged(*AsmSemanticAir.Symbol.Locatable);
-const SectionMap = std.StringArrayHashMapUnmanaged(*AsmSemanticAir.Section);
-const ErrorList = std.ArrayListUnmanaged(LocatableError);
-
-// Tests
-
-const options_ = @import("options");
-
-const qcu_options = Options { .nolinkwarnings = true };
-
-const JobTypeTag = @typeInfo(JobType).@"union".tag_type.?;
-
-fn testUnwrapTag(comptime T: type, union_: ?T) ?@typeInfo(T).@"union".tag_type.? {
-    return if (union_) |the_union|
-        std.meta.activeTag(the_union) else
-        null;
-}
-
-fn testJob(qcu: *Qcu, job: JobType) !void {
-    const tag = @tagName(std.meta.activeTag(job));
-    if (options_.dump)
-        std.debug.print("job: {s}\n", .{ tag });
-    job.execute() catch |err| {
-        std.debug.print("failed on job {s} with {}\n", .{ tag, err });
-        for (qcu.errors.items) |the_err|
-            try the_err.write(stderr);
-        if (!qcu.options.dnotrace)
-            try qcu.linker.dump_last_block_trace(stderr);
-        return err;
-    };
-}
-
-test "work queue dependency order" {
-    const cwd = std.fs.cwd(); // QCPU-CLI/
-    const files = &[_][]const u8 { "Tests/root.s", "Tests/sample.s", "Tests/Library.s" };
-    const qcu = try Qcu.init(std.testing.allocator, cwd, files, qcu_options);
-    defer qcu.deinit();
-
-    try std.testing.expectEqual(@as(?JobTypeTag, .static_analysis), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
-    try std.testing.expectEqual(@as(?JobTypeTag, .static_analysis), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
-    try std.testing.expectEqual(@as(?JobTypeTag, .static_analysis), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
-    try std.testing.expectEqual(@as(?JobTypeTag, .semantic_analysis), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
-    try std.testing.expectEqual(@as(?JobTypeTag, .semantic_analysis), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
-    try std.testing.expectEqual(@as(?JobTypeTag, .semantic_analysis), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
-    try std.testing.expectEqual(@as(?JobTypeTag, .liveness), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
-    try std.testing.expectEqual(@as(?JobTypeTag, .liveness), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
-    try std.testing.expectEqual(@as(?JobTypeTag, .liveness), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
-    try std.testing.expectEqual(@as(?JobTypeTag, .link_generate), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
-    try std.testing.expectEqual(@as(?JobTypeTag, null), testUnwrapTag(JobType, qcu.work_queue.removeOrNull()));
-}
-
-test "full fledge" {
-    const cwd = std.fs.cwd(); // QCPU-CLI/
-    const files = &[_][]const u8 { "Tests/root.s", "Tests/sample.s" };
-    const qcu = try Qcu.init(std.testing.allocator, cwd, files, qcu_options);
-    defer qcu.deinit();
-
-    const jobs = [_]JobTypeTag {
-        .static_analysis,
-        .static_analysis,
-        .static_analysis,
-        .semantic_analysis,
-        .semantic_analysis,
-        .semantic_analysis,
-        .liveness,
-        .liveness,
-        .liveness,
-        .link_generate };
-    var i: usize = 0;
-
-    while (qcu.work_queue.removeOrNull()) |job| {
-        try std.testing.expectEqual(jobs[i], std.meta.activeTag(job));
-        try testJob(qcu, job);
-        i += 1;
-    }
-
-    try std.testing.expectEqual(@as(usize, 0), qcu.work_queue.count());
+pub fn work(self: *Qcu) !void {
+    while (self.work_queue.pop()) |job|
+        try job.execute();
 }

@@ -8,7 +8,7 @@ versions written in Swift, see the [repository tags](https://github.com/QSmally/
 
 ## Installation
 
-A compiled version of the CLI can be created through the Zig build system (Zig `0.14.1`).
+A compiled version of the CLI can be created through the Zig build system (Zig `0.17.0`).
 
 ```bash
 $ zig build
@@ -30,12 +30,6 @@ QCPU CLI comes with use cases written as tests.
 $ zig build test
 ```
 
-An inspection dump can be done with `-Ddump`:
-
-```bash
-$ zig build test -Ddump
-```
-
 There are test files in `Tests/`, which can be inspected with:
 
 ```bash
@@ -50,6 +44,4 @@ $ zig-out/bin/qcpu --virtualise [--step] Tests/name-of-test.s
 
 ## Contributing
 
-The assembler has a lot of quirks, mainly for cross-file references (`@import`) with header
-arguments and the Liveness pass. If you'd like to contribute to this project, you can take a look at
-all the `fixme` comments. Most of these TODOs reside in the semantic analysis unit.
+Contributions with the help of LLMs/AI tools will be rejected. Otherwise, thanks!
