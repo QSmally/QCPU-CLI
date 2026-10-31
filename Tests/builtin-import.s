@@ -6,9 +6,9 @@
 @section root
 @align foo.aaa
 
-                  bkpt
+_:                bkpt
 
 @barrier
 @align bar
 
-                  bkpt
+_:                bkpt

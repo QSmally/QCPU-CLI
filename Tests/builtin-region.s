@@ -3,6 +3,8 @@
 
 @section root
 
+_:
+
 @region foo
                   bkpt
 @end

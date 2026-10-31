@@ -3,6 +3,8 @@
 
 @section root
 
+_:
+
 @if const
                   ascii "Hello world!"
 @else

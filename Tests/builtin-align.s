@@ -4,9 +4,9 @@
 @section root
 @align 2
 
-                  bkpt
+_:                bkpt
 
 @barrier
 @align foo
 
-                  bkpt
+_:                bkpt

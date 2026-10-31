@@ -1,8 +1,8 @@
 
 @section(entrypoint) root
 
-                  bkpt
+_:                bkpt
 
 @barrier
 
-                  bkpt
+foo:              bkpt

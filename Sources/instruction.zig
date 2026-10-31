@@ -80,8 +80,10 @@ pub const MachineInstr = union(enum) {
         var values: [512]CommonTagTy = undefined;
 
         const instr = type_info.field_names ++ .{
+            // alias instructions
             "bkpt",
             "jmpr",
+            // pseudo-instructions
             "i8",
             "i16",
             "i24",
@@ -89,7 +91,10 @@ pub const MachineInstr = union(enum) {
             "u8",
             "u16",
             "u24",
-            "u32"
+            "u32",
+            // special instructions
+            "reserve",
+            "ascii"
         };
 
         next: for (instr) |name| {

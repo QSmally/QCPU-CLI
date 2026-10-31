@@ -2,5 +2,5 @@
 @section root
 
 @if 0
-                  ascii "Hello world!"
+_:                ascii "Hello world!"
 @end

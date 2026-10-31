@@ -1,12 +1,12 @@
 
 @section root
 
-                  bkpt
+_:                bkpt
 
 @section text
 
-                  bkpt
+_:                bkpt
 
 @barrier(noelimination)
 
-                  bkpt
+_:                bkpt

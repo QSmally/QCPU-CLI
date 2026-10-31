@@ -191,6 +191,7 @@ pub const Air = struct {
                 .brhl_ci => false,
 
                 // these implicitly reference the instruction ptr
+                .bkpt,
                 .jmpl_i,
                 .jmprl_i => true,
 
@@ -1323,7 +1324,10 @@ fn instrSelection(
         .u32 => {
             if (try selection.matches(u32)) |op|
                 return .{ .data = .{ .bytes = 4, .value = op } };
-        }
+        },
+
+        .reserve,
+        .ascii => unreachable
     }
 
     try self.addError(error.InstrSelection, instr_token, "instruction '{s}' doesn't match any candidates", .{ @tagName(instr_tag) });
