@@ -152,10 +152,13 @@ pub const Section = struct {
         return .{ .token = token, .name = name };
     }
 
-    // pub fn deinit(self: *Section, allocator: std.mem.Allocator) void {
-    //     _ = self;
-    //     _ = allocator;
-    // }
+    pub fn deinit(self: *Section, allocator: std.mem.Allocator) void {
+        var iterator = self.references.iterator();
+        while (iterator.next()) |entry| allocator.free(entry.key_ptr.*);
+
+        self.content.deinit(allocator);
+        self.references.deinit(allocator);
+    }
 
     pub fn bytes(self: *const Section) usize {
         var total_bytes: usize = 0;
@@ -1369,18 +1372,20 @@ const TestBridge = struct {
 
     allocator: std.mem.Allocator,
     errors: std.ArrayList(Error) = .empty,
+    referenced_blocks: std.ArrayList(AsmIr.Block.List.Index) = .empty,
 
     pub fn deinit(self: *TestBridge) void {
         for (self.errors.items) |err|
             err.deinit(self.allocator);
         self.errors.deinit(self.allocator);
+        self.referenced_blocks.deinit(self.allocator);
     }
 
     const astTable = AsmAst.Bridge.VTable {
         .emitError = emitError
     };
 
-    const irTable = Bridge.VTable {
+    const irTable = AsmIr.Bridge.VTable {
         .emitError = emitError,
         .import = import
     };
@@ -1404,15 +1409,16 @@ const TestBridge = struct {
         @panic("bug: not implemented");
     }
 
-    fn ensureBlockAnalysed(_: *anyopaque, _: Qcu.File.List.Index, _: AsmIr.Block.List.Index) !void {
-        @panic("bug: not implemented");
+    fn ensureBlockAnalysed(context: *anyopaque, _: Qcu.File.List.Index, block_index: AsmIr.Block.List.Index) !void {
+        const self: *TestBridge = @alignCast(@ptrCast(context));
+        try self.referenced_blocks.append(self.allocator, block_index);
     }
 
     pub fn ast(self: *TestBridge) AsmAst.Bridge {
         return .{ .vtable = astTable, .context = self };
     }
 
-    pub fn ir(self: *TestBridge) Bridge {
+    pub fn ir(self: *TestBridge) AsmIr.Bridge {
         return .{ .vtable = irTable, .context = self };
     }
 
@@ -1421,32 +1427,90 @@ const TestBridge = struct {
     }
 };
 
-// fn testSemantics(input: [:0]const u8, errors: []const AnalysisError) !void {
-//     const stderr_file = std.Io.File.stderr();
-//     var stderr_buffer: [4096]u8 = undefined;
-//     var stderr = stderr_file.writer(std.testing.io, &stderr_buffer);
-//     defer stderr.flush() catch {};
+fn testSemantics(
+    input: [:0]const u8,
+    code: []const @typeInfo(Air.Operation).@"union".tag_type.?,
+    referenced_blocks: []const AsmIr.Block.List.Index,
+    errors: []const (SemanticError || AsmCompute.EvaluationError)
+) !void {
+    const stderr_file = std.Io.File.stderr();
+    var stderr_buffer: [4096]u8 = undefined;
+    var stderr = stderr_file.writer(std.testing.io, &stderr_buffer);
+    defer stderr.flush() catch {};
 
-//     const source_file = SourceFile {
-//         .pwd = std.Io.Dir.cwd(),
-//         .real_path = "Sources/AsmIr.zig",
-//         .buffer = input,
-//         .inode = undefined,
-//         .size = undefined };
-//     var bridge = TestBridge { .allocator = std.testing.allocator };
-//     defer bridge.deinit();
-//     var ast = try AsmAst.init(std.testing.allocator, &source_file, bridge.ast());
-//     defer ast.deinit(std.testing.allocator);
-//     std.debug.assert(bridge.errors.items.len == 0);
+    const source_file = SourceFile {
+        .pwd = std.Io.Dir.cwd(),
+        .real_path = "Sources/AsmIr.zig",
+        .buffer = input,
+        .inode = undefined,
+        .size = undefined };
+    var bridge = TestBridge { .allocator = std.testing.allocator };
+    defer bridge.deinit();
+    var ast = try AsmAst.init(std.testing.allocator, &source_file, bridge.ast());
+    defer ast.deinit(std.testing.allocator);
+    std.debug.assert(bridge.errors.items.len == 0);
+    var ir = try AsmIr.init(std.testing.allocator, &source_file, &ast, bridge.ir());
+    defer ir.deinit(std.testing.allocator);
+    std.debug.assert(bridge.errors.items.len == 0);
 
-//     var ir = try AsmIr.init(std.testing.allocator, &source_file, &ast, bridge.ir());
-//     defer ir.deinit(std.testing.allocator);
+    var sema = AsmSemanticAir.init(
+        std.testing.allocator,
+        .root,
+        &source_file,
+        &ast,
+        &ir,
+        source_file.fileName(),
+        bridge.sema());
+    defer sema.deinit();
+    defer sema.output.owned.deinit(std.testing.allocator); // owned after analysis
 
-//     if (errors.len != bridge.errors.items.len) {
-//         for (bridge.errors.items) |err|
-//             try err.write(&stderr.interface);
-//     }
+    try sema.analyseBlock(.root);
 
-//     try std.testing.expectEqual(errors.len, bridge.errors.items.len);
-//     for (errors, 0..) |err, i| try std.testing.expectEqual(err, bridge.errors.items[i].err);
+    std.debug.assert(sema.output == .owned);
+
+    if (errors.len != bridge.errors.items.len) {
+        for (bridge.errors.items) |err|
+            try err.write(&stderr.interface);
+    }
+
+    try std.testing.expectEqual(errors.len, bridge.errors.items.len);
+    for (errors, 0..) |err, i| try std.testing.expectEqual(err, bridge.errors.items[i].err);
+
+    try std.testing.expectEqual(referenced_blocks.len, bridge.referenced_blocks.items.len);
+    for (referenced_blocks, bridge.referenced_blocks.items) |expected, actual| try std.testing.expectEqual(expected, actual);
+
+    try std.testing.expectEqual(code.len, sema.output.owned.content.list.items.len);
+    for (code, sema.output.owned.content.list.items) |expected, actual| try std.testing.expectEqual(expected, std.meta.activeTag(actual.op));
+}
+
+test "instr selection" {
+    try testSemantics("@section root\nbkpt", &.{ .instruction }, &.{}, &.{});
+    try testSemantics("@section root\nbkpt 5", &.{}, &.{}, &.{ error.InstrSelection });
+}
+
+test "expressions" {
+    try testSemantics("@section root\njmpr 5", &.{ .instruction }, &.{}, &.{});
+    try testSemantics("@section root\njmpr 5(a1)", &.{}, &.{}, &.{ error.InstrSelection });
+    try testSemantics("@section root\njmpr .foo + .bar\n@section text\nfoo:\nbar:", &.{}, &.{}, &.{ error.InvalidOperation });
+    try testSemantics("@section root\nmove d1, 5", &.{ .instruction }, &.{}, &.{});
+    try testSemantics("@section root\nmove d1, .label + 5\n@section text\nlabel:", &.{ .instruction }, &.{ .at(1) }, &.{});
+    try testSemantics("@section root\nmove d1, a1", &.{ .instruction }, &.{}, &.{});
+    try testSemantics("@section root\nmove d1, 5(a1)", &.{ .instruction }, &.{}, &.{});
+    try testSemantics("@section root\nmove d1, c", &.{}, &.{}, &.{ error.InstrSelection });
+}
+
+test "reference blocks" {
+    try testSemantics("@section root\nlabel: jmpr .label", &.{ .instruction }, &.{ .root }, &.{});
+    try testSemantics("@section root\njmpr .label\n@section text\nlabel:", &.{ .instruction }, &.{ .at(1) }, &.{});
+}
+
+// TODO: createScope test not implemented
+// test "header unrolling" {
+//     try testSemantics(
+//         \\@section root
+//         \\header
+//         \\@header header
+//         \\bkpt
+//         \\@end
+//     , &.{ .instruction }, &.{}, &.{});
 // }

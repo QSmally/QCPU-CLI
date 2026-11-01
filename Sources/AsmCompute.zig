@@ -177,7 +177,7 @@ pub const Result = union(Type) {
 
 pub const ComputeTimeInt = i32;
 
-const EvaluationError = error {
+pub const EvaluationError = error {
     TypeCast,
     InvalidOperation,
     ParseError,
