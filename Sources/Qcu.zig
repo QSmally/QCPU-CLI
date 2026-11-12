@@ -62,11 +62,13 @@ pub fn init(
         .allocator = allocator,
         .options = options,
         .stderr = stderr,
-        .linker = .init(allocator) };
+        .linker = .init(qcu) };
     errdefer qcu.deinit();
 
     try File.add(qcu, pwd, root_file_path);
     try qcu.work_queue.push(allocator, .{ .link = qcu });
+
+    std.debug.assert(qcu.files.len() > 0);
 
     return qcu;
 }
@@ -80,6 +82,7 @@ pub fn deinit(self: *Qcu) void {
         err.deinit(self.allocator);
     self.errors.deinit(self.allocator);
     self.semantically_analysed.deinit(self.allocator);
+    self.linker.deinit();
     // Self-destruct
     self.allocator.destroy(self);
 }
@@ -196,6 +199,10 @@ pub const File = struct {
                 try self.qcu.work_queue.push(self.qcu.allocator, .{ .semantic_analysis = .{ self, block_index } });
             }
         }
+
+        if (self.ir.?.link_info.len > 0) {
+            try self.qcu.work_queue.push(self.qcu.allocator, .{ .link_info = self });
+        }
     }
 
     // Semantic analysis is the heart of the QCPU 2 assembler. Illegal to call
@@ -216,6 +223,7 @@ pub const File = struct {
         const namespace = self.source_file.qualifiedNamespace();
         var sema = self.createSemanticAnalyser(namespace);
         defer sema.deinit();
+        errdefer sema.destroy();
 
         try sema.analyseBlock(block_index);
 
@@ -226,7 +234,7 @@ pub const File = struct {
         if (self.qcu.errors.items.len > 0)
             return error.Break;
 
-        const linker_index = try self.qcu.linker.provisionSection(sema.output.owned);
+        const linker_index = try self.qcu.linker.provisionSectionTransferOwnership(sema.output.owned);
 
         if (!self.qcu.options.noliveness) {
             try self.qcu.work_queue.push(self.qcu.allocator, .{ .liveness = .{ self, linker_index } });
@@ -259,6 +267,25 @@ pub const File = struct {
 
         if (self.qcu.errors.items.len > 0)
             return error.Break;
+    }
+
+    pub fn parseLinkInfo(self: *File) !void {
+        std.debug.assert(self.ast != null);
+        std.debug.assert(self.ir != null);
+
+        var sema = self.createSemanticAnalyser(":linkinfo");
+        defer sema.deinit();
+        errdefer sema.destroy();
+
+        const link_info = try sema.parseLinkInfoOwned();
+        errdefer self.qcu.allocator.free(link_info);
+
+        if (self.qcu.errors.items.len > 0)
+            return error.Break;
+
+        std.debug.assert(link_info.len == self.ir.?.link_info.len);
+
+        try self.qcu.linker.linkSectionsTransferOwnership(link_info);
     }
 
     const astTable = AsmAst.Bridge.VTable {
@@ -352,6 +379,7 @@ const Job = union(enum) {
 
     static_analysis: *File,
     semantic_analysis: struct { *File, AsmIr.Block.List.Index },
+    link_info: *File,
     liveness: struct { *File, Linker.SectionList.Index },
     link: *Qcu,
 
@@ -365,6 +393,7 @@ const Job = union(enum) {
         return switch (self) {
             .static_analysis => |file| try file.staticAnalysis(),
             .semantic_analysis => |obj| try obj[0].semanticAnalysis(obj[1]),
+            .link_info => |file| try file.parseLinkInfo(),
             .liveness => |obj| try obj[0].liveness(obj[1]),
             .link => |qcu| try qcu.linker.performLink()
         };

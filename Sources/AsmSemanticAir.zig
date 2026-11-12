@@ -11,6 +11,7 @@ const Error = @import("Error.zig");
 const AsmAst = @import("AsmAst.zig");
 const AsmIr = @import("AsmIr.zig");
 const AsmCompute = @import("AsmCompute.zig");
+const Linker = @import("Linker.zig");
 
 const AsmSemanticAir = @This();
 
@@ -80,6 +81,13 @@ pub fn init(
 
 pub fn deinit(self: *const AsmSemanticAir) void {
     self.arena.deinit();
+}
+
+pub fn destroy(self: *AsmSemanticAir) void {
+    switch (self.output) {
+        .owned => |*section| section.deinit(self.allocator),
+        else => {}
+    }
 }
 
 pub fn dump(self: *const AsmSemanticAir, _: std.mem.Allocator, writer: *std.Io.Writer) !void {
@@ -237,7 +245,7 @@ const Index = indexable_list.UnderlyingType;
 pub const SemanticError = error {
     DuplicateReference,
     VoidedReference,
-    AlignNegative,
+    AddressNegative,
     AlignPowerTwo,
     InvalidFormat,
     AssembleTimeError,
@@ -288,7 +296,8 @@ pub fn analyseBlock(self: *AsmSemanticAir, block_index: AsmIr.Block.List.Index) 
     std.debug.assert(self.output == .suppressed); // check illegal behaviour
 
     const block_token = self.source_file.qualifiedToken(block.token);
-    const new_section = Section.init(block_token, block.name);
+    var new_section = Section.init(block_token, block.name);
+    errdefer new_section.deinit(self.allocator);
 
     self.output = .{ .owned = new_section };
     self.block = block;
@@ -402,6 +411,59 @@ fn analyseBodyInner(self: *AsmSemanticAir, body: []const AsmIr.Ir) AnalysisError
     }
 
     self.reference_pool.clearRetainingCapacity();
+}
+
+pub fn parseLinkInfoOwned(self: *AsmSemanticAir) ![]const Linker.LinkInfo {
+    const compute = self.getCompute();
+    var link_info: std.ArrayList(Linker.LinkInfo) = .empty;
+
+    for (self.ir.link_info) |li| {
+        const ty: Linker.LinkInfo.Type = switch (li.ty) {
+            .origin => |origin| blk: {
+                const result = try compute.evaluateConstantResult(.scalar, origin.expression);
+
+                const node = self.tree.nodes.get(origin.expression);
+                const token = self.tree.tokens.get(node.token);
+                const qualified_token = self.source_file.qualifiedToken(token);
+
+                if (result.value < 0) {
+                    try self.addError(error.AddressNegative, qualified_token, "address of {} is illegal", .{ result.value });
+                    try self.explainTokenOrigin(qualified_token, result.folded_token, "address");
+                }
+
+                break :blk .{ .origin = .{
+                    .section_name = origin.section_name,
+                    .address = result.value } };
+            },
+            .aligned => |aligned| blk: {
+                const result = try compute.evaluateConstantResult(.scalar, aligned.expression);
+
+                const node = self.tree.nodes.get(aligned.expression);
+                const token = self.tree.tokens.get(node.token);
+                const qualified_token = self.source_file.qualifiedToken(token);
+
+                if (result.value < 1) {
+                    try self.addError(error.AddressNegative, qualified_token, "alignment of {} is illegal", .{ result.value });
+                    try self.explainTokenOrigin(qualified_token, result.folded_token, "alignment");
+                }
+
+                if (!std.math.isPowerOfTwo(result.value)) {
+                    try self.addError(error.AlignPowerTwo, qualified_token, "alignment of {} is not a power of two", .{ result.value });
+                    try self.explainTokenOrigin(qualified_token, result.folded_token, "alignment");
+                }
+
+                break :blk .{ .aligned = .{
+                    .section_name = aligned.section_name,
+                    .alignment = result.value } };
+            }
+        };
+
+        try link_info.append(self.allocator, .{
+            .token = self.source_file.qualifiedToken(li.token),
+            .ty = ty });
+    }
+
+    return try link_info.toOwnedSlice(self.allocator);
 }
 
 fn flush(self: *AsmSemanticAir, section: *Section) !usize {
@@ -557,9 +619,6 @@ fn computeCreateScope(
 ) AsmCompute {
     const self: *AsmSemanticAir = @alignCast(@ptrCast(context));
     const dummy_scope = self.bridge.createScope(file_index, "");
-    const bridge = AsmCompute.Bridge {
-        .vtable = computeTable,
-        .context = self };
     return AsmCompute.init(
         self.allocator,
         file_index,
@@ -567,7 +626,7 @@ fn computeCreateScope(
         dummy_scope.tree,
         dummy_scope.ir,
         scope,
-        bridge);
+        .{ .vtable = computeTable, .context = self });
 }
 
 fn explainTokenOrigin(
@@ -668,7 +727,7 @@ fn irAlign(self: *AsmSemanticAir, ir: AsmIr.Ir) !void {
     const result = try compute.evaluateConstantResult(.scalar, alignment_node_index);
 
     if (result.value < 1) {
-        try self.addError(error.AlignNegative, alignment_qualified_token, "alignment of {} is illegal", .{ result.value });
+        try self.addError(error.AddressNegative, alignment_qualified_token, "alignment of {} is illegal", .{ result.value });
         try self.explainTokenOrigin(alignment_qualified_token, result.folded_token, "alignment");
         return error.Break;
     }

@@ -12,6 +12,7 @@ const AsmAst = @import("AsmAst.zig");
 const AsmIr = @This();
 
 blocks: Block.List.Slice,
+link_info: []const LinkInfo,
 symbols: std.StringHashMapUnmanaged(Symbol),
 
 /// Ingests the Abstract Syntax Tree and initialises IrGen which lowers the Ast
@@ -30,7 +31,7 @@ pub fn init(
 
     return .{
         .blocks = try ir_gen.blocks.toOwnedSlice(allocator),
-        // .link_info = try ir_gen.link_info.toOwnedSlice(allocator),
+        .link_info = try ir_gen.link_info.toOwnedSlice(allocator),
         .symbols = ir_gen.symbols };
 }
 
@@ -52,6 +53,10 @@ pub fn dump(self: *const AsmIr, _: std.mem.Allocator, writer: *std.Io.Writer) !v
             @tagName(symbol.privacy),
             name,
             symbol.ty });
+    }
+
+    for (self.link_info) |li| {
+        try writer.print("@linkinfo {any}\n", .{ li.ty });
     }
 
     for (self.blocks.items) |block| {
@@ -205,6 +210,27 @@ pub const Ir = struct {
     };
 };
 
+pub const LinkInfo = struct {
+
+    token: Token,
+    ty: Type,
+
+    pub const Type = union(enum) {
+        /// section_name: section name
+        /// expression: section address origin expression
+        origin: struct {
+            section_name: []const u8,
+            expression: AsmAst.Node.List.Index
+        },
+        /// section_name: section name
+        /// expression: section alignment expression
+        aligned: struct {
+            section_name: []const u8,
+            expression: AsmAst.Node.List.Index
+        }
+    };
+};
+
 pub const Symbol = struct {
 
     token: Token,
@@ -249,6 +275,7 @@ const IrGen = struct {
     bridge: Bridge,
 
     blocks: Block.List = .empty,
+    link_info: std.ArrayList(LinkInfo) = .empty,
     symbols: std.StringHashMapUnmanaged(Symbol) = .empty,
     imports: std.AutoHashMapUnmanaged(Qcu.File.List.Index, Token) = .empty,
     block_index: ?Block.List.Index = null,
@@ -296,6 +323,7 @@ const IrGen = struct {
         InvalidConditional,
         Illegal,
         InvalidLabelType,
+        LinkInfo,
         NoteDefinedHere,
         NoteReason,
         Note
@@ -348,7 +376,7 @@ const IrGen = struct {
 
                 .builtin_define => try self.emitDefine(builtin),
                 .builtin_import => try self.emitImport(builtin),
-                .builtin_linkinfo => {},
+                .builtin_linkinfo => try self.parseLinkInfo(builtin),
 
                 // nothing to do at root
                 .builtin_align,
@@ -756,7 +784,10 @@ const IrGen = struct {
                             try self.maybeEmitNestedHeaderError(builtin.token);
                             try self.lowerHeaderBlock(builtin);
                         },
-                        .builtin_linkinfo => {},
+                        .builtin_linkinfo => {
+                            try self.maybeEmitNestedHeaderError(builtin.token);
+                            try self.parseLinkInfo(builtin);
+                        },
 
                         // nothing to do at opaque level
                         .builtin_import,
@@ -955,6 +986,74 @@ const IrGen = struct {
             .ty = .{ .import = file_index },
             .privacy = if (options.expose) .public else .private };
         try self.addSymbol(namespace, .unique, .global, null, symbol);
+    }
+
+    const LinkInfoOptions = struct {
+        expose: bool = false,
+        origin: bool = false,
+        aligned: bool = false
+    };
+
+    fn parseLinkInfo(self: *IrGen, builtin: Builtin) !void {
+        std.debug.assert(builtin.token.tag == .builtin_linkinfo);
+
+        const options = try self.resolveOptionList(LinkInfoOptions, builtin.options, builtin.token);
+        var iterator = self.containerIterator(builtin.arguments);
+
+        const ty: LinkInfo.Type = blk: {
+            const instr_count =
+                @as(u32, if (options.origin) 1 else 0) +
+                @as(u32, if (options.aligned) 1 else 0);
+            if (instr_count != 1) {
+                try self.addError(error.LinkInfo, builtin.token, "@linkinfo requires exactly one instruction option, found {}", .{ instr_count });
+                return;
+            }
+
+            const type_info = @typeInfo(LinkInfo.Type).@"union";
+
+            const instr_ty: type_info.tag_type.? =
+                if (options.origin) .origin else
+                if (options.aligned) .aligned else
+                unreachable;
+
+            inline for (type_info.field_names, type_info.field_types) |instr_name, Ty| {
+                if (std.mem.eql(u8, instr_name, @tagName(instr_ty))) {
+                    const arguments_info = @typeInfo(Ty).@"struct";
+                    var arguments: Ty = undefined;
+
+                    inline for (arguments_info.field_names, arguments_info.field_types) |field_name, ArgumentType| {
+                        switch (ArgumentType) {
+                            []const u8 => {
+                                const name_node_index = try iterator.expectTag(.identifier, builtin.token) orelse return;
+                                const name_node = self.tree.nodes.get(name_node_index);
+                                const name_token = self.tree.tokens.get(name_node.token);
+                                const name = self.source_file.slice(name_token);
+
+                                @field(arguments, field_name) = name;
+                            },
+                            AsmAst.Node.List.Index => {
+                                const node_index = try iterator.expectAny(builtin.token, "an expression") orelse return;
+
+                                @field(arguments, field_name) = node_index;
+                            },
+                            else => comptime unreachable
+                        }
+                    }
+
+                    break :blk @unionInit(LinkInfo.Type, instr_name, arguments);
+                }
+            }
+
+            unreachable;
+        };
+
+        try iterator.expectEnd();
+
+        try self.link_info.append(self.allocator, .{
+            .token = builtin.token,
+            .ty = ty });
+
+        // TODO: symbol with section_name
     }
 
     fn emitAlign(self: *IrGen, builtin: Builtin) !void {
