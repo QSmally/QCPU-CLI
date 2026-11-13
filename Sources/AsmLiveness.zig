@@ -89,13 +89,13 @@ fn addNote(self: *const AsmLiveness, token: SourceFile.Token, message: []const u
         .message = message_copy });
 }
 
-const Section = AsmSemanticAir.Section;
+const Block = AsmSemanticAir.Block;
 const Air = AsmSemanticAir.Air;
 
-pub fn analyseSection(self: *const AsmLiveness, section: Section) !void {
+pub fn analyseBlock(self: *const AsmLiveness, block: Block) !void {
     var previous_air: ?Air = null;
 
-    for (section.content.list.items) |air| {
+    for (block.content.list.items) |air| {
         if (air.op == .padding) {
             if (previous_air) |the_previous_air|
                 try self.passUncoordinatedPadding(air, the_previous_air);
@@ -108,7 +108,7 @@ pub fn analyseSection(self: *const AsmLiveness, section: Section) !void {
             try self.passUnreachableBody(air, the_previous_air);
             try self.passUncoordinatedData(air, the_previous_air);
         } else {
-            try self.passUnreachableSection(section, air);
+            try self.passUnreachableBlock(block, air);
         }
     }
 
@@ -117,14 +117,14 @@ pub fn analyseSection(self: *const AsmLiveness, section: Section) !void {
 
 fn passUncoordinatedPadding(self: *const AsmLiveness, air: Air, previous_air: Air) !void {
     std.debug.assert(air.op == .padding);
-    if (!previous_air.isJump() and previous_air.op == .instruction) {
+    if (!previous_air.op.isJump() and previous_air.op == .instruction) {
         try self.addError(error.UncoordinatedPadding, previous_air.token);
         try self.addError(error.NotePaddingHere, air.token);
     }
 }
 
 fn passUnreachableBody(self: *const AsmLiveness, air: Air, previous_air: Air) !void {
-    const condition = previous_air.isJump() or
+    const condition = previous_air.op.isJump() or
         (previous_air.op == .data and air.op != .data) or
         previous_air.op == .ascii;
     if (!air.is_labeled and condition) {
@@ -136,24 +136,24 @@ fn passUnreachableBody(self: *const AsmLiveness, air: Air, previous_air: Air) !v
 fn passUncoordinatedData(self: *const AsmLiveness, air: Air, previous_air: Air) !void {
     if (air.op != .instruction and
         previous_air.op == .instruction and
-        !previous_air.isJump()
+        !previous_air.op.isJump()
     ) {
         try self.addError(error.UncoordinatedData, previous_air.token);
         try self.addError(error.NoteDefinedHere, air.token);
     }
 }
 
-fn passUnreachableSection(self: *const AsmLiveness, section: Section, air: Air) !void {
+fn passUnreachableBlock(self: *const AsmLiveness, block: Block, air: Air) !void {
     if (!air.is_labeled) {
         try self.addError(error.UnreachableBody, air.token);
-        try self.addError(error.NoteDefinedHere, section.token);
+        try self.addError(error.NoteDefinedHere, block.token);
         try self.addNote(air.token, "use a discarding label if this section is an entrypoint");
     }
 }
 
 fn passUndefinedControlFlow(self: *const AsmLiveness, previous_air: ?Air) !void {
     const air = previous_air orelse return;
-    if (air.op == .instruction and !air.isJump()) {
+    if (air.op == .instruction and !air.op.isJump()) {
         try self.addError(error.UndefinedControlFlow, air.token);
     }
 }

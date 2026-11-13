@@ -60,8 +60,18 @@ pub fn IndexableList(comptime T: type) type {
             return self.list.items[@backingInt(index)];
         }
 
+        pub fn getReference(self: *const IndexableListType, index: Index) *T {
+            return &self.list.items[@backingInt(index)];
+        }
+
         pub fn len(self: *const IndexableListType) UnderlyingType {
             return @intCast(self.list.items.len);
+        }
+
+        pub fn last(self: *const IndexableListType) ?T {
+            return if (self.list.items.len > 0)
+                self.list.items[self.list.items.len - 1] else
+                null;
         }
 
         pub const Slice = struct {

@@ -4,6 +4,7 @@ const Qcu = @import("Qcu.zig");
 const AsmIr = @import("AsmIr.zig");
 const AsmSemanticAir = @import("AsmSemanticAir.zig");
 const AsmCompute = @import("AsmCompute.zig");
+const Linker = @import("Linker.zig");
 
 pub const MachineInstr = union(enum) {
 
@@ -125,92 +126,151 @@ pub const MachineInstr = union(enum) {
     pub const DDD = struct {
         rd: Register.DataRegister,
         rs1: Register.DataRegister,
-        rs2: Register.DataRegister
+        rs2: Register.DataRegister,
+
+        pub const rd_mask = 0b00000_111_00_000_000;
+        pub const rs1_mask = 0b00000_000_00_111_000;
+        pub const rs2_mask = 0b00000_000_00_000_111;
     };
 
     pub const AAA = struct {
         rd: Register.AddressRegister,
         rs1: Register.AddressRegister,
-        rs2: Register.AddressRegister
+        rs2: Register.AddressRegister,
+
+        pub const rd_mask = 0b00000_111_00_000_000;
+        pub const rs1_mask = 0b00000_000_00_111_000;
+        pub const rs2_mask = 0b00000_000_00_000_111;
     };
 
     pub const DAD = struct {
         rd: Register.DataRegister,
         rs1: Register.AddressRegister,
-        rs2: Register.DataRegister
+        rs2: Register.DataRegister,
+
+        pub const rd_mask = 0b00000_111_00_000_000;
+        pub const rs1_mask = 0b00000_000_00_111_000;
+        pub const rs2_mask = 0b00000_000_00_000_111;
     };
 
     pub const AAD = struct {
         rd: Register.AddressRegister,
         rs1: Register.AddressRegister,
-        rs2: Register.DataRegister
+        rs2: Register.DataRegister,
+
+        pub const rd_mask = 0b00000_111_00_000_000;
+        pub const rs1_mask = 0b00000_000_00_111_000;
+        pub const rs2_mask = 0b00000_000_00_000_111;
     };
 
     pub const DI = struct {
         rd: Register.DataRegister,
-        i: LinkerAddress
+        i: LinkerAddress,
+
+        pub const rd_mask = 0b00000_111_00000000;
+        pub const i_mask = 0b00000_000_11111111;
     };
 
     pub const AI = struct {
         rd: Register.AddressRegister,
-        i: LinkerAddress
+        i: LinkerAddress,
+
+        pub const rd_mask = 0b00000_111_00000000;
+        pub const i_mask = 0b00000_000_11111111;
     };
 
     pub const CDD = struct {
         cc: Flag,
         rd: Register.DataRegister,
-        rs1: Register.DataRegister
+        rs1: Register.DataRegister,
+
+        pub const cc_mask = 0b00000_000_00_000_111;
+        pub const rd_mask = 0b00000_111_00_000_000;
+        pub const rs1_mask = 0b00000_000_00_111_000;
     };
 
     pub const CAA = struct {
         cc: Flag,
         rd: Register.AddressRegister,
-        rs1: Register.AddressRegister
+        rs1: Register.AddressRegister,
+
+        pub const cc_mask = 0b00000_000_00_000_111;
+        pub const rd_mask = 0b00000_111_00_000_000;
+        pub const rs1_mask = 0b00000_000_00_111_000;
     };
 
     pub const DDI = struct {
         rd: Register.DataRegister,
         rs1: Register.DataRegister,
-        i: LinkerAddress
+        i: LinkerAddress,
+
+        pub const rd_mask = 0b00000_0_0000_000_111;
+        pub const rs1_mask = 0b00000_0_0000_111_000;
+        pub const i_mask = 0b00000_0_1111_000_000;
     };
 
     pub const I = struct {
-        i: LinkerAddress
+        i: LinkerAddress,
+
+        pub const i_mask = 0b00000_000_11111111;
     };
 
     pub const CI = struct {
         cc: Flag,
-        i: LinkerAddress
+        i: LinkerAddress,
+
+        pub const cc_mask = 0b00000_00000000_111;
+        pub const i_mask = 0b00000_11111111_000;
     };
 
     pub const DX = struct {
         rd: Register.DataRegister,
-        x: LinkerIndex
+        x: LinkerIndex,
+
+        pub const rd_mask = 0b00000_00000_000_111;
+        pub const x_mask = 0b00000_11111_000_000;
+        pub const x_mask_src = 0b00000_00000_111_000;
     };
 
     pub const XD = struct {
         x: LinkerIndex,
-        rs1: Register.DataRegister
+        rs1: Register.DataRegister,
+
+        pub const rs1_mask = 0b00000_00000_000_111;
+        pub const x_mask = 0b00000_11111_000_000;
+        pub const x_mask_src = 0b00000_00000_111_000;
     };
 
     pub const DM = struct {
         rd: Register.DataRegister,
-        m: Register.AddressRegister
+        m: Register.AddressRegister,
+
+        pub const rd_mask = 0b00000_00000_000_111;
+        pub const m_mask = 0b00000_00000_111_000;
     };
 
     pub const DP = struct {
         rd: Register.DataRegister,
-        p: Register.AddressRegister
+        p: Register.AddressRegister,
+
+        pub const rd_mask = 0b00000_00000_000_111;
+        pub const p_mask = 0b00000_00000_111_000;
     };
 
     pub const MD = struct {
         m: Register.AddressRegister,
-        rs1: Register.DataRegister
+        rs1: Register.DataRegister,
+
+        pub const rs1_mask = 0b00000_00000_000_111;
+        pub const m_mask = 0b00000_00000_111_000;
     };
 
     pub const PD = struct {
         p: Register.AddressRegister,
-        rs1: Register.DataRegister
+        rs1: Register.DataRegister,
+
+        pub const rs1_mask = 0b00000_00000_000_111;
+        pub const p_mask = 0b00000_00000_111_000;
     };
 
     pub const DD = struct {
@@ -243,7 +303,7 @@ pub const LinkerAddress = struct {
         file_index: Qcu.File.List.Index,
         /// Asserts block.ty == .section
         block_index: AsmIr.Block.List.Index,
-        locality: AsmSemanticAir.Locality,
+        locality: Linker.Locality,
         namespace: []const u8,
         label: []const u8
     };

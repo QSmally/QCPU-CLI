@@ -240,7 +240,7 @@ fn explainTypeCastError(
     // parameters, and we don't have the stack to unroll from here
     if (self.scope) |the_scope| if (the_scope.deferred_symbols.get(expression_qualified_token.slice()[1..])) |the_deferred_symbol| {
         const qualified_token = self.source_file.qualifiedToken(the_deferred_symbol.token);
-        try self.addError(error.NoteDefinedHere, qualified_token, "parameter passed to @{s} header here", .{ the_scope.block.name });
+        try self.addError(error.NoteDefinedHere, qualified_token, "parameter passed to @{s} header here", .{ the_scope.untyped_block.name });
     };
 
     try self.explainTokenOrigin(expression_qualified_token, folded_token, result_tag.fmt());
@@ -850,7 +850,12 @@ fn evaluateResultDepth(
                         .dynamic = .{
                             .file_index = result.scope.file_index,
                             .block_index = block_index,
-                            .locality = if (result.symbol.token.tag == .label) .global else .local,
+                            .locality = switch (result.symbol.token.tag) {
+                                .label => .global,
+                                .private_label => .global,
+                                .local_label => .local,
+                                else => unreachable
+                            },
                             .namespace = result.scope.getNamespace(),
                             .label = result.label,
                         },
@@ -896,8 +901,8 @@ fn evaluateResultDepth(
 }
 
 const masks = std.StaticStringMap(ComputeTimeInt).initComptime(.{
-    .{ "h", 0xFF00 }, // high
-    .{ "l", 0x00FF }, // low
+    .{ "u", 0xFF00 }, // upper
+    .{ "l", 0x00FF }, // lower
     .{ "w", 0xFFFF }  // word
 });
 
@@ -1093,7 +1098,7 @@ fn getFileScopedSymbol(self: *const AsmCompute, identifier: []const u8) ?FileSco
         // scope to where the argument was passed; it might be a totally
         // different file, so we're creating a dummy token for it
         if (the_scope.deferred_symbols.get(identifier)) |the_deferred_symbol| {
-            const local_symbol = the_scope.block.symbols.get(identifier) orelse unreachable;
+            const local_symbol = the_scope.untyped_block.symbols.get(identifier) orelse unreachable;
             std.debug.assert(local_symbol.ty == .deferred);
 
             const scope = self.bridge.createScope(
@@ -1108,7 +1113,7 @@ fn getFileScopedSymbol(self: *const AsmCompute, identifier: []const u8) ?FileSco
         }
 
         // this is inside the current scope, so we keep our scope
-        if (the_scope.block.symbols.get(identifier)) |the_local_symbol| {
+        if (the_scope.untyped_block.symbols.get(identifier)) |the_local_symbol| {
             return .{ .scope = self.*, .symbol = the_local_symbol };
         }
     }
@@ -1138,7 +1143,7 @@ fn getNamespace(self: *const AsmCompute) []const u8 {
         return the_scope.namespace;
     }
 
-    return self.source_file.fileName();
+    return self.source_file.qualifiedNamespace();
 }
 
 // Tests

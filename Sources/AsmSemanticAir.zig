@@ -24,17 +24,18 @@ ir: *const AsmIr,
 namespace: []const u8,
 bridge: Bridge,
 
-// Section memory is allocated by `allocator` and owned by the constructor of
+// Block memory is allocated by `allocator` and owned by the constructor of
 // this AsmSemanticAir.
 output: union(enum) {
-    owned: Section,
+    owned: Block,
     parent: *AsmSemanticAir,
     suppressed
 } = .suppressed,
 /// Reference to the Intermediate Representation block currently being
 /// analysed.
-block: *const AsmIr.Block = undefined,
-/// References to be flushed to the section's symbol mapping when `emitAir` is
+/// TODO: remove in favour of checking `output`
+untyped_block: *const AsmIr.Block = undefined,
+/// References to be flushed to the block's symbol mapping when `emitAir` is
 /// called with `.flush`. Allocated with `arena`.
 reference_pool: std.ArrayList(struct {
     name: []const u8,
@@ -42,7 +43,7 @@ reference_pool: std.ArrayList(struct {
     ty: enum { discard, address }
 }) = .empty,
 /// Pointing to the stack during the call to lower headers into the current
-/// section. Flushes are called from `emitAir` on the owned section, and this
+/// block. Flushes are called from `emitAir` on the owned block, and this
 /// property is used to propagate flushes upwards.
 lowering_block: ?*AsmSemanticAir = null,
 // Allocated with `arena`.
@@ -58,7 +59,7 @@ const log = std.log.scoped(.AsmSemanticAir);
 // Borrows the Abstract Syntax Tree, Intermediate Representation and the
 // lowering namespace, and initialises a Semantic Analysis unit. After
 // initialisation, `analyseBlock` must be called exactly once for an owned
-// section.
+// block.
 pub fn init(
     allocator: std.mem.Allocator,
     file_index: Qcu.File.List.Index,
@@ -85,27 +86,27 @@ pub fn deinit(self: *const AsmSemanticAir) void {
 
 pub fn destroy(self: *AsmSemanticAir) void {
     switch (self.output) {
-        .owned => |*section| section.deinit(self.allocator),
+        .owned => |*block| block.deinit(self.allocator),
         else => {}
     }
 }
 
 pub fn dump(self: *const AsmSemanticAir, _: std.mem.Allocator, writer: *std.Io.Writer) !void {
     std.debug.assert(self.output == .owned);
-    const section = self.output.owned;
+    const block = self.output.owned;
 
     try writer.print("@section {s} (align {})\n", .{
-        section.name,
-        section.alignment.toByteUnits() });
+        block.name,
+        block.alignment.toByteUnits() });
 
-    for (section.content.list.items, 0..) |air, index| switch (air.op) {
+    for (block.content.list.items, 0..) |air, index| switch (air.op) {
         .instruction => |instr| try writer.print("  {} {any}\n", .{ index, instr }),
-        .padding => try writer.print("  {} padding({})\n", .{ index, air.bytes() }),
-        .data => |data| try writer.print("  {} data({}) = {any}\n", .{ index, air.bytes(), data.value }),
-        .ascii => |ascii| try writer.print("  {} data({}) = {s}\n", .{ index, air.bytes(), ascii.text })
+        .padding => try writer.print("  {} padding({})\n", .{ index, air.op.bytes() }),
+        .data => |data| try writer.print("  {} data({}) = {any}\n", .{ index, air.op.bytes(), data.value }),
+        .ascii => |ascii| try writer.print("  {} data({}) = {s}\n", .{ index, air.op.bytes(), ascii.text })
     };
 
-    var reference_iterator = section.references.iterator();
+    var reference_iterator = block.references.iterator();
 
     while (reference_iterator.next()) |reference|
         try writer.print("  ^{s} -> {}\n", .{ reference.key_ptr.*, reference.value_ptr.index });
@@ -121,7 +122,7 @@ pub const Bridge = struct {
     pub const VTable = struct {
         emitError: *const fn (*anyopaque, Error) AllocatorError!void,
         createScope: *const fn (*anyopaque, Qcu.File.List.Index, []const u8) AsmSemanticAir,
-        ensureBlockAnalysed: *const fn (*anyopaque, Qcu.File.List.Index, AsmIr.Block.List.Index) AllocatorError!void
+        ensureBlockAnalysed: *const fn (*anyopaque, Qcu.File.List.Index, AsmIr.Block.List.Index, Block.EvalReason) AllocatorError!void
     };
 
     fn emitError(self: *const Bridge, err: Error) !void {
@@ -135,32 +136,46 @@ pub const Bridge = struct {
     fn ensureBlockAnalysed(
         self: *const Bridge,
         file_index: Qcu.File.List.Index,
-        block_index: AsmIr.Block.List.Index
+        block_index: AsmIr.Block.List.Index,
+        eval_reason: Block.EvalReason
     ) !void {
-        try self.vtable.ensureBlockAnalysed(self.context, file_index, block_index);
+        try self.vtable.ensureBlockAnalysed(self.context, file_index, block_index, eval_reason);
     }
 };
 
-pub const Section = struct {
+pub const Block = struct {
 
     token: SourceFile.Token,
     name: []const u8,
+    eval_reason: EvalReason,
 
     alignment: std.mem.Alignment = .@"1",
     content: Air.List = .empty,
     references: std.StringHashMapUnmanaged(Reference) = .empty,
 
+    pub const EvalReason = union(enum) {
+        reference: struct {
+            section_name: []const u8,
+            token: SourceFile.Token
+        },
+        root_section,
+        no_elimination
+    };
+
     pub const Reference = struct {
         token: SourceFile.Token,
-        /// An index into the current section.
+        /// An index into the current block.
         index: Air.List.Index
     };
 
-    pub fn init(token: SourceFile.Token, name: []const u8) Section {
-        return .{ .token = token, .name = name };
+    pub fn init(token: SourceFile.Token, name: []const u8, eval_reason: EvalReason) Block {
+        return .{
+            .token = token,
+            .name = name,
+            .eval_reason = eval_reason };
     }
 
-    pub fn deinit(self: *Section, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *Block, allocator: std.mem.Allocator) void {
         var iterator = self.references.iterator();
         while (iterator.next()) |entry| allocator.free(entry.key_ptr.*);
 
@@ -168,10 +183,14 @@ pub const Section = struct {
         self.references.deinit(allocator);
     }
 
-    pub fn bytes(self: *const Section) usize {
+    pub fn localAddressOf(self: *const Block, index: Air.List.Index) usize {
         var total_bytes: usize = 0;
-        for (self.content.list.items) |air| total_bytes += air.bytes();
+        for (self.content.list.items[0..index.raw()]) |air| total_bytes += air.op.bytes();
         return total_bytes;
+    }
+
+    pub fn bytes(self: *const Block) usize {
+        return self.localAddressOf(.at(self.content.len()));
     }
 };
 
@@ -184,60 +203,61 @@ pub const Air = struct {
     pub const List = indexable_list.IndexableList(Air);
 
     pub const Operation = union(enum) {
+
         instruction: instruction.MachineInstr,
         padding: Index,
         data: struct { bytes: Index, value: instruction.LinkerAddress },
-        ascii: struct { text: []const u8, sentinel: ?u8 }
-    };
+        ascii: struct { text: []const u8, sentinel: ?u8 },
 
-    pub fn isJump(self: *const Air) bool {
-        return switch (self.op) {
-            .instruction => |instr| switch (instr) {
-                // these can reference the instruction ptr, but are conditional
-                .movec_caa,
-                .movez_aaa => false,
+        pub fn bytes(self: Operation) usize {
+            return switch (self) {
+                .instruction => 2,
+                .padding => |padding| padding,
+                .data => |data| data.bytes,
+                .ascii => |ascii| blk: {
+                    const sentinel_len: usize = if (ascii.sentinel != null) 1 else 0;
+                    break :blk ascii.text.len + sentinel_len;
+                }
+            };
+        }
 
-                // we know these can't jump unconditionally
-                .brh_ci,
-                .brhl_ci => false,
+        pub fn isJump(self: Operation) bool {
+            return switch (self) {
+                .instruction => |instr| switch (instr) {
+                    // these can reference the instruction ptr, but are conditional
+                    .movec_caa,
+                    .movez_aaa => false,
 
-                // these implicitly reference the instruction ptr
-                .bkpt,
-                .jmpl_i,
-                .jmprl_i => true,
+                    // we know these can't jump unconditionally
+                    .brh_ci,
+                    .brhl_ci => false,
 
-                // it's a jump if the `rd` operand is the instruction ptr
-                inline else => |operands| blk: {
-                    const Ty = @TypeOf(operands);
+                    // these implicitly reference the instruction ptr
+                    .bkpt,
+                    .jmpl_i,
+                    .jmprl_i => true,
 
-                    if (Ty == void) {
+                    // it's a jump if the `rd` operand is the instruction ptr
+                    inline else => |operands| blk: {
+                        const Ty = @TypeOf(operands);
+
+                        if (Ty == void) {
+                            break :blk false;
+                        }
+
+                        if (@hasField(Ty, "rd") and @TypeOf(operands.rd) == instruction.Register.AddressRegister) {
+                            break :blk operands.rd == .ip;
+                        }
+
                         break :blk false;
                     }
-
-                    if (@hasField(Ty, "rd") and @TypeOf(operands.rd) == instruction.Register.AddressRegister) {
-                        break :blk operands.rd == .ip;
-                    }
-
-                    break :blk false;
-                }
-            },
-            .padding,
-            .data,
-            .ascii => false
-        };
-    }
-
-    pub fn bytes(self: *const Air) usize {
-        return switch (self.op) {
-            .instruction => 2,
-            .padding => |padding| padding,
-            .data => |data| data.bytes,
-            .ascii => |ascii| blk: {
-                const sentinel_len: usize = if (ascii.sentinel != null) 1 else 0;
-                break :blk ascii.text.len + sentinel_len;
-            }
-        };
-    }
+                },
+                .padding,
+                .data,
+                .ascii => false
+            };
+        }
+    };
 };
 
 const Index = indexable_list.UnderlyingType;
@@ -289,18 +309,22 @@ const ParseError = std.mem.Allocator.Error || std.Io.Writer.Error;
 
 // Illegal behaviour to call `analyseBlock` twice in the same Semantic Analysis
 // unit, and undefined behaviour to analyse the same block twice.
-pub fn analyseBlock(self: *AsmSemanticAir, block_index: AsmIr.Block.List.Index) ParseError!void {
+pub fn analyseBlock(
+    self: *AsmSemanticAir,
+    block_index: AsmIr.Block.List.Index,
+    eval_reason: Block.EvalReason
+) ParseError!void {
     const block = self.ir.blocks.get(block_index);
     log.debug("analyseBlock {s} {s}({})", .{ self.source_file.fileName(), block.name, block_index.raw() });
     std.debug.assert(block.ty == .section);
     std.debug.assert(self.output == .suppressed); // check illegal behaviour
 
     const block_token = self.source_file.qualifiedToken(block.token);
-    var new_section = Section.init(block_token, block.name);
-    errdefer new_section.deinit(self.allocator);
+    var typed_block = Block.init(block_token, block.name, eval_reason);
+    errdefer typed_block.deinit(self.allocator);
 
-    self.output = .{ .owned = new_section };
-    self.block = block;
+    self.output = .{ .owned = typed_block };
+    self.untyped_block = block;
 
     self.analyseBodyInner(block.content.list.items) catch |err| switch (err) {
         error.Break => {},
@@ -319,7 +343,7 @@ fn analyseBlockInto(
     std.debug.assert(self.output == .suppressed); // check illegal behaviour
 
     self.output = .{ .parent = owner };
-    self.block = block;
+    self.untyped_block = block;
 
     try self.analyseBodyInner(block.content.list.items);
 }
@@ -395,12 +419,12 @@ fn analyseBodyInner(self: *AsmSemanticAir, body: []const AsmIr.Ir) AnalysisError
 
         try self.addError(error.VoidedReference, reference.token, "reference '{s}' points to nothing", .{ reference.name });
 
-        const section = self.getCurrentSection();
+        const block = self.getCurrentBlock();
 
-        const last_air_index = if (section.content.len() > 0)
-            section.content.len() - 1 else
+        const last_air_index = if (block.content.len() > 0)
+            block.content.len() - 1 else
             break :blk;
-        const air = section.content.get(.at(last_air_index));
+        const air = block.content.get(.at(last_air_index));
 
         switch (air.op) {
             .padding, .data, .ascii => {
@@ -429,11 +453,12 @@ pub fn parseLinkInfoOwned(self: *AsmSemanticAir) ![]const Linker.LinkInfo {
                 if (result.value < 0) {
                     try self.addError(error.AddressNegative, qualified_token, "address of {} is illegal", .{ result.value });
                     try self.explainTokenOrigin(qualified_token, result.folded_token, "address");
+                    return error.Break;
                 }
 
                 break :blk .{ .origin = .{
                     .section_name = origin.section_name,
-                    .address = result.value } };
+                    .address = @intCast(result.value) } };
             },
             .aligned => |aligned| blk: {
                 const result = try compute.evaluateConstantResult(.scalar, aligned.expression);
@@ -445,16 +470,18 @@ pub fn parseLinkInfoOwned(self: *AsmSemanticAir) ![]const Linker.LinkInfo {
                 if (result.value < 1) {
                     try self.addError(error.AddressNegative, qualified_token, "alignment of {} is illegal", .{ result.value });
                     try self.explainTokenOrigin(qualified_token, result.folded_token, "alignment");
+                    return error.Break;
                 }
 
                 if (!std.math.isPowerOfTwo(result.value)) {
                     try self.addError(error.AlignPowerTwo, qualified_token, "alignment of {} is not a power of two", .{ result.value });
                     try self.explainTokenOrigin(qualified_token, result.folded_token, "alignment");
+                    return error.Break;
                 }
 
                 break :blk .{ .aligned = .{
                     .section_name = aligned.section_name,
-                    .alignment = result.value } };
+                    .alignment = .fromByteUnits(@intCast(result.value)) } };
             }
         };
 
@@ -466,18 +493,18 @@ pub fn parseLinkInfoOwned(self: *AsmSemanticAir) ![]const Linker.LinkInfo {
     return try link_info.toOwnedSlice(self.allocator);
 }
 
-fn flush(self: *AsmSemanticAir, section: *Section) !usize {
-    const instruction_index: Air.List.Index = .at(section.content.len());
+fn flush(self: *AsmSemanticAir, block: *Block) !usize {
+    const instruction_index: Air.List.Index = .at(block.content.len());
     const references_len = self.reference_pool.items.len;
 
-    try section.references.ensureUnusedCapacity(self.allocator, @intCast(references_len));
+    try block.references.ensureUnusedCapacity(self.allocator, @intCast(references_len));
 
     for (self.reference_pool.items) |reference| {
         if (reference.ty != .address)
             continue;
 
         self.addReference(
-            section,
+            block,
             reference.name,
             reference.token,
             instruction_index,
@@ -494,7 +521,7 @@ fn flush(self: *AsmSemanticAir, section: *Section) !usize {
             const namespace = reference.name[0..len_accumulator];
 
             self.addReference(
-                section,
+                block,
                 namespace,
                 reference.token,
                 instruction_index,
@@ -511,32 +538,32 @@ fn flush(self: *AsmSemanticAir, section: *Section) !usize {
 
     self.reference_pool.clearRetainingCapacity();
 
-    const lowering_len = if (self.lowering_block) |block|
-        try block.flush(section) else
+    const lowering_len = if (self.lowering_block) |the_lowering_block|
+        try the_lowering_block.flush(block) else
         0;
     return references_len + lowering_len;
 }
 
 fn addReference(
     self: *AsmSemanticAir,
-    section: *Section,
+    block: *Block,
     name: []const u8,
     token: SourceFile.Token,
     instruction_index: Air.List.Index,
     mode: enum { unique, not_unique }
 ) !void {
-    const is_local = switch (self.block.ty) {
+    const is_local = switch (self.untyped_block.ty) {
         .section => token.inner_token.tag == .local_label,
-        .header => self.block.ty == .header and token.inner_token.tag != .label
+        .header => self.untyped_block.ty == .header and token.inner_token.tag != .label
     };
 
-    const locality: Locality = if (is_local)
+    const locality: Linker.Locality = if (is_local)
         .local else
         .global;
-    const qualified_name = try self.resolveQualifiedNamespaceOwned(locality, self.namespace, name);
+    const qualified_name = try Linker.resolveQualifiedNamespaceOwned(self.allocator, locality, self.namespace, name);
     errdefer self.allocator.free(qualified_name);
 
-    if (section.references.get(qualified_name)) |result| {
+    if (block.references.get(qualified_name)) |result| {
         if (mode == .unique) {
             try self.addError(error.DuplicateReference, token, "found duplicate label '{s}'", .{ name });
 
@@ -549,7 +576,7 @@ fn addReference(
         return error.Break;
     }
 
-    try section.references.put(
+    try block.references.put(
         self.allocator,
         qualified_name,
         .{ .token = token, .index = instruction_index });
@@ -562,15 +589,15 @@ fn emitAir(
     mode: enum { flush, no_flush }
 ) !void {
     switch (self.output) {
-        .owned => |*section| {
+        .owned => |*block| {
             @branchHint(.likely);
 
             const references_len = switch (mode) {
-                .flush => try self.flush(section),
+                .flush => try self.flush(block),
                 .no_flush => 0
             };
 
-            try section.content.append(self.allocator, .{
+            try block.content.append(self.allocator, .{
                 .token = token,
                 .op = op,
                 .is_labeled = references_len > 0 });
@@ -580,10 +607,10 @@ fn emitAir(
     }
 }
 
-fn getCurrentSection(self: *AsmSemanticAir) *Section {
+fn getCurrentBlock(self: *AsmSemanticAir) *Block {
     return switch (self.output) {
-        .owned => |*section| section,
-        .parent => |sema| sema.getCurrentSection(),
+        .owned => |*block| block,
+        .parent => |sema| sema.getCurrentBlock(),
         .suppressed => unreachable
     };
 }
@@ -664,20 +691,6 @@ fn createReferenceNamespaceOwned(
     return try self.allocator.print("{s}:anon_{x}", .{ self.namespace, hash });
 }
 
-pub const Locality = enum { global, local };
-
-fn resolveQualifiedNamespaceOwned(
-    self: *AsmSemanticAir,
-    locality: Locality,
-    namespace: []const u8,
-    label: []const u8
-) ![]const u8 {
-    const local_namespace = if (locality == .local)
-        ":local" else
-        "";
-    return try self.allocator.print("{s}{s}.{s}", .{ namespace, local_namespace, label });
-}
-
 fn resolveSymbolsInto(
     self: *AsmSemanticAir,
     child: *AsmSemanticAir,
@@ -738,12 +751,12 @@ fn irAlign(self: *AsmSemanticAir, ir: AsmIr.Ir) !void {
         return error.Break;
     }
 
-    const section = self.getCurrentSection();
-    const current_address = section.bytes();
+    const block = self.getCurrentBlock();
+    const current_address = block.bytes();
     const alignment: std.mem.Alignment = .fromByteUnits(@intCast(result.value));
     const padding: Index = @intCast(alignment.forward(current_address) - current_address);
 
-    section.alignment = alignment.max(section.alignment);
+    block.alignment = alignment.max(block.alignment);
 
     try self.emitAir(
         self.source_file.qualifiedToken(ir.token),
@@ -892,8 +905,10 @@ fn irInstruction(self: *AsmSemanticAir, ir: AsmIr.Ir) !void {
     try self.emitAir(instr_token, air_op, .flush);
 
     switch (air_op) {
-        .instruction => |instr| try self.lazilyAnalyseReference(instr),
-        else => {}
+        .instruction => |instr| try self.lazilyAnalyseInstrReference(instr, ir.token),
+        .data => |data| try self.lazilyAnalyseReference(data.value, ir.token),
+        .padding,
+        .ascii => {}
     }
 }
 
@@ -966,12 +981,12 @@ fn createRegionalScope(self: *AsmSemanticAir, ir: AsmIr.Ir, body: []const AsmIr.
         return error.Break;
     }
 
-    const section = self.getCurrentSection();
-    const current_size = section.bytes();
+    const block = self.getCurrentBlock();
+    const current_size = block.bytes();
 
     try self.analyseBodyInner(body);
 
-    const actual_size: Index = @intCast(section.bytes() - current_size);
+    const actual_size: Index = @intCast(block.bytes() - current_size);
 
     if (actual_size <= region_size.value) {
         const padding = @as(Index, @intCast(region_size.value)) - actual_size;
@@ -1396,7 +1411,7 @@ fn instrSelection(
     return error.Break;
 }
 
-fn lazilyAnalyseReference(self: *AsmSemanticAir, instr: instruction.MachineInstr) !void {
+fn lazilyAnalyseInstrReference(self: *AsmSemanticAir, instr: instruction.MachineInstr, token: Token) !void {
     const label: instruction.LinkerAddress = switch (instr) {
         inline else => |ty| blk: {
             const Ty = @TypeOf(ty);
@@ -1420,8 +1435,14 @@ fn lazilyAnalyseReference(self: *AsmSemanticAir, instr: instruction.MachineInstr
         }
     };
 
+    try self.lazilyAnalyseReference(label, token);
+}
+
+fn lazilyAnalyseReference(self: *AsmSemanticAir, label: instruction.LinkerAddress, token: Token) !void {
     if (label.dynamic) |dynamic| {
-        try self.bridge.ensureBlockAnalysed(dynamic.file_index, dynamic.block_index);
+        try self.bridge.ensureBlockAnalysed(dynamic.file_index, dynamic.block_index, .{ .reference = .{
+            .section_name = self.getCurrentBlock().name,
+            .token = self.source_file.qualifiedToken(token) } });
     }
 }
 
@@ -1468,7 +1489,12 @@ const TestBridge = struct {
         @panic("bug: not implemented");
     }
 
-    fn ensureBlockAnalysed(context: *anyopaque, _: Qcu.File.List.Index, block_index: AsmIr.Block.List.Index) !void {
+    fn ensureBlockAnalysed(
+        context: *anyopaque,
+        _: Qcu.File.List.Index,
+        block_index: AsmIr.Block.List.Index,
+        _: Block.EvalReason
+    ) !void {
         const self: *TestBridge = @alignCast(@ptrCast(context));
         try self.referenced_blocks.append(self.allocator, block_index);
     }
@@ -1523,7 +1549,7 @@ fn testSemantics(
     defer sema.deinit();
     defer sema.output.owned.deinit(std.testing.allocator); // owned after analysis
 
-    try sema.analyseBlock(.root);
+    try sema.analyseBlock(.root, .root_section);
 
     std.debug.assert(sema.output == .owned);
 

@@ -181,22 +181,25 @@ pub const File = struct {
         const root_section = self.qcu.options.rootsection;
 
         for (self.ir.?.blocks.items, 0..) |block, index| {
-            const evaluate = switch (block.ty) {
-                .section => |section|
-                    section.is_noelimination or
-                    self.qcu.options.noelimination or
-                    std.mem.eql(u8, block.name, root_section),
-                .header => false
+            const eval_reason: ?AsmSemanticAir.Block.EvalReason = switch (block.ty) {
+                .section => |section| blk: {
+                    if (std.mem.eql(u8, block.name, root_section))
+                        break :blk .root_section;
+                    if (section.is_noelimination or self.qcu.options.noelimination)
+                        break :blk .no_elimination;
+                    break :blk null;
+                },
+                .header => null
             };
 
-            log.debug("block[{}] {s}{s}", .{
+            log.debug("block[{}] {s} {s}", .{
                 index,
                 block.name,
-                if (evaluate) " EVALUATE" else "" });
+                if (eval_reason) |the_eval_reason| @tagName(the_eval_reason) else "" });
 
-            if (evaluate) {
+            if (eval_reason) |the_eval_reason| {
                 const block_index: AsmIr.Block.List.Index = .at(@intCast(index));
-                try self.qcu.work_queue.push(self.qcu.allocator, .{ .semantic_analysis = .{ self, block_index } });
+                try self.qcu.work_queue.push(self.qcu.allocator, .{ .semantic_analysis = .{ self, block_index, the_eval_reason } });
             }
         }
 
@@ -210,7 +213,11 @@ pub const File = struct {
     // calling this. Semantic analysis only evaluates one block, which queues
     // other semantic analysis processes. This is done lazily; only the root
     // section as well as noelimination sections are initially evaluated.
-    pub fn semanticAnalysis(self: *File, block_index: AsmIr.Block.List.Index) !void {
+    pub fn semanticAnalysis(
+        self: *File,
+        block_index: AsmIr.Block.List.Index,
+        eval_reason: AsmSemanticAir.Block.EvalReason
+    ) !void {
         std.debug.assert(self.ast != null);
         std.debug.assert(self.ir != null);
 
@@ -218,14 +225,14 @@ pub const File = struct {
         if (self.qcu.semantically_analysed.contains(block_id)) return;
         try self.qcu.semantically_analysed.put(self.qcu.allocator, block_id, {});
 
-        log.debug("semantic analysis {}", .{ block_index.raw() });
+        log.debug("semantic analysis {} {s}", .{ block_index.raw(), @tagName(eval_reason) });
 
         const namespace = self.source_file.qualifiedNamespace();
         var sema = self.createSemanticAnalyser(namespace);
         defer sema.deinit();
         errdefer sema.destroy();
 
-        try sema.analyseBlock(block_index);
+        try sema.analyseBlock(block_index, eval_reason);
 
         std.debug.assert(sema.output == .owned);
 
@@ -234,7 +241,7 @@ pub const File = struct {
         if (self.qcu.errors.items.len > 0)
             return error.Break;
 
-        const linker_index = try self.qcu.linker.provisionSectionTransferOwnership(sema.output.owned);
+        const linker_index = try self.qcu.linker.provisionBlockTransferOwnership(sema.output.owned);
 
         if (!self.qcu.options.noliveness) {
             try self.qcu.work_queue.push(self.qcu.allocator, .{ .liveness = .{ self, linker_index } });
@@ -258,12 +265,12 @@ pub const File = struct {
             .{ .vtable = semaTable, .context = self });
     }
 
-    pub fn liveness(self: *File, section_index: Linker.SectionList.Index) !void {
-        log.debug("liveness {}", .{ section_index.raw() });
-        const section = self.qcu.linker.link_list.get(section_index);
+    pub fn liveness(self: *File, block_index: Linker.BlockList.Index) !void {
+        log.debug("liveness {}", .{ block_index.raw() });
+        const block = self.qcu.linker.link_list.get(block_index);
         const instance = AsmLiveness.init(self.qcu.allocator, .{ .vtable = livenessTable, .context = self });
 
-        try instance.analyseSection(section);
+        try instance.analyseBlock(block);
 
         if (self.qcu.errors.items.len > 0)
             return error.Break;
@@ -365,22 +372,26 @@ pub const File = struct {
     fn ensureBlockAnalysed(
         context: *anyopaque,
         file_index: File.List.Index,
-        block_index: AsmIr.Block.List.Index
+        block_index: AsmIr.Block.List.Index,
+        eval_reason: AsmSemanticAir.Block.EvalReason
     ) !void {
         const self: *File = @alignCast(@ptrCast(context));
         log.debug("ensureBlockAnalysed {} {}", .{ file_index.raw(), block_index.raw() });
         const other_file = self.qcu.files.get(file_index);
         std.debug.assert(other_file.ir != null);
-        try self.qcu.work_queue.push(self.qcu.allocator, .{ .semantic_analysis = .{ other_file, block_index } });
+        try self.qcu.work_queue.push(self.qcu.allocator, .{ .semantic_analysis = .{
+            other_file,
+            block_index,
+            eval_reason } });
     }
 };
 
 const Job = union(enum) {
 
     static_analysis: *File,
-    semantic_analysis: struct { *File, AsmIr.Block.List.Index },
+    semantic_analysis: struct { *File, AsmIr.Block.List.Index, AsmSemanticAir.Block.EvalReason },
     link_info: *File,
-    liveness: struct { *File, Linker.SectionList.Index },
+    liveness: struct { *File, Linker.BlockList.Index },
     link: *Qcu,
 
     pub fn before(_: void, self: Job, other: Job) std.math.Order {
@@ -392,10 +403,10 @@ const Job = union(enum) {
     pub fn execute(self: Job) !void {
         return switch (self) {
             .static_analysis => |file| try file.staticAnalysis(),
-            .semantic_analysis => |obj| try obj[0].semanticAnalysis(obj[1]),
+            .semantic_analysis => |obj| try obj[0].semanticAnalysis(obj[1], obj[2]),
             .link_info => |file| try file.parseLinkInfo(),
             .liveness => |obj| try obj[0].liveness(obj[1]),
-            .link => |qcu| try qcu.linker.performLink()
+            .link => |qcu| try qcu.performLink()
         };
     }
 };
@@ -403,4 +414,17 @@ const Job = union(enum) {
 pub fn work(self: *Qcu) !void {
     while (self.work_queue.pop()) |job|
         try job.execute();
+}
+
+fn performLink(self: *Qcu) !void {
+    try self.linker.performLink();
+
+    if (self.options.dlinker) {
+        defer self.stderr.flush() catch {};
+        try self.stderr.writeAll("Linker:\n");
+        try self.linker.dump(self.stderr);
+    }
+
+    if (self.errors.items.len > 0)
+        return error.Break;
 }
