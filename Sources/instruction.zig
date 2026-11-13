@@ -60,8 +60,8 @@ pub const MachineInstr = union(enum) {
     move_pd: PD,
     movew_pd: PD,
     sysc_i: I,
-    csrr_di: DI,
-    csrw_di: DI,
+    csrr_dii: DII,
+    csrw_dii: DII,
     reti,
     waiti,
     ftlb,
@@ -123,6 +123,102 @@ pub const MachineInstr = union(enum) {
         return full_identifier[0..underscore_index];
     }
 
+    pub fn opcode(self: MachineInstr) u16 {
+        return switch (self) {
+            .bkpt       => 0b0000000000000000,
+            .add_ddd    => 0b00000_000_00_000_000,
+            .add_aaa    => 0b00000_000_01_000_000,
+            .add_dad    => 0b00000_000_10_000_000,
+            .add_aad    => 0b00000_000_11_000_000,
+            .addi_di    => 0b00001_00000000_000,
+            .addi_ai    => 0b00010_00000000_000,
+            .cmpi_di    => 0b00011_00000000_000,
+            .movec_cdd  => 0b00100_000_00_000_000,
+            .movec_caa  => 0b00100_000_01_000_000,
+            .movez_ddd  => 0b00100_000_10_000_000,
+            .movez_aaa  => 0b00100_000_11_000_000,
+            .sub_ddd    => 0b00101_000_00_000_000,
+            .sub_aaa    => 0b00101_000_01_000_000,
+            .slt_ddd    => 0b00101_000_10_000_000,
+            .sltu_ddd   => 0b00101_000_11_000_000,
+            .ior_ddd    => 0b00110_000_01_000_000,
+            .and_ddd    => 0b00110_000_10_000_000,
+            .xor_ddd    => 0b00110_000_11_000_000,
+            .iori_di    => 0b00111_00000000_000,
+            .ioriu_di   => 0b01000_00000000_000,
+            .andi_di    => 0b01001_00000000_000,
+            .andiu_di   => 0b01010_00000000_000,
+            .mask_di    => 0b01011_00000000_000,
+            .xori_di    => 0b01100_00000000_000,
+            .xoriu_di   => 0b01101_00000000_000,
+            .bsl_ddi    => 0b01110_0_0000_000_000,
+            .bsr_ddi    => 0b01110_1_0000_000_000,
+            .bsrs_ddi   => 0b01111_0_0000_000_000,
+            .brr_ddi    => 0b01111_1_0000_000_000,
+            .lli_di     => 0b10010_00000000_000,
+            .lui_di     => 0b10011_00000000_000,
+            .lua_ai     => 0b10100_00000000_000,
+            .jmpl_i     => 0b10101_00000000000,
+            .jmprl_i    => 0b10110_00000000000,
+            .brh_ci     => 0b10111_00000000_000,
+            .brhl_ci    => 0b11000_00000000_000,
+            .xch_dx     => 0b11001_00000_000_000,
+            .xchw_dx    => 0b11010_00000_000_000,
+            .move_dx    => 0b11011_00000_000_000,
+            .movew_dx   => 0b11100_00000_000_000,
+            .move_xd    => 0b11101_00000_000_000,
+            .movew_xd   => 0b11110_00000_000_000,
+            .move_dm    => 0b11111_000_00_000_000,
+            .movew_dm   => 0b11111_001_00_000_000,
+            .move_dp    => 0b11111_010_00_000_000,
+            .movew_dp   => 0b11111_011_00_000_000,
+            .move_md    => 0b11111_100_00_000_000,
+            .movew_md   => 0b11111_101_00_000_000,
+            .move_pd    => 0b11111_110_00_000_000,
+            .movew_pd   => 0b11111_111_00_000_000,
+            .sysc_i     => 0b11111_000_01_000_000,
+            .csrr_dii   => 0b11111_000_10_000_000,
+            .csrw_dii   => 0b11111_000_11_000_000,
+            .reti       => 0b11111_000_11_000_000,
+            .waiti      => 0b11111_000_11_001_000,
+            .ftlb       => 0b11111_000_11_010_000,
+            .fence      => 0b11111_000_11_011_000,
+            .nop        => 0b11111_001_11_000_000,
+            .ssf        => 0b11111_001_11_001_000,
+            .rsf        => 0b11111_001_11_010_000
+        };
+    }
+
+    pub fn isImmAlign2(self: MachineInstr) bool {
+        return switch (self) {
+            // these immediates are aligned by 2 in their encoding (word instructions)
+            .jmpl_i,
+            .jmprl_i,
+            .brh_ci,
+            .brhl_ci,
+            .xchw_dx,
+            .movew_dx,
+            .movew_xd,
+            .movew_dm,
+            .movew_dp,
+            .movew_md,
+            .movew_pd => true,
+
+            // if the immediate/index has an `rd` operand pointing to `ip`
+            inline else => |operands| blk: {
+                const T = @TypeOf(operands);
+
+                if (T == void or !@hasField(T, "rd") or @TypeOf(operands.rd) != Register.AddressRegister) {
+                    break :blk false;
+                }
+
+                const is_imm = @hasField(T, "i") or @hasField(T, "x");
+                const is_ip = operands.rd == .ip;
+                break :blk is_imm and is_ip;
+            }
+        };
+    }
+
     pub const DDD = struct {
         rd: Register.DataRegister,
         rs1: Register.DataRegister,
@@ -167,16 +263,16 @@ pub const MachineInstr = union(enum) {
         rd: Register.DataRegister,
         i: LinkerAddress,
 
-        pub const rd_mask = 0b00000_111_00000000;
-        pub const i_mask = 0b00000_000_11111111;
+        pub const rd_mask = 0b00000_00000000_111;
+        pub const i_mask = 0b00000_11111111_000;
     };
 
     pub const AI = struct {
         rd: Register.AddressRegister,
         i: LinkerAddress,
 
-        pub const rd_mask = 0b00000_111_00000000;
-        pub const i_mask = 0b00000_000_11111111;
+        pub const rd_mask = 0b00000_00000000_111;
+        pub const i_mask = 0b00000_11111111_000;
     };
 
     pub const CDD = struct {
@@ -271,6 +367,14 @@ pub const MachineInstr = union(enum) {
 
         pub const rs1_mask = 0b00000_00000_000_111;
         pub const p_mask = 0b00000_00000_111_000;
+    };
+
+    pub const DII = struct {
+        r: Register.DataRegister,
+        i: LinkerAddress,
+
+        pub const r_mask = 0b00000_000_00_000_111;
+        pub const i_mask = 0b00000_111_00_111_000;
     };
 
     pub const DD = struct {

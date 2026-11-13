@@ -221,6 +221,9 @@ pub const File = struct {
         std.debug.assert(self.ast != null);
         std.debug.assert(self.ir != null);
 
+        const block = self.ir.?.blocks.get(block_index);
+        if (block.ty != .section) return;
+
         const block_id = self.blockId(block_index);
         if (self.qcu.semantically_analysed.contains(block_id)) return;
         try self.qcu.semantically_analysed.put(self.qcu.allocator, block_id, {});

@@ -898,10 +898,7 @@ fn irInstruction(self: *AsmSemanticAir, ir: AsmIr.Ir) !void {
     std.debug.assert(ir.ty == .instruction);
 
     const instr_token = self.source_file.qualifiedToken(ir.token);
-    const air_op = self.instrSelection(instr_token, ir.ty.instruction) catch |err| switch (err) {
-        error.Break => return,
-        else => |the_err| return the_err
-    };
+    const air_op = try self.instrSelection(instr_token, ir.ty.instruction);
     try self.emitAir(instr_token, air_op, .flush);
 
     switch (air_op) {
@@ -1325,12 +1322,12 @@ fn instrSelection(
                 return .{ .instruction = .{ .sysc_i = op } };
         },
         .csrr => {
-            if (try selection.matches(instruction.MachineInstr.DI)) |op|
-                return .{ .instruction = .{ .csrr_di = op } };
+            if (try selection.matches(instruction.MachineInstr.DII)) |op|
+                return .{ .instruction = .{ .csrr_dii = op } };
         },
         .csrw => {
-            if (try selection.matches(instruction.MachineInstr.DI)) |op|
-                return .{ .instruction = .{ .csrw_di = op } };
+            if (try selection.matches(instruction.MachineInstr.DII)) |op|
+                return .{ .instruction = .{ .csrw_dii = op } };
         },
         .reti => {
             if (try selection.matches(void))

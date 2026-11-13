@@ -125,6 +125,7 @@ pub const LinkerError = error {
     DuplicateReference,
     UnknownReference,
     AddressOverflow,
+    AddressAlign,
     NoteDefinedHere,
     Note
 };
@@ -349,8 +350,49 @@ fn emitSectionBlock(self: *Linker, section: *Section, block: AsmSemanticAir.Bloc
 
 fn resolveBinaryInstr(self: *Linker, mir: *Mir) !void {
     switch (mir.op) {
-        .instruction => |instr| {
-            _ = instr;
+        .instruction => |instr| switch (instr) {
+            inline else => |operands| blk: {
+                const T = @TypeOf(operands);
+
+                mir.binary = @intCast(instr.opcode());
+
+                if (T == void) {
+                    break :blk;
+                }
+
+                const type_info = @typeInfo(T).@"struct";
+
+                inline for (type_info.field_names, type_info.field_types) |id, Type| {
+                    const operand = @field(operands, id);
+                    const mask = @field(T, id ++ "_mask");
+
+                    const result = switch (Type) {
+                        instruction.Register.DataRegister,
+                        instruction.Register.AddressRegister,
+                        instruction.Flag => @backingInt(operand),
+                        instruction.LinkerAddress => addr: {
+                            const bits = @popCount(@as(u16, mask));
+                            const address = try self.fitAddress(mir, operand, bits);
+                            mir.address = address;
+                            break :addr address;
+                        },
+                        instruction.LinkerIndex => addr: {
+                            const bits = @popCount(@as(u16, mask));
+                            const address = try self.fitAddress(mir, operand.address, bits);
+                            mir.address = address;
+                            break :addr address;
+                        },
+                        else => comptime unreachable
+                    };
+                    mir.binary |= @intCast(maskedShift(@intCast(result), mask));
+
+                    if (Type == instruction.LinkerIndex) {
+                        const reg_mask = @field(T, id ++ "_mask_src");
+                        const register = @backingInt(operand.register);
+                        mir.binary |= @intCast(maskedShift(register, reg_mask));
+                    }
+                }
+            }
         },
         .data => |data| {
             const mask: i32 = @intCast(std.math.pow(usize, 2, data.bytes * 8) - 1);
@@ -361,6 +403,43 @@ fn resolveBinaryInstr(self: *Linker, mir: *Mir) !void {
         .padding,
         .ascii => {}
     }
+}
+
+fn fitAddress(
+    self: *Linker,
+    mir: *const Mir,
+    address: instruction.LinkerAddress,
+    bits: usize
+) !u32 {
+    const mask: i32 = @intCast(std.math.pow(usize, 2, bits) - 1);
+    const result = try self.resolveAddressConstraint(address, mask, mir.token);
+
+    std.debug.assert(mir.op == .instruction);
+
+    if (mir.op.instruction.isImmAlign2()) {
+        if (result & 1 > 0) {
+            try self.addError(error.AddressAlign, mir.token, "address must have an alignment of 2", .{});
+            return error.Break;
+        }
+        return result >> 1;
+    }
+
+    return result;
+}
+
+fn maskedShift(int: u16, mask: usize) u16 {
+    var result: u16 = 0;
+    var emitting_bit: u4 = 0;
+
+    for (0..16) |mask_index| {
+        if (mask & (@as(usize, 1) << @intCast(mask_index)) > 0) {
+            const bit = (int >> emitting_bit) & 1;
+            result |= bit << @intCast(mask_index);
+            emitting_bit +%= 1;
+        }
+    }
+
+    return result;
 }
 
 fn resolveAddressConstraint(
@@ -387,7 +466,7 @@ fn resolveAddressConstraint(
     const dynamic_address: AsmCompute.ComputeTimeInt = @intCast(full_dynamic_address & value.bit_mask);
     const global_address = dynamic_address + value.offset;
 
-    if (global_address < 0 and global_address < -(mask >> 1)) {
+    if (global_address < 0 and global_address + 1 < -(mask >> 1)) {
         try self.addError(error.AddressOverflow, token, "signed integer of {} underflows {} bit mask", .{
             global_address,
             @popCount(mask) });
@@ -401,7 +480,23 @@ fn resolveAddressConstraint(
         return error.Break;
     }
 
-    return @bitCast(global_address);
+    if (global_address < 0) {
+        if (value.dynamic) |dynamic| {
+            try self.addError(error.AddressOverflow, token, "address with reference '{s}.{s}' is negative", .{
+                dynamic.namespace,
+                dynamic.label });
+            if (value.bit_mask > 0) {
+                try self.addError(error.Note, token, "reference is masked with 0x{X:0>4}, resulting in 0x{X:0>4}", .{
+                    @as(u32, @intCast(value.bit_mask)),
+                    @as(u32, @intCast(dynamic_address)) });
+            }
+            try self.addError(error.Note, token, "offset of {} causes an underflow", .{ value.offset });
+            return error.Break;
+        }
+    }
+
+    const result: u32 = @bitCast(global_address);
+    return result & @as(u32, @bitCast(mask));
 }
 
 pub fn dumpSectionTrace(
@@ -475,7 +570,7 @@ pub fn dumpSectionTraceRange(
         if (global_address + mir.op.bytes() > len)
             continue;
 
-        try writer.print("    0x{X:0>4}:{s} {}", .{
+        try writer.print("    0x{X:0>4}:{s} {b:0>16}", .{
             global_address,
             if (mir.op == .padding) " * " else " ",
             mir.binary });
@@ -504,4 +599,13 @@ pub fn resolveQualifiedNamespaceOwned(
         ":local" else
         "";
     return try allocator.print("{s}{s}.{s}", .{ namespace, local_namespace, label });
+}
+
+// Tests
+
+test maskedShift {
+    try std.testing.expectEqual(maskedShift(u16, 0b0000_0000, 0b0000_0000), 0b0000_0000);
+    try std.testing.expectEqual(maskedShift(u16, 0b0000_0001, 0b0000_1000), 0b0000_1000);
+    try std.testing.expectEqual(maskedShift(u16, 0b0000_1111, 0b1100_1100), 0b1100_1100);
+    try std.testing.expectEqual(maskedShift(u16, 0b0000_1010, 0b1100_1100), 0b1000_1000);
 }

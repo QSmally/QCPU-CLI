@@ -10,6 +10,7 @@ const Error = @import("Error.zig");
 const AsmAst = @import("AsmAst.zig");
 const AsmIr = @import("AsmIr.zig");
 const AsmSemanticAir = @import("AsmSemanticAir.zig");
+const Linker = @import("Linker.zig");
 
 const AsmCompute = @This();
 
@@ -850,13 +851,8 @@ fn evaluateResultDepth(
                         .dynamic = .{
                             .file_index = result.scope.file_index,
                             .block_index = block_index,
-                            .locality = switch (result.symbol.token.tag) {
-                                .label => .global,
-                                .private_label => .global,
-                                .local_label => .local,
-                                else => unreachable
-                            },
-                            .namespace = result.scope.getNamespace(),
+                            .locality = result.scope.getLocality(),
+                            .namespace = try result.scope.getNamespaceOwned(),
                             .label = result.label,
                         },
                         // 0b11111111...
@@ -1138,12 +1134,19 @@ fn demoteGlobalScope(self: *const AsmCompute) AsmCompute {
         self.bridge);
 }
 
-fn getNamespace(self: *const AsmCompute) []const u8 {
+fn getLocality(self: *const AsmCompute) Linker.Locality {
     if (self.scope) |the_scope| {
-        return the_scope.namespace;
+        if (the_scope.untyped_block.ty == .header)
+            return .local;
     }
+    return .global;
+}
 
-    return self.source_file.qualifiedNamespace();
+fn getNamespaceOwned(self: *const AsmCompute) ![]const u8 {
+    const namespace = if (self.scope) |the_scope|
+        the_scope.namespace else
+        self.source_file.qualifiedNamespace();
+    return try self.allocator.dupe(u8, namespace);
 }
 
 // Tests
