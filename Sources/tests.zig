@@ -12,6 +12,7 @@ pub const AsmAst = @import("AsmAst.zig");
 pub const AsmIr = @import("AsmIr.zig");
 pub const AsmCompute = @import("AsmCompute.zig");
 pub const AsmSemanticAir = @import("AsmSemanticAir.zig");
+pub const Linker = @import("Linker.zig");
 
 test {
     const std = @import("std");

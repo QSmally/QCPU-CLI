@@ -1,4 +1,6 @@
 
+// Linker
+
 const std = @import("std");
 const indexable_list = @import("indexable_list.zig");
 const instruction = @import("instruction.zig");
@@ -45,7 +47,7 @@ pub fn dump(self: *Linker, writer: *std.Io.Writer) !void {
     var iterator = self.unified_references.iterator();
 
     while (iterator.next()) |reference| {
-        try writer.print("{s} -> {}\n", .{ reference.key_ptr.*, reference.value_ptr.* });
+        try writer.print("{s} -> 0x{X:0>4}\n", .{ reference.key_ptr.*, reference.value_ptr.* });
     }
 }
 
@@ -109,6 +111,80 @@ const Mir = struct {
     address: u32 = 0,
 
     pub const List = indexable_list.IndexableList(Mir);
+
+    pub fn render(self: *const Mir, writer: *std.Io.Writer) !void {
+        switch (self.op) {
+            .instruction => |instr| {
+                try writer.print("{s}", .{ instr.qualifiedName() });
+
+                switch (instr) {
+                    inline else => |operands| blk: {
+                        const T = @TypeOf(operands);
+
+                        if (T == void) {
+                            break :blk;
+                        }
+
+                        const type_info = @typeInfo(T).@"struct";
+
+                        inline for (type_info.field_names, type_info.field_types, 0..) |name, Type, i| {
+                            const operand = @field(operands, name);
+
+                            if (i > 0) {
+                                try writer.writeByte(',');
+                            }
+
+                            switch (Type) {
+                                instruction.Register.DataRegister,
+                                instruction.Register.AddressRegister,
+                                instruction.Flag => try writer.print(" {s}", .{ @tagName(operand) }),
+                                instruction.LinkerAddress => if (operand.dynamic) |dynamic| {
+                                    if (operand.bit_mask == -1) {
+                                        try writer.print(" .{s} + {}", .{
+                                            dynamic.label,
+                                            operand.offset });
+                                    } else {
+                                        try writer.print(" .{s}'0x{x} + {}", .{
+                                            dynamic.label,
+                                            operand.bit_mask,
+                                            operand.offset });
+                                    }
+                                } else {
+                                    try writer.print(" {}", .{ operand.offset });
+                                },
+                                instruction.LinkerIndex => if (operand.address.dynamic) |dynamic| {
+                                    if (operand.address.bit_mask == -1) {
+                                        try writer.print(" (.{s} + {})({s})", .{
+                                            dynamic.label,
+                                            operand.address.offset,
+                                            @tagName(operand.register) });
+                                    } else {
+                                        try writer.print(" (.{s}'0x{x} + {})({s})", .{
+                                            dynamic.label,
+                                            operand.address.bit_mask,
+                                            operand.address.offset,
+                                            @tagName(operand.register) });
+                                    }
+                                } else {
+                                    try writer.print(" {}({s})", .{ operand.address.offset, @tagName(operand.register) });
+                                },
+                                else => comptime unreachable
+                            }
+                        }
+                    }
+                }
+            },
+            .padding => |padding| try writer.print("* {} byte{s}", .{
+                padding,
+                if (padding == 1) "" else "s" }),
+            .data => try writer.print("0x{x} ({})", .{ self.address, self.address }),
+            .ascii => |ascii| {
+                if (ascii.sentinel) |sentinel|
+                    try writer.print("\"{s}\" {}", .{ ascii.text, sentinel }) else
+                    try writer.print("\"{s}\"", .{ ascii.text });
+            }
+        }
+    }
 };
 
 const SectionList = indexable_list.IndexableList(Section);
@@ -227,8 +303,9 @@ pub fn performLink(self: *Linker) LinkError!void {
     }
 
     for (self.linked_sections.list.items) |*section| {
-        for (section.content.list.items) |*mir| {
-            try self.resolveBinaryInstr(mir);
+        for (section.content.list.items, 0..) |*mir, index| {
+            const ip = section.origin + section.localAddressOf(.fromIndex(index));
+            try self.resolveBinaryInstr(mir, ip);
         }
     }
 }
@@ -348,7 +425,7 @@ fn emitSectionBlock(self: *Linker, section: *Section, block: AsmSemanticAir.Bloc
     }
 }
 
-fn resolveBinaryInstr(self: *Linker, mir: *Mir) !void {
+fn resolveBinaryInstr(self: *Linker, mir: *Mir, ip: usize) !void {
     switch (mir.op) {
         .instruction => |instr| switch (instr) {
             inline else => |operands| blk: {
@@ -372,13 +449,17 @@ fn resolveBinaryInstr(self: *Linker, mir: *Mir) !void {
                         instruction.Flag => @backingInt(operand),
                         instruction.LinkerAddress => addr: {
                             const bits = @popCount(@as(u16, mask));
-                            const address = try self.fitAddress(mir, operand, bits);
+                            const relative_ip: ?i32 = if (mir.op.instruction.isRelative()) @intCast(ip) else null;
+                            const bit_mask: i32 = @intCast(std.math.pow(usize, 2, bits) - 1);
+                            const address = try self.resolveAddressConstraint(operand, relative_ip, instr.isRelative(), bit_mask, mir.token);
                             mir.address = address;
                             break :addr address;
                         },
                         instruction.LinkerIndex => addr: {
                             const bits = @popCount(@as(u16, mask));
-                            const address = try self.fitAddress(mir, operand.address, bits);
+                            const relative_ip: ?i32 = if (mir.op.instruction.isRelative()) @intCast(ip) else null;
+                            const bit_mask: i32 = @intCast(std.math.pow(usize, 2, bits) - 1);
+                            const address = try self.resolveAddressConstraint(operand.address, relative_ip, instr.isRelative(), bit_mask, mir.token);
                             mir.address = address;
                             break :addr address;
                         },
@@ -396,7 +477,7 @@ fn resolveBinaryInstr(self: *Linker, mir: *Mir) !void {
         },
         .data => |data| {
             const mask: i32 = @intCast(std.math.pow(usize, 2, data.bytes * 8) - 1);
-            const result = try self.resolveAddressConstraint(data.value, mask, mir.token);
+            const result = try self.resolveAddressConstraint(data.value, null, false, mask, mir.token);
             mir.address = result;
             mir.binary = mir.address;
         },
@@ -405,46 +486,11 @@ fn resolveBinaryInstr(self: *Linker, mir: *Mir) !void {
     }
 }
 
-fn fitAddress(
-    self: *Linker,
-    mir: *const Mir,
-    address: instruction.LinkerAddress,
-    bits: usize
-) !u32 {
-    const mask: i32 = @intCast(std.math.pow(usize, 2, bits) - 1);
-    const result = try self.resolveAddressConstraint(address, mask, mir.token);
-
-    std.debug.assert(mir.op == .instruction);
-
-    if (mir.op.instruction.isImmAlign2()) {
-        if (result & 1 > 0) {
-            try self.addError(error.AddressAlign, mir.token, "address must have an alignment of 2", .{});
-            return error.Break;
-        }
-        return result >> 1;
-    }
-
-    return result;
-}
-
-fn maskedShift(int: u16, mask: usize) u16 {
-    var result: u16 = 0;
-    var emitting_bit: u4 = 0;
-
-    for (0..16) |mask_index| {
-        if (mask & (@as(usize, 1) << @intCast(mask_index)) > 0) {
-            const bit = (int >> emitting_bit) & 1;
-            result |= bit << @intCast(mask_index);
-            emitting_bit +%= 1;
-        }
-    }
-
-    return result;
-}
-
 fn resolveAddressConstraint(
     self: *Linker,
     value: instruction.LinkerAddress,
+    ip: ?i32,
+    is_align_2: bool,
     mask: i32,
     token: SourceFile.Token
 ) !u32 {
@@ -464,7 +510,21 @@ fn resolveAddressConstraint(
     } else 0;
 
     const dynamic_address: AsmCompute.ComputeTimeInt = @intCast(full_dynamic_address & value.bit_mask);
-    const global_address = dynamic_address + value.offset;
+    var global_address = dynamic_address + value.offset;
+
+    if (ip) |the_ip| {
+        global_address -= the_ip;
+    }
+
+    // TODO: alignment of 32 and 256 for lui and jmpl
+
+    if (is_align_2) {
+        if (global_address & 1 > 0) {
+            try self.addError(error.AddressAlign, token, "address must have an alignment of 2", .{});
+            return error.Break;
+        }
+        global_address >>= 1;
+    }
 
     if (global_address < 0 and global_address + 1 < -(mask >> 1)) {
         try self.addError(error.AddressOverflow, token, "signed integer of {} underflows {} bit mask", .{
@@ -480,7 +540,7 @@ fn resolveAddressConstraint(
         return error.Break;
     }
 
-    if (global_address < 0) {
+    if (global_address < 0 and ip == null) {
         if (value.dynamic) |dynamic| {
             try self.addError(error.AddressOverflow, token, "address with reference '{s}.{s}' is negative", .{
                 dynamic.namespace,
@@ -570,11 +630,12 @@ pub fn dumpSectionTraceRange(
         if (global_address + mir.op.bytes() > len)
             continue;
 
-        try writer.print("    0x{X:0>4}:{s} {b:0>16}", .{
-            global_address,
-            if (mir.op == .padding) " * " else " ",
-            mir.binary });
-        defer writer.writeAll("\n") catch {};
+        try writer.print("    0x{X:0>4}   ", .{ global_address });
+        defer writer.writeByte('\n') catch {};
+
+        if (mir.op == .instruction)
+            try writer.print("0b{b:0>16}   ", .{ mir.binary });
+        try mir.render(writer);
 
         if (note) |the_note| {
             if (global_address >= the_note.address and global_address + mir.op.bytes() < the_note.address)
@@ -601,11 +662,26 @@ pub fn resolveQualifiedNamespaceOwned(
     return try allocator.print("{s}{s}.{s}", .{ namespace, local_namespace, label });
 }
 
+fn maskedShift(int: u16, mask: usize) u16 {
+    var result: u16 = 0;
+    var emitting_bit: u4 = 0;
+
+    for (0..16) |mask_index| {
+        if (mask & (@as(usize, 1) << @intCast(mask_index)) > 0) {
+            const bit = (int >> emitting_bit) & 1;
+            result |= bit << @intCast(mask_index);
+            emitting_bit +%= 1;
+        }
+    }
+
+    return result;
+}
+
 // Tests
 
 test maskedShift {
-    try std.testing.expectEqual(maskedShift(u16, 0b0000_0000, 0b0000_0000), 0b0000_0000);
-    try std.testing.expectEqual(maskedShift(u16, 0b0000_0001, 0b0000_1000), 0b0000_1000);
-    try std.testing.expectEqual(maskedShift(u16, 0b0000_1111, 0b1100_1100), 0b1100_1100);
-    try std.testing.expectEqual(maskedShift(u16, 0b0000_1010, 0b1100_1100), 0b1000_1000);
+    try std.testing.expectEqual(maskedShift(0b0000_0000, 0b0000_0000), 0b0000_0000);
+    try std.testing.expectEqual(maskedShift(0b0000_0001, 0b0000_1000), 0b0000_1000);
+    try std.testing.expectEqual(maskedShift(0b0000_1111, 0b1100_1100), 0b1100_1100);
+    try std.testing.expectEqual(maskedShift(0b0000_1010, 0b1100_1100), 0b1000_1000);
 }

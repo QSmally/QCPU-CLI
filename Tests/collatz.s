@@ -3,8 +3,11 @@
 
 @section root
 
-_:                lui d1, begin_value
+_:                lli d1, begin_value
                   jmpr .loop
+
+@linkinfo(origin) root, 0
+@linkinfo(aligned) text, 2
 
 @section text
 

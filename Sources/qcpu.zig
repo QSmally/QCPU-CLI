@@ -2,6 +2,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const Qcu = @import("Qcu.zig");
+const verilog = @import("verilog.zig");
 
 const version_str = "0.1.0";
 
@@ -79,6 +80,9 @@ fn doEverything(
     if (run_files.len == 0)
         return error.Nothing;
 
+    if (run_files.len > 1)
+        std.log.warn("multiple run files are not supported yet", .{});
+
     for (run_files) |root_file_path| {
         const qcu = try Qcu.init(
             io,
@@ -94,6 +98,9 @@ fn doEverything(
                 try the_err.write(stderr);
             return err;
         };
+
+        if (run_options.verilog)
+            try verilog.output(&qcu.linker, stdout);
     }
 }
 

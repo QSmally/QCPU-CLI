@@ -852,7 +852,7 @@ fn evaluateResultDepth(
                             .file_index = result.scope.file_index,
                             .block_index = block_index,
                             .locality = result.scope.getLocality(),
-                            .namespace = try result.scope.getNamespaceOwned(),
+                            .namespace = try result.scope.getNamespace(),
                             .label = result.label,
                         },
                         // 0b11111111...
@@ -1142,11 +1142,10 @@ fn getLocality(self: *const AsmCompute) Linker.Locality {
     return .global;
 }
 
-fn getNamespaceOwned(self: *const AsmCompute) ![]const u8 {
-    const namespace = if (self.scope) |the_scope|
+fn getNamespace(self: *const AsmCompute) ![]const u8 {
+    return if (self.scope) |the_scope|
         the_scope.namespace else
         self.source_file.qualifiedNamespace();
-    return try self.allocator.dupe(u8, namespace);
 }
 
 // Tests

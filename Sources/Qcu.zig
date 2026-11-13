@@ -35,6 +35,7 @@ io: std.Io,
 allocator: std.mem.Allocator,
 options: Options,
 stderr: *std.Io.Writer,
+bucket: std.heap.ArenaAllocator,
 linker: Linker,
 work_queue: std.PriorityQueue(Job, void, Job.before) = .empty,
 files: File.List = .empty,
@@ -62,6 +63,7 @@ pub fn init(
         .allocator = allocator,
         .options = options,
         .stderr = stderr,
+        .bucket = .init(allocator),
         .linker = .init(qcu) };
     errdefer qcu.deinit();
 
@@ -82,6 +84,7 @@ pub fn deinit(self: *Qcu) void {
         err.deinit(self.allocator);
     self.errors.deinit(self.allocator);
     self.semantically_analysed.deinit(self.allocator);
+    self.bucket.deinit();
     self.linker.deinit();
     // Self-destruct
     self.allocator.destroy(self);
@@ -260,6 +263,7 @@ pub const File = struct {
     fn createSemanticAnalyser(self: *File, namespace: []const u8) AsmSemanticAir {
         return AsmSemanticAir.init(
             self.qcu.allocator,
+            self.qcu.bucket.allocator(),
             self.index,
             &self.source_file,
             &self.ast.?,

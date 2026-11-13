@@ -16,6 +16,11 @@ const Linker = @import("Linker.zig");
 const AsmSemanticAir = @This();
 
 allocator: std.mem.Allocator,
+/// This allocator must outlive all Semantic Analysis units; it must be backed
+/// by an ArenaAllocator.
+bucket: std.mem.Allocator,
+/// This allocator is used for internal allocations and is freed upon
+/// `deinit()`.
 arena: std.heap.ArenaAllocator,
 file_index: Qcu.File.List.Index,
 source_file: *const SourceFile,
@@ -62,6 +67,7 @@ const log = std.log.scoped(.AsmSemanticAir);
 // block.
 pub fn init(
     allocator: std.mem.Allocator,
+    bucket: std.mem.Allocator,
     file_index: Qcu.File.List.Index,
     source_file: *const SourceFile,
     tree: *const AsmAst,
@@ -71,6 +77,7 @@ pub fn init(
 ) AsmSemanticAir {
     return .{
         .allocator = allocator,
+        .bucket = bucket,
         .arena = .init(allocator),
         .file_index = file_index,
         .source_file = source_file,
@@ -669,14 +676,14 @@ fn explainTokenOrigin(
 
 const Crc32 = std.hash.crc.@"CRC-32/ISO-HDLC";
 
-fn createReferenceNamespaceOwned(
+fn createReferenceNamespaceBucket(
     self: *AsmSemanticAir,
     unique_node_index: AsmAst.Node.List.Index,
     unique_file_index: Qcu.File.List.Index,
     unique_block_index: AsmIr.Block.List.Index
 ) ![]const u8 {
     if (self.reference_pool.items.len > 0) {
-        return try self.allocator.print("{s}.{s}", .{
+        return try self.bucket.print("{s}.{s}", .{
             self.namespace,
             self.reference_pool.items[0].token.slice() });
     }
@@ -688,7 +695,7 @@ fn createReferenceNamespaceOwned(
     unique_value.update(&std.mem.toBytes(unique_file_index));  // location of header
 
     const hash = std.mem.toBytes(unique_value.final());
-    return try self.allocator.print("{s}:anon_{x}", .{ self.namespace, hash });
+    return try self.bucket.print("{s}:anon_{x}", .{ self.namespace, hash });
 }
 
 fn resolveSymbolsInto(
@@ -874,11 +881,10 @@ fn irHeader(self: *AsmSemanticAir, ir: AsmIr.Ir) !void {
     const compute = self.getCompute();
     const header = try compute.evaluateConstantResult(.header, ir.ty.header.node_index);
 
-    const namespace = try self.createReferenceNamespaceOwned(
+    const namespace = try self.createReferenceNamespaceBucket(
         ir.ty.header.node_index,
         header.file_index,
         header.block_index);
-    defer self.allocator.free(namespace);
 
     var scope = self.bridge.createScope(header.file_index, namespace);
     defer scope.deinit();
@@ -1535,8 +1541,12 @@ fn testSemantics(
     defer ir.deinit(std.testing.allocator);
     std.debug.assert(bridge.errors.items.len == 0);
 
+    var bucket = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer bucket.deinit();
+
     var sema = AsmSemanticAir.init(
         std.testing.allocator,
+        bucket.allocator(),
         .root,
         &source_file,
         &ast,

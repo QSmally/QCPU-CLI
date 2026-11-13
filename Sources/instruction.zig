@@ -118,9 +118,13 @@ pub const MachineInstr = union(enum) {
             values[0..index]);
     };
 
-    pub fn qualifiedInstrName(full_identifier: []const u8) []const u8 {
+    fn qualifiedInstrName(full_identifier: []const u8) []const u8 {
         const underscore_index = std.mem.findScalar(u8, full_identifier, '_') orelse full_identifier.len;
         return full_identifier[0..underscore_index];
+    }
+
+    pub fn qualifiedName(self: MachineInstr) []const u8 {
+        return qualifiedInstrName(@tagName(self));
     }
 
     pub fn opcode(self: MachineInstr) u16 {
@@ -216,6 +220,17 @@ pub const MachineInstr = union(enum) {
                 const is_ip = operands.rd == .ip;
                 break :blk is_imm and is_ip;
             }
+        };
+    }
+
+    pub fn isRelative(self: MachineInstr) bool {
+        return switch (self) {
+            .addi_ai,
+            .jmprl_i,
+            .brh_ci,
+            .brhl_ci => true,
+
+            else => false
         };
     }
 
