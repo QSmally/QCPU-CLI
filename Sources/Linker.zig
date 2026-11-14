@@ -607,7 +607,7 @@ pub fn dumpSectionTraceNear(
     } else {
         try writer.print(
             \\@section unknown
-            \\... unknown section mapped near address {}
+            \\... unknown section mapped near address 0x{X:0>4}
             \\... {s}
             \\
         , .{ note.address, note.message });
@@ -631,7 +631,7 @@ pub fn dumpSectionTraceRange(
     note: ?Note,
     writer: *std.Io.Writer
 ) !void {
-    try writer.print("@section {s} (size {})\n", .{
+    try writer.print("@section {s} ({} bytes)\n", .{
         section.identifier,
         section.bytes() });
     if (range.min > 0) {

@@ -16,8 +16,6 @@ _:                lli d1, begin_value
 .loop:            mask d1, 0x01           ; check odd
                   brh z, .not_even
 
-                  nop
-
                   bsr d2, d1, 1           ; check 0x0001 >> 1 == 0
 .done:            brh z, .done
 
