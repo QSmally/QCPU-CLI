@@ -231,10 +231,11 @@ pub const MachineInstr = union(enum) {
 
     pub fn isRelativeIp(self: MachineInstr) bool {
         return switch (self) {
-            .addi_ai,
             .jmprl_i,
             .brh_ci,
             .brhl_ci => true,
+
+            .addi_ai => |operands| operands.rd == .ip,
 
             else => false
         };

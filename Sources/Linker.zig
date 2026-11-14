@@ -514,10 +514,10 @@ fn resolveAddressConstraint(
         global_address -= the_ip;
     }
 
-    switch (alignment) {
+    check: switch (alignment) {
         .@"1" => if (global_address >= 0) {
             if (global_address & ~mask > 0) {
-                try self.addError(error.AddressOverflow, token, "address of 0x{X:0>4} overflows {} bit mask", .{
+                try self.addError(error.AddressOverflow, token, "integer of 0x{X:0>4} overflows {} bit mask", .{
                     @as(u32, @intCast(global_address)),
                     @popCount(mask) });
                 return error.Break;
@@ -536,6 +536,7 @@ fn resolveAddressConstraint(
                 return error.Break;
             }
             global_address >>= 1;
+            continue :check .@"1";
         },
         else => {
             const shift = @ctz(alignment.toByteUnits());
@@ -543,12 +544,14 @@ fn resolveAddressConstraint(
             const overflow = global_address & ~shifted_mask;
 
             if (overflow > 0) {
-                try self.addError(error.AddressOverflow, token, "address overflows {} bit mask with alignment of {}", .{
+                try self.addError(error.AddressOverflow, token, "address of 0x{X:0>4} overflows {} bit mask with alignment of {}", .{
+                    global_address,
                     @popCount(mask),
                     alignment.toByteUnits() });
                 try self.addError(error.Note, token, "address:  0b{b:0>16}", .{ @as(u32, @bitCast(global_address)) });
                 try self.addError(error.Note, token, "mask:     0b{b:0>16} ~&", .{ @as(u32, @bitCast(shifted_mask)) });
                 try self.addError(error.Note, token, "overflow: 0b{b:0>16} =", .{ @as(u32, @bitCast(overflow)) });
+                return error.Break;
             }
 
             global_address >>= @intCast(shift);
