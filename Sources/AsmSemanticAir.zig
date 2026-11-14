@@ -1324,7 +1324,7 @@ fn instrSelection(
                 return .{ .instruction = .{ .movew_pd = op } };
         },
         .sysc => {
-            if (try selection.matches(instruction.MachineInstr.I)) |op|
+            if (try selection.matches(instruction.MachineInstr.II)) |op|
                 return .{ .instruction = .{ .sysc_i = op } };
         },
         .csrr => {

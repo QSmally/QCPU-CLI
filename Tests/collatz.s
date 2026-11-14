@@ -11,11 +11,17 @@ _:                lli d1, begin_value
 
 @section text
 
-.not_even:        bsr d1, d1, 1
+.not_even:        bsr d1, d1, 1           ; n/2
 
-.loop:            mask d1, 0x01
-                  brh c, .not_even
+.loop:            mask d1, 0x01           ; check odd
+                  brh z, .not_even
 
-                  bsl d2, d1, 1
-                  add d1, d1, d2
+                  nop
+
+                  bsr d2, d1, 1           ; check 0x0001 >> 1 == 0
+.done:            brh z, .done
+
+                  bsl d2, d1, 1           ; 2n
+                  add d1, d1, d2          ; 3n
+                  addi d1, 1              ; 3n+1
                   jmpr .loop

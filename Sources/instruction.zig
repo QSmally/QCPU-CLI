@@ -59,7 +59,7 @@ pub const MachineInstr = union(enum) {
     movew_md: MD,
     move_pd: PD,
     movew_pd: PD,
-    sysc_i: I,
+    sysc_i: II,
     csrr_dii: DII,
     csrw_dii: DII,
     reti,
@@ -193,10 +193,16 @@ pub const MachineInstr = union(enum) {
         };
     }
 
-    pub fn isImmAlign2(self: MachineInstr) bool {
+    pub fn immAlignment(self: MachineInstr) std.mem.Alignment {
         return switch (self) {
-            // these immediates are aligned by 2 in their encoding (word instructions)
-            .jmpl_i,
+            // absolute jump, aligned by 32
+            .jmpl_i => .@"32",
+
+            // upper immediates, aligned by 256
+            .lui_di,
+            .lua_ai => .fromByteUnits(256),
+
+            // word and jump/branch instructions, aligned by 2
             .jmprl_i,
             .brh_ci,
             .brhl_ci,
@@ -206,24 +212,24 @@ pub const MachineInstr = union(enum) {
             .movew_dm,
             .movew_dp,
             .movew_md,
-            .movew_pd => true,
+            .movew_pd => .@"2",
 
             // if the immediate/index has an `rd` operand pointing to `ip`
             inline else => |operands| blk: {
                 const T = @TypeOf(operands);
 
                 if (T == void or !@hasField(T, "rd") or @TypeOf(operands.rd) != Register.AddressRegister) {
-                    break :blk false;
+                    break :blk .@"1";
                 }
 
                 const is_imm = @hasField(T, "i") or @hasField(T, "x");
                 const is_ip = operands.rd == .ip;
-                break :blk is_imm and is_ip;
+                break :blk if (is_imm and is_ip) .@"2" else .@"1";
             }
         };
     }
 
-    pub fn isRelative(self: MachineInstr) bool {
+    pub fn isRelativeIp(self: MachineInstr) bool {
         return switch (self) {
             .addi_ai,
             .jmprl_i,
@@ -323,7 +329,7 @@ pub const MachineInstr = union(enum) {
     pub const I = struct {
         i: LinkerAddress,
 
-        pub const i_mask = 0b00000_000_11111111;
+        pub const i_mask = 0b00000_11111111111;
     };
 
     pub const CI = struct {
@@ -382,6 +388,12 @@ pub const MachineInstr = union(enum) {
 
         pub const rs1_mask = 0b00000_00000_000_111;
         pub const p_mask = 0b00000_00000_111_000;
+    };
+
+    pub const II = struct {
+        i: LinkerAddress,
+
+        pub const i_mask = 0b00000_111_00_111_000;
     };
 
     pub const DII = struct {

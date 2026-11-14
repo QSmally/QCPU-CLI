@@ -201,7 +201,6 @@ pub const LinkerError = error {
     DuplicateReference,
     UnknownReference,
     AddressOverflow,
-    AddressAlign,
     NoteDefinedHere,
     Note
 };
@@ -449,17 +448,15 @@ fn resolveBinaryInstr(self: *Linker, mir: *Mir, ip: usize) !void {
                         instruction.Flag => @backingInt(operand),
                         instruction.LinkerAddress => addr: {
                             const bits = @popCount(@as(u16, mask));
-                            const relative_ip: ?i32 = if (mir.op.instruction.isRelative()) @intCast(ip) else null;
-                            const bit_mask: i32 = @intCast(std.math.pow(usize, 2, bits) - 1);
-                            const address = try self.resolveAddressConstraint(operand, relative_ip, instr.isRelative(), bit_mask, mir.token);
+                            const relative_ip: ?i32 = if (mir.op.instruction.isRelativeIp()) @intCast(ip) else null;
+                            const address = try self.resolveAddressConstraint(operand, relative_ip, instr.immAlignment(), bits, mir.token);
                             mir.address = address;
                             break :addr address;
                         },
                         instruction.LinkerIndex => addr: {
                             const bits = @popCount(@as(u16, mask));
-                            const relative_ip: ?i32 = if (mir.op.instruction.isRelative()) @intCast(ip) else null;
-                            const bit_mask: i32 = @intCast(std.math.pow(usize, 2, bits) - 1);
-                            const address = try self.resolveAddressConstraint(operand.address, relative_ip, instr.isRelative(), bit_mask, mir.token);
+                            const relative_ip: ?i32 = if (mir.op.instruction.isRelativeIp()) @intCast(ip) else null;
+                            const address = try self.resolveAddressConstraint(operand.address, relative_ip, instr.immAlignment(), bits, mir.token);
                             mir.address = address;
                             break :addr address;
                         },
@@ -476,8 +473,7 @@ fn resolveBinaryInstr(self: *Linker, mir: *Mir, ip: usize) !void {
             }
         },
         .data => |data| {
-            const mask: i32 = @intCast(std.math.pow(usize, 2, data.bytes * 8) - 1);
-            const result = try self.resolveAddressConstraint(data.value, null, false, mask, mir.token);
+            const result = try self.resolveAddressConstraint(data.value, null, .@"1", data.bytes * 8, mir.token);
             mir.address = result;
             mir.binary = mir.address;
         },
@@ -489,11 +485,13 @@ fn resolveBinaryInstr(self: *Linker, mir: *Mir, ip: usize) !void {
 fn resolveAddressConstraint(
     self: *Linker,
     value: instruction.LinkerAddress,
-    ip: ?i32,
-    is_align_2: bool,
-    mask: i32,
+    relative_address: ?i32,
+    alignment: std.mem.Alignment,
+    bits: usize,
     token: SourceFile.Token
 ) !u32 {
+    const mask: i32 = @intCast(std.math.pow(usize, 2, bits) - 1);
+
     const full_dynamic_address: AsmCompute.ComputeTimeInt = if (value.dynamic) |dynamic| blk: {
         const unified_label = try resolveQualifiedNamespaceOwned(
             self.qcu.allocator,
@@ -512,35 +510,52 @@ fn resolveAddressConstraint(
     const dynamic_address: AsmCompute.ComputeTimeInt = @intCast(full_dynamic_address & value.bit_mask);
     var global_address = dynamic_address + value.offset;
 
-    if (ip) |the_ip| {
+    if (relative_address) |the_ip| {
         global_address -= the_ip;
     }
 
-    // TODO: alignment of 32 and 256 for lui and jmpl
+    switch (alignment) {
+        .@"1" => if (global_address >= 0) {
+            if (global_address & ~mask > 0) {
+                try self.addError(error.AddressOverflow, token, "address of 0x{X:0>4} overflows {} bit mask", .{
+                    @as(u32, @intCast(global_address)),
+                    @popCount(mask) });
+                return error.Break;
+            }
+        } else {
+            if (global_address + 1 < -(mask >> 1)) {
+                try self.addError(error.AddressOverflow, token, "signed integer of {} underflows {} bit mask", .{
+                    global_address,
+                    @popCount(mask) });
+                return error.Break;
+            }
+        },
+        .@"2" => {
+            if (global_address & 1 > 0) {
+                try self.addError(error.AddressOverflow, token, "address must have an alignment of 2", .{});
+                return error.Break;
+            }
+            global_address >>= 1;
+        },
+        else => {
+            const shift = @ctz(alignment.toByteUnits());
+            const shifted_mask = mask << @intCast(shift);
+            const overflow = global_address & ~shifted_mask;
 
-    if (is_align_2) {
-        if (global_address & 1 > 0) {
-            try self.addError(error.AddressAlign, token, "address must have an alignment of 2", .{});
-            return error.Break;
+            if (overflow > 0) {
+                try self.addError(error.AddressOverflow, token, "address overflows {} bit mask with alignment of {}", .{
+                    @popCount(mask),
+                    alignment.toByteUnits() });
+                try self.addError(error.Note, token, "address:  0b{b:0>16}", .{ @as(u32, @bitCast(global_address)) });
+                try self.addError(error.Note, token, "mask:     0b{b:0>16} ~&", .{ @as(u32, @bitCast(shifted_mask)) });
+                try self.addError(error.Note, token, "overflow: 0b{b:0>16} =", .{ @as(u32, @bitCast(overflow)) });
+            }
+
+            global_address >>= @intCast(shift);
         }
-        global_address >>= 1;
     }
 
-    if (global_address < 0 and global_address + 1 < -(mask >> 1)) {
-        try self.addError(error.AddressOverflow, token, "signed integer of {} underflows {} bit mask", .{
-            global_address,
-            @popCount(mask) });
-        return error.Break;
-    }
-
-    if (global_address > 0 and global_address & ~mask > 0) {
-        try self.addError(error.AddressOverflow, token, "address of 0x{X:0>4} overflows {} bit mask", .{
-            @as(u32, @intCast(global_address)),
-            @popCount(mask) });
-        return error.Break;
-    }
-
-    if (global_address < 0 and ip == null) {
+    if (global_address < 0 and relative_address == null) {
         if (value.dynamic) |dynamic| {
             try self.addError(error.AddressOverflow, token, "address with reference '{s}.{s}' is negative", .{
                 dynamic.namespace,
