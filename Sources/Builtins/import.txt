@@ -1,0 +1,23 @@
+
+    @import <name>, <file path>
+    @import(expose) <name>, <file path>
+
+Imports the public symbols of another file into a namespace.
+
+The `expose` option makes this imported namespace public for `@import`.
+
+
+
+snippets/builtin-import.s:
+    @import namespace, "builtin-define.s"
+
+    @section root
+
+    _:                u16 namespace.foo
+
+$ qcpu --dlinker snippets/builtin-import.s
+    Linker:
+    @section root (6 bytes)
+        0x0000   0xBEEF (48879)
+    ... (omitted)
+

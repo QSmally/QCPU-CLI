@@ -1,0 +1,23 @@
+
+    @align <alignment>
+
+Emits some amount of padding bytes to conform to the set alignment during
+linkage. `<alignment>` must be positive, non-zero, and a power of two.
+
+
+
+snippets/builtin-align.s:
+    @section example
+
+    _:                u8 0xEA
+    @align 2
+    _:                u16 0xDEAD
+
+$ qcpu --dlinker --noelimination snippets/builtin-align.s
+    ... (omitted)
+    @section example (5 bytes)
+        0x0003   * 1 byte
+        0x0004   0xEA (234)
+        0x0005   * 1 byte
+        0x0006   0xDEAD (57005)
+

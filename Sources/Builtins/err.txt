@@ -1,0 +1,48 @@
+
+    @err <message>, [formatting expressions ...]
+
+Generates an assemble error when evaluated by the semantic analyser.
+
+This may be used in conjunction with `@if` for assemble-time validation, or to
+signal deprecation errors when an old block or `@header` is referenced.
+
+
+
+snippets/builtin-err.s:
+    @header Queue, len
+    @align 2
+
+    @if len < 1
+          @err "Queue len may not be zero or negative; found %d", len
+    @end
+
+    head:             u16 0
+    tail:             u16 0
+    memory:           reserve u8, len
+    @end
+
+    @section root
+
+    _:                Queue 0
+
+$ qcpu snippets/builtin-err.s
+    snippets/builtin-err.s:6:7: error: Queue len may not be zero or negative; found 0
+          @err "Queue len may not be zero or negative; found %d", len
+          ^~~~
+    snippets/builtin-err.s:5:9: note: conditionally evaluated from here
+    @if len < 1
+            ^
+    snippets/builtin-err.s:16:19: note: Queue unrolled from here
+    _:                Queue 0
+                      ^~~~~
+
+
+
+The following formatting arguments are available:
+
+    %d - discrete integer
+    %b - binary
+    %h - hexadecimal
+    %s - string
+    %a - any, internal representation of argument
+

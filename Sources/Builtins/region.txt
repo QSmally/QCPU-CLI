@@ -1,0 +1,23 @@
+
+    @region <length>
+
+Ensures a region is a set size. Emits padding bytes if the opaque space is less
+than the set size, and provides an error if the opaque space exceeds the set
+size.
+
+
+
+snippets/builtin-region.s:
+    @section root
+
+    @region 256
+    _:                u16 0xDEAD
+                      u16 0xBEEF
+    @end
+
+$ qcpu --dlinker snippets/builtin-region.s
+    Linker:
+    @section root (256 bytes)
+        0x0000   0xDEAD (57005)
+        0x0002   0xBEEF (48879)
+        0x0004   * 252 bytes

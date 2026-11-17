@@ -1,0 +1,31 @@
+
+    @linkinfo(origin) <name>, <address>
+    @linkinfo(origin, expose) <name>, <address>
+    @linkinfo(aligned) <name>, <alignment>
+    @linkinfo(aligned, expose) <name>, <alignment>
+
+`@linkinfo` executes a linker command. The order of commands matter, as the
+addresses of the section layout must be ascending, and may not overlap. Linker
+commands may only be defined in a single file. The following linker commands
+are available:
+
+    origin - places the section at an exact address
+    aligned - places the section at the next available alignment
+
+The `expose` option makes the section label (created as `<name>`) public for
+`@import`.
+
+
+
+snippets/builtin-linkinfo.s:
+    @linkinfo(origin) root, 0
+    @linkinfo(aligned) text, 256
+    @linkinfo(aligned) data, 256
+
+$ qcpu --dlinker snippets/builtin-linkinfo.s
+    Linker:
+    @section root (2 bytes)
+        0x0000   0b0000000000000000   bkpt
+    @section text (0 bytes)
+    @section data (0 bytes)
+

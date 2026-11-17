@@ -2,6 +2,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const Qcu = @import("Qcu.zig");
+const docs = @import("docs.zig");
 const verilog = @import("verilog.zig");
 
 const version_str = "0.1.0";
@@ -77,6 +78,9 @@ fn doEverything(
     if (run_options.help)
         return try help(stderr);
 
+    if (run_options.docs) |keyword|
+        return try docs.output(keyword, stderr);
+
     if (run_files.len == 0)
         return error.Nothing;
 
@@ -132,6 +136,8 @@ pub fn main(init: std.process.Init) u8 {
             error.ArgumentExpected => stderr.interface.print("error: {s}: expected option value\n", .{ parser.current_value }) catch {},
             error.OptionNotFound => stderr.interface.print("error: {s}: unknown option\n", .{ parser.current_value }) catch {},
             error.Nothing => stderr.interface.print("error: nothing to do\n", .{}) catch {},
+            error.FileNotFound => stderr.interface.print("error: file not found\n", .{}) catch {},
+            error.DocsNotFound => stderr.interface.print("error: documentation not found\n", .{}) catch {},
             error.Break => {},
             else => |the_err| stderr.interface.print("{}\n", .{ the_err }) catch {}
         }

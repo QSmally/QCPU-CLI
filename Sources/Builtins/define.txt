@@ -1,0 +1,23 @@
+
+    @define <name>, <expression>
+    @define(expose) <name>, <expression>
+
+Defines `<name>` as a symbol to reuse `<expression>`.
+
+The `expose` option makes this macro public for `@import`.
+
+
+
+snippets/builtin-define.s:
+    @define(expose) foo, 0xBEEF
+
+    @section root
+
+    _:                lui d1, foo'u
+
+$ qcpu --dlinker snippets/builtin-define.s
+    Linker:
+    @section root (4 bytes)
+        0x0000   0b1001110111110010   lui d1, 48640
+    ... (omitted)
+

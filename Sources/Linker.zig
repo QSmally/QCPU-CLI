@@ -144,7 +144,7 @@ const Mir = struct {
                                             dynamic.label,
                                             operand.offset });
                                     } else {
-                                        try writer.print(" .{s}'0x{x} + {}", .{
+                                        try writer.print(" .{s}'0x{X} + {}", .{
                                             dynamic.label,
                                             operand.bit_mask,
                                             operand.offset });
@@ -159,7 +159,7 @@ const Mir = struct {
                                             operand.address.offset,
                                             @tagName(operand.register) });
                                     } else {
-                                        try writer.print(" (.{s}'0x{x} + {})({s})", .{
+                                        try writer.print(" (.{s}'0x{X} + {})({s})", .{
                                             dynamic.label,
                                             operand.address.bit_mask,
                                             operand.address.offset,
@@ -177,7 +177,7 @@ const Mir = struct {
             .padding => |padding| try writer.print("* {} byte{s}", .{
                 padding,
                 if (padding == 1) "" else "s" }),
-            .data => try writer.print("0x{x} ({})", .{ self.address, self.address }),
+            .data => try writer.print("0x{X} ({})", .{ self.address, self.address }),
             .ascii => |ascii| {
                 if (ascii.sentinel) |sentinel|
                     try writer.print("\"{s}\" {}", .{ ascii.text, sentinel }) else

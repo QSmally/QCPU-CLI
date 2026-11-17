@@ -1,0 +1,28 @@
+
+    @barrier
+    @barrier(noelimination)
+
+Splits the current section into another block, to mark non-continuous execution
+flow, which allows dead-code elimination to further optimise the output. Alias
+of `@section <same section name>`.
+
+The `noelimination` option ensures the block is not optimised away during
+semantic analysis.
+
+
+
+snippets/builtin-barrier.s:
+    @section a
+
+    .foo:             bkpt ; referenced
+
+    @section b
+
+    .bar:             bkpt ; not referenced
+
+$ qcpu --dlinker snippets/builtin-barrier.s
+    ... (omitted)
+    @section example (2 bytes)
+        0x0002   0b0000000000000000   bkpt
+    builtin-barrier.foo -> 0x0002
+

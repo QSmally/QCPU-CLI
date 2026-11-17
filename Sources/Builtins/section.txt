@@ -1,0 +1,11 @@
+
+    @section <name>
+    @section(noelimination) <name>
+
+Adds a section to the program. The body of the section is until the next
+`@barrier` definition, another `@section` definition, or the end of file.
+`<name>` is not required to be unique.
+
+The `noelimination` option ensures the block is not optimised away during
+semantic analysis.
+

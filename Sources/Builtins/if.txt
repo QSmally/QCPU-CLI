@@ -1,0 +1,18 @@
+
+    @if <expression>
+
+Conditionally evaluates the body if `<expression>` evaluates non-zero.
+
+
+
+snippets/builtin-if.s:
+    @if feature_enabled
+                      addi d1, 1
+    @end
+
+$ qcpu --dlinker snippets/builtin-if.s
+    Linker:
+    @section root (4 bytes)
+        0x0000   0b0000100000001010   addi d1, 1
+    ... (omitted)
+

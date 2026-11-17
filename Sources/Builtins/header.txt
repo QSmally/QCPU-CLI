@@ -1,0 +1,26 @@
+
+    @header <name>, [parameters ...]
+    @header(expose) <name>, [parameters ...]
+
+Defines `<name>` as a symbol to reuse the block of instructions and/or data,
+including labels when the header is unrolled with a namespace label.
+
+The `expose` option makes this macro public for `@import`.
+
+
+
+snippets/builtin-header.s:
+    @header mutex_ulock, addr
+                      xch zr, addr
+    @end
+
+    @section root
+
+    _:                mutex_ulock a1
+
+$ qcpu --dlinker snippets/builtin-header.s
+    Linker:
+    @section root (4 bytes)
+        0x0000   0b1100100000100000   xch zr, 0(a1)
+    ... (omitted)
+
