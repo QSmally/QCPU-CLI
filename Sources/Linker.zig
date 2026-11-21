@@ -4,6 +4,7 @@
 const std = @import("std");
 const indexable_list = @import("indexable_list.zig");
 const instruction = @import("instruction.zig");
+const Compilation = @import("Compilation.zig");
 const Qcu = @import("Qcu.zig");
 const SourceFile = @import("SourceFile.zig");
 const AsmSemanticAir = @import("AsmSemanticAir.zig");
@@ -16,8 +17,11 @@ qcu: *Qcu,
 link_list: BlockList = .empty,
 pending_list: std.DynamicBitSetUnmanaged = .{},
 link_info: ?[]const LinkInfo = null,
-linked_sections: SectionList = .empty,
+physical_origin: u32 = 0,
+linked_sections: Compilation.Section.List = .empty,
 unified_references: std.StringHashMapUnmanaged(u32) = .empty,
+
+const log = std.log.scoped(.Linker);
 
 pub fn init(qcu: *Qcu) Linker {
     return .{ .qcu = qcu };
@@ -41,7 +45,7 @@ pub fn destroy(self: *Linker) void {
 
 pub fn dump(self: *Linker, writer: *std.Io.Writer) !void {
     for (self.linked_sections.list.items) |*section| {
-        try self.dumpSectionTrace(section, writer);
+        try section.dumpTrace(writer);
     }
 
     var iterator = self.unified_references.iterator();
@@ -57,6 +61,9 @@ pub const LinkInfo = struct {
     ty: Type,
 
     pub const Type = union(enum) {
+        physically: struct {
+            address: u32
+        },
         origin: struct {
             section_name: []const u8,
             address: u32
@@ -68,127 +75,6 @@ pub const LinkInfo = struct {
     };
 };
 
-const Section = struct {
-
-    identifier: []const u8,
-    origin: u32,
-    linkinfo_token: SourceFile.Token,
-
-    content: Mir.List = .empty,
-
-    pub fn init(identifier: []const u8, origin: u32, linkinfo_token: SourceFile.Token) Section {
-        return .{
-            .identifier = identifier,
-            .origin = origin,
-            .linkinfo_token = linkinfo_token };
-    }
-
-    pub fn deinit(self: *Section, allocator: std.mem.Allocator) void {
-        self.content.deinit(allocator);
-    }
-
-    pub fn nextAddress(self: *const Section) usize {
-        return self.origin + self.bytes();
-    }
-
-    pub fn localAddressOf(self: *const Section, index: Mir.List.Index) usize {
-        var total_bytes: usize = 0;
-        for (self.content.list.items[0..index.raw()]) |air| total_bytes += air.op.bytes();
-        return total_bytes;
-    }
-
-    pub fn bytes(self: *const Section) usize {
-        return self.localAddressOf(.at(self.content.len()));
-    }
-};
-
-const Mir = struct {
-
-    token: SourceFile.Token,
-    op: AsmSemanticAir.Air.Operation,
-
-    binary: u32 = 0,
-    address: u32 = 0,
-
-    pub const List = indexable_list.IndexableList(Mir);
-
-    pub fn render(self: *const Mir, writer: *std.Io.Writer) !void {
-        switch (self.op) {
-            .instruction => |instr| {
-                try writer.print("{s}", .{ instr.qualifiedName() });
-
-                switch (instr) {
-                    inline else => |operands| blk: {
-                        const T = @TypeOf(operands);
-
-                        if (T == void) {
-                            break :blk;
-                        }
-
-                        const type_info = @typeInfo(T).@"struct";
-
-                        inline for (type_info.field_names, type_info.field_types, 0..) |name, Type, i| {
-                            const operand = @field(operands, name);
-
-                            if (i > 0) {
-                                try writer.writeByte(',');
-                            }
-
-                            switch (Type) {
-                                instruction.Register.DataRegister,
-                                instruction.Register.AddressRegister,
-                                instruction.Flag => try writer.print(" {s}", .{ @tagName(operand) }),
-                                instruction.LinkerAddress => if (operand.dynamic) |dynamic| {
-                                    if (operand.bit_mask == -1) {
-                                        try writer.print(" .{s} + {}", .{
-                                            dynamic.label,
-                                            operand.offset });
-                                    } else {
-                                        try writer.print(" .{s}'0x{X} + {}", .{
-                                            dynamic.label,
-                                            operand.bit_mask,
-                                            operand.offset });
-                                    }
-                                } else {
-                                    try writer.print(" {}", .{ operand.offset });
-                                },
-                                instruction.LinkerIndex => if (operand.address.dynamic) |dynamic| {
-                                    if (operand.address.bit_mask == -1) {
-                                        try writer.print(" (.{s} + {})({s})", .{
-                                            dynamic.label,
-                                            operand.address.offset,
-                                            @tagName(operand.register) });
-                                    } else {
-                                        try writer.print(" (.{s}'0x{X} + {})({s})", .{
-                                            dynamic.label,
-                                            operand.address.bit_mask,
-                                            operand.address.offset,
-                                            @tagName(operand.register) });
-                                    }
-                                } else {
-                                    try writer.print(" {}({s})", .{ operand.address.offset, @tagName(operand.register) });
-                                },
-                                else => comptime unreachable
-                            }
-                        }
-                    }
-                }
-            },
-            .padding => |padding| try writer.print("* {} byte{s}", .{
-                padding,
-                if (padding == 1) "" else "s" }),
-            .data => try writer.print("0x{X} ({})", .{ self.address, self.address }),
-            .ascii => |ascii| {
-                if (ascii.sentinel) |sentinel|
-                    try writer.print("\"{s}\" {}", .{ ascii.text, sentinel }) else
-                    try writer.print("\"{s}\"", .{ ascii.text });
-            }
-        }
-    }
-};
-
-const SectionList = indexable_list.IndexableList(Section);
-
 pub const BlockList = indexable_list.IndexableList(AsmSemanticAir.Block);
 
 pub const LinkerError = error {
@@ -198,6 +84,7 @@ pub const LinkerError = error {
     DuplicateSection,
     DescendingSection,
     UnlinkedSection,
+    InstructionAlignTwo,
     DuplicateReference,
     UnknownReference,
     AddressOverflow,
@@ -267,16 +154,13 @@ pub fn performLink(self: *Linker) LinkError!void {
         try self.addError(error.Note, dummy_token, "missing @linkinfo definitions", .{});
         return error.Break;
     };
-    if (info[0].ty != .origin) {
-        try self.addError(error.InvalidLinkSections, info[0].token, "first @linkinfo must be an origin type", .{});
-        return error.Break;
-    }
 
-    std.log.debug("performLink link_info.len={} link_list.len={}", .{ info.len, self.link_list.len() });
+    log.debug("performLink link_info.len={} link_list.len={}", .{ info.len, self.link_list.len() });
 
     try self.pending_list.resize(self.qcu.allocator, self.link_list.len(), true);
 
     for (info) |li| switch (li.ty) {
+        .physically => |physically| try self.emitLinkPhysically(physically.address),
         .origin => |origin| try self.emitLinkOrigin(li.token, origin.section_name, origin.address),
         .aligned => |aligned| try self.emitLinkAligned(li.token, aligned.section_name, aligned.alignment)
     };
@@ -309,6 +193,10 @@ pub fn performLink(self: *Linker) LinkError!void {
     }
 }
 
+fn emitLinkPhysically(self: *Linker, address: u32) !void {
+    self.physical_origin = address;
+}
+
 fn emitLinkOrigin(
     self: *Linker,
     token: SourceFile.Token,
@@ -325,7 +213,11 @@ fn emitLinkAligned(
     section_name: []const u8,
     alignment: std.mem.Alignment
 ) !void {
-    std.debug.assert(self.linked_sections.len() > 0);
+    if (self.linked_sections.len() == 0) {
+        try self.addError(error.InvalidLinkSections, token, "first @linkinfo must be an origin type", .{});
+        return error.Break;
+    }
+
     const last_section = self.linked_sections.last().?;
     const last_address = last_section.nextAddress();
     const address: u32 = @intCast(alignment.forward(last_address));
@@ -338,7 +230,7 @@ fn createSection(
     identifier: []const u8,
     address: u32,
     linkinfo_token: SourceFile.Token
-) !SectionList.Index {
+) !Compilation.Section.List.Index {
     if (self.findSection(identifier)) |existing_section| {
         try self.addError(error.DuplicateSection, linkinfo_token, "duplicate mapping for section '{s}'", .{ identifier });
         try self.addError(error.NoteDefinedHere, existing_section.linkinfo_token, "previously mapped here", .{});
@@ -354,13 +246,13 @@ fn createSection(
         }
     }
 
-    const section = Section.init(identifier, address, linkinfo_token);
+    const section = Compilation.Section.init(identifier, address, linkinfo_token);
     const index = self.linked_sections.len();
     try self.linked_sections.append(self.qcu.allocator, section);
     return .at(index);
 }
 
-fn findSection(self: *const Linker, identifier: []const u8) ?*const Section {
+fn findSection(self: *const Linker, identifier: []const u8) ?*const Compilation.Section {
     for (self.linked_sections.list.items) |*section| {
         if (std.mem.eql(u8, section.identifier, identifier))
             return section;
@@ -369,7 +261,7 @@ fn findSection(self: *const Linker, identifier: []const u8) ?*const Section {
     return null;
 }
 
-fn processSectionBlocks(self: *Linker, section_index: SectionList.Index) !void {
+fn processSectionBlocks(self: *Linker, section_index: Compilation.Section.List.Index) !void {
     const section = self.linked_sections.getReference(section_index);
     for (self.link_list.list.items, 0..) |block, index| {
         if (!std.mem.eql(u8, block.name, section.identifier))
@@ -381,12 +273,12 @@ fn processSectionBlocks(self: *Linker, section_index: SectionList.Index) !void {
     }
 }
 
-fn emitSectionBlock(self: *Linker, section: *Section, block: AsmSemanticAir.Block) !void {
+fn emitSectionBlock(self: *Linker, section: *Compilation.Section, block: AsmSemanticAir.Block) !void {
     if (block.bytes() < 1) {
         return;
     }
 
-    const base_address = block.alignment.forward(section.nextAddress());
+    const base_address: u32 = @intCast(block.alignment.forward(section.nextAddress()));
     const pad: u32 = @intCast(base_address - section.nextAddress());
 
     if (pad > 0) {
@@ -402,6 +294,13 @@ fn emitSectionBlock(self: *Linker, section: *Section, block: AsmSemanticAir.Bloc
             continue;
         }
 
+        const placement_address = base_address + section.bytes();
+
+        if (air.op == .instruction and placement_address & 1 > 0) {
+            try self.addError(error.InstructionAlignTwo, air.token, "address of instruction must be aligned by 2", .{});
+            return error.Break;
+        }
+
         section.content.appendAssumeCapacity(.{
             .token = air.token,
             .op = air.op });
@@ -415,7 +314,7 @@ fn emitSectionBlock(self: *Linker, section: *Section, block: AsmSemanticAir.Bloc
             return error.Break;
         }
 
-        const global_address: u32 = @intCast(base_address + block.localAddressOf(reference.value_ptr.index));
+        const global_address = base_address + block.localAddressOf(reference.value_ptr.index);
 
         try self.unified_references.put(
             self.qcu.allocator,
@@ -424,7 +323,7 @@ fn emitSectionBlock(self: *Linker, section: *Section, block: AsmSemanticAir.Bloc
     }
 }
 
-fn resolveBinaryInstr(self: *Linker, mir: *Mir, ip: usize) !void {
+fn resolveBinaryInstr(self: *Linker, mir: *Compilation.Mir, ip: usize) !void {
     switch (mir.op) {
         .instruction => |instr| switch (instr) {
             inline else => |operands| blk: {
@@ -577,93 +476,30 @@ fn resolveAddressConstraint(
     return result & @as(u32, @bitCast(mask));
 }
 
-pub fn dumpSectionTrace(
+pub fn resolvePhysicalAddress(
     self: *const Linker,
-    section: *const Section,
-    writer: *std.Io.Writer
-) !void {
-    try self.dumpSectionTraceRange(section, .{ .min = 0, .max = null }, null, writer);
+    section: *const Compilation.Section,
+    index: Compilation.Mir.List.Index
+) u32 {
+    std.debug.assert(self.linked_sections.len() > 0);
+    const root_section = self.linked_sections.get(.root);
+
+    return
+        self.physical_origin +
+        section.origin -
+        root_section.origin +
+        section.localAddressOf(index);
 }
 
-pub fn dumpSectionTraceNear(
-    self: *const Linker,
-    note: Note,
-    writer: *std.Io.Writer
-) !void {
-    var nearest_section: ?*const Section = null;
+pub fn resolveTotalBytes(self: *const Linker) u32 {
+    std.debug.assert(self.linked_sections.len() > 0);
+    const root_section = self.linked_sections.get(.root);
+    const last_section = self.linked_sections.last().?;
 
-    for (self.linked_sections.list.items) |*section| {
-        if (note.address < section.origin or note.address > section.origin + section.bytes())
-            continue;
-        nearest_section = section;
-    }
-
-    if (nearest_section) |the_nearest_section| {
-        const address_near: i32 = @intCast(note.address);
-        const range = Range {
-            .min = @max(0, address_near - 10),
-            .max = @min(the_nearest_section.bytes(), address_near + 10) };
-        try self.dumpSectionTraceRange(the_nearest_section, range, note, writer);
-    } else {
-        try writer.print(
-            \\@section unknown
-            \\... unknown section mapped near address 0x{X:0>4}
-            \\... {s}
-            \\
-        , .{ note.address, note.message });
-    }
-}
-
-const Range = struct {
-    min: u32,
-    max: ?u32
-};
-
-const Note = struct {
-    address: u32,
-    message: []const u8
-};
-
-pub fn dumpSectionTraceRange(
-    _: *const Linker,
-    section: *const Section,
-    range: Range,
-    note: ?Note,
-    writer: *std.Io.Writer
-) !void {
-    try writer.print("@section {s} ({} bytes)\n", .{
-        section.identifier,
-        section.bytes() });
-    if (range.min > 0) {
-        try writer.writeAll("... (omitted)\n");
-    }
-
-    const len: usize = if (range.max) |max| max else section.origin + section.bytes();
-
-    for (section.content.list.items, 0..) |mir, index| {
-        const global_address = section.origin + section.localAddressOf(.fromIndex(index));
-
-        if (global_address < range.min)
-            continue;
-        if (global_address + mir.op.bytes() > len)
-            continue;
-
-        try writer.print("    0x{X:0>4}   ", .{ global_address });
-        defer writer.writeByte('\n') catch {};
-
-        if (mir.op == .instruction)
-            try writer.print("0b{b:0>16}   ", .{ mir.binary });
-        try mir.render(writer);
-
-        if (note) |the_note| {
-            if (global_address >= the_note.address and global_address + mir.op.bytes() < the_note.address)
-                try writer.print("  <-- {s}", .{ the_note.message });
-        }
-    }
-
-    if (len != section.origin + section.bytes()) {
-        try writer.writeAll("... (omitted)\n");
-    }
+    return
+        last_section.origin -
+        root_section.origin +
+        last_section.bytes();
 }
 
 pub const Locality = enum { global, local };

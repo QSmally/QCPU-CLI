@@ -1,6 +1,7 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
+const Compilation = @import("Compilation.zig");
 const Qcu = @import("Qcu.zig");
 const docs = @import("docs.zig");
 const verilog = @import("verilog.zig");
@@ -84,28 +85,31 @@ fn doEverything(
     if (run_files.len == 0)
         return error.Nothing;
 
-    if (run_files.len > 1)
-        std.log.warn("multiple run files are not supported yet", .{});
+    var compilation = Compilation.init(arena);
+    defer compilation.deinit();
 
     for (run_files) |root_file_path| {
-        const qcu = try Qcu.init(
+        const qcu = Qcu.init(
             io,
             arena,
             std.Io.Dir.cwd(),
             root_file_path,
             unmerge(Qcu.Options, run_options),
-            stderr);
-        defer qcu.deinit();
-
-        qcu.work() catch |err| {
-            for (qcu.errors.items) |the_err|
-                try the_err.write(stderr);
-            return err;
+            stderr
+        ) catch |err| switch (err) {
+            error.FileNotFound => {
+                try stderr.print("error: {s}: file not found", .{ root_file_path });
+                return error.Break;
+            },
+            else => |the_err| return the_err
         };
-
-        if (run_options.verilog)
-            try verilog.output(&qcu.linker, stdout);
+        try compilation.addTransferOwnership(qcu);
     }
+
+    try compilation.work(stderr);
+
+    if (run_options.verilog)
+        try verilog.output(&compilation, stdout);
 }
 
 const ArgumentsParser = Arguments(std.process.Args.Iterator);
@@ -136,7 +140,6 @@ pub fn main(init: std.process.Init) u8 {
             error.ArgumentExpected => stderr.interface.print("error: {s}: expected option value\n", .{ parser.current_value }) catch {},
             error.OptionNotFound => stderr.interface.print("error: {s}: unknown option\n", .{ parser.current_value }) catch {},
             error.Nothing => stderr.interface.print("error: nothing to do\n", .{}) catch {},
-            error.FileNotFound => stderr.interface.print("error: file not found\n", .{}) catch {},
             error.DocsNotFound => stderr.interface.print("error: documentation not found\n", .{}) catch {},
             error.Break => {},
             else => |the_err| stderr.interface.print("{}\n", .{ the_err }) catch {}

@@ -216,6 +216,10 @@ pub const LinkInfo = struct {
     ty: Type,
 
     pub const Type = union(enum) {
+        /// expression: physical address origin expression
+        physically: struct {
+            expression: AsmAst.Node.List.Index
+        },
         /// section_name: section name
         /// expression: section address origin expression
         origin: struct {
@@ -990,6 +994,7 @@ const IrGen = struct {
 
     const LinkInfoOptions = struct {
         expose: bool = false,
+        physically: bool = false,
         origin: bool = false,
         aligned: bool = false
     };
@@ -1002,6 +1007,7 @@ const IrGen = struct {
 
         const ty: LinkInfo.Type = blk: {
             const instr_count =
+                @as(u32, if (options.physically) 1 else 0) +
                 @as(u32, if (options.origin) 1 else 0) +
                 @as(u32, if (options.aligned) 1 else 0);
             if (instr_count != 1) {
@@ -1012,6 +1018,7 @@ const IrGen = struct {
             const type_info = @typeInfo(LinkInfo.Type).@"union";
 
             const instr_ty: type_info.tag_type.? =
+                if (options.physically) .physically else
                 if (options.origin) .origin else
                 if (options.aligned) .aligned else
                 unreachable;

@@ -4,6 +4,7 @@
 const std = @import("std");
 const indexable_list = @import("indexable_list.zig");
 const instruction = @import("instruction.zig");
+const Compilation = @import("Compilation.zig");
 const Qcu = @import("Qcu.zig");
 const SourceFile = @import("SourceFile.zig");
 const Token = @import("Token.zig");
@@ -190,13 +191,13 @@ pub const Block = struct {
         self.references.deinit(allocator);
     }
 
-    pub fn localAddressOf(self: *const Block, index: Air.List.Index) usize {
-        var total_bytes: usize = 0;
+    pub fn localAddressOf(self: *const Block, index: Air.List.Index) u32 {
+        var total_bytes: u32 = 0;
         for (self.content.list.items[0..index.raw()]) |air| total_bytes += air.op.bytes();
         return total_bytes;
     }
 
-    pub fn bytes(self: *const Block) usize {
+    pub fn bytes(self: *const Block) u32 {
         return self.localAddressOf(.at(self.content.len()));
     }
 };
@@ -204,70 +205,11 @@ pub const Block = struct {
 pub const Air = struct {
 
     token: SourceFile.Token,
-    op: Operation,
+    op: Compilation.Mir.Operation,
     is_labeled: bool,
 
     pub const List = indexable_list.IndexableList(Air);
-
-    pub const Operation = union(enum) {
-
-        instruction: instruction.MachineInstr,
-        padding: Index,
-        data: struct { bytes: Index, value: instruction.LinkerAddress },
-        ascii: struct { text: []const u8, sentinel: ?u8 },
-
-        pub fn bytes(self: Operation) usize {
-            return switch (self) {
-                .instruction => 2,
-                .padding => |padding| padding,
-                .data => |data| data.bytes,
-                .ascii => |ascii| blk: {
-                    const sentinel_len: usize = if (ascii.sentinel != null) 1 else 0;
-                    break :blk ascii.text.len + sentinel_len;
-                }
-            };
-        }
-
-        pub fn isJump(self: Operation) bool {
-            return switch (self) {
-                .instruction => |instr| switch (instr) {
-                    // these can reference the instruction ptr, but are conditional
-                    .movec_caa,
-                    .movez_aaa => false,
-
-                    // we know these can't jump unconditionally
-                    .brh_ci,
-                    .brhl_ci => false,
-
-                    // these implicitly reference the instruction ptr
-                    .bkpt,
-                    .jmpl_i,
-                    .jmprl_i => true,
-
-                    // it's a jump if the `rd` operand is the instruction ptr
-                    inline else => |operands| blk: {
-                        const Ty = @TypeOf(operands);
-
-                        if (Ty == void) {
-                            break :blk false;
-                        }
-
-                        if (@hasField(Ty, "rd") and @TypeOf(operands.rd) == instruction.Register.AddressRegister) {
-                            break :blk operands.rd == .ip;
-                        }
-
-                        break :blk false;
-                    }
-                },
-                .padding,
-                .data,
-                .ascii => false
-            };
-        }
-    };
 };
-
-const Index = indexable_list.UnderlyingType;
 
 pub const SemanticError = error {
     DuplicateReference,
@@ -450,6 +392,21 @@ pub fn parseLinkInfoOwned(self: *AsmSemanticAir) ![]const Linker.LinkInfo {
 
     for (self.ir.link_info) |li| {
         const ty: Linker.LinkInfo.Type = switch (li.ty) {
+            .physically => |origin| blk: {
+                const result = try compute.evaluateConstantResult(.scalar, origin.expression);
+
+                const node = self.tree.nodes.get(origin.expression);
+                const token = self.tree.tokens.get(node.token);
+                const qualified_token = self.source_file.qualifiedToken(token);
+
+                if (result.value < 0) {
+                    try self.addError(error.AddressNegative, qualified_token, "address of {} is illegal", .{ result.value });
+                    try self.explainTokenOrigin(qualified_token, result.folded_token, "address");
+                    return error.Break;
+                }
+
+                break :blk .{ .physically = .{ .address = @intCast(result.value) } };
+            },
             .origin => |origin| blk: {
                 const result = try compute.evaluateConstantResult(.scalar, origin.expression);
 
@@ -592,7 +549,7 @@ fn addReference(
 fn emitAir(
     self: *AsmSemanticAir,
     token: SourceFile.Token,
-    op: Air.Operation,
+    op: Compilation.Mir.Operation,
     mode: enum { flush, no_flush }
 ) !void {
     switch (self.output) {
@@ -761,7 +718,7 @@ fn irAlign(self: *AsmSemanticAir, ir: AsmIr.Ir) !void {
     const block = self.getCurrentBlock();
     const current_address = block.bytes();
     const alignment: std.mem.Alignment = .fromByteUnits(@intCast(result.value));
-    const padding: Index = @intCast(alignment.forward(current_address) - current_address);
+    const padding: u32 = @intCast(alignment.forward(current_address) - current_address);
 
     block.alignment = alignment.max(block.alignment);
 
@@ -932,7 +889,7 @@ fn irReserve(self: *AsmSemanticAir, ir: AsmIr.Ir) !void {
         return error.Break;
     }
 
-    const positive_len: Index = @intCast(len.value);
+    const positive_len: u32 = @intCast(len.value);
     const padding = type_size.bytes * positive_len;
 
     try self.emitAir(
@@ -989,10 +946,10 @@ fn createRegionalScope(self: *AsmSemanticAir, ir: AsmIr.Ir, body: []const AsmIr.
 
     try self.analyseBodyInner(body);
 
-    const actual_size: Index = @intCast(block.bytes() - current_size);
+    const actual_size: u32 = @intCast(block.bytes() - current_size);
 
     if (actual_size <= region_size.value) {
-        const padding = @as(Index, @intCast(region_size.value)) - actual_size;
+        const padding = @as(u32, @intCast(region_size.value)) - actual_size;
         try self.emitAir(self.source_file.qualifiedToken(ir.token), .{ .padding = padding }, .flush);
     } else {
         try self.addError(error.RegionExceedsSize, expression_qualified_token, "region exceeds size of {} bytes, emitted {} bytes", .{
@@ -1138,7 +1095,7 @@ fn instrSelection(
     self: *AsmSemanticAir,
     instr_token: SourceFile.Token,
     operands: AsmAst.Node.Operands
-) !Air.Operation {
+) !Compilation.Mir.Operation {
     const compute = self.getCompute();
     const selection = InstrSelection.init(compute, instr_token, operands);
 

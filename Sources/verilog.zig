@@ -1,10 +1,10 @@
 
 const std = @import("std");
-const Linker = @import("Linker.zig");
+const Compilation = @import("Compilation.zig");
 
 const indent: [12]u8 = @splat(' ');
 
-pub fn output(linker: *const Linker, writer: *std.Io.Writer) !void {
+pub fn output(comp: *const Compilation, writer: *std.Io.Writer) !void {
     try writer.writeAll(
         \\//
         \\// QCPU 2 boot memory
@@ -28,24 +28,27 @@ pub fn output(linker: *const Linker, writer: *std.Io.Writer) !void {
         \\
     );
 
-    for (linker.linked_sections.list.items) |*section| {
-        try writer.print("{s}// @section {s} ({} bytes)\n", .{
-            indent,
-            section.identifier,
-            section.bytes() });
+    for (comp.units.items) |qcu| {
+        for (qcu.linker.linked_sections.list.items) |*section| {
+            try writer.print("{s}// @section {s}.{s} ({} bytes)\n", .{
+                indent,
+                qcu.name(),
+                section.identifier,
+                section.bytes() });
 
-        for (section.content.list.items, 0..) |mir, index| {
-            const address = section.origin + section.localAddressOf(.fromIndex(index));
+            for (section.content.list.items, 0..) |mir, index| {
+                const address = qcu.linker.resolvePhysicalAddress(section, .fromIndex(index));
 
-            switch (mir.op) {
-                .instruction => {
-                    try writer.print("{s}'h{X:0>4} : instr_c = 16'b{b:0>16}; // ", .{ indent, address >> 1, mir.binary });
-                    try mir.render(writer);
-                    try writer.writeByte('\n');
-                },
-                .padding => {},
-                .data => {}, // TODO
-                .ascii => {} // TODO
+                switch (mir.op) {
+                    .instruction => {
+                        try writer.print("{s}'h{X:0>4} : instr_c = 16'b{b:0>16}; // ", .{ indent, address >> 1, mir.binary });
+                        try mir.render(writer);
+                        try writer.writeByte('\n');
+                    },
+                    .padding => {},
+                    .data => {}, // TODO
+                    .ascii => {} // TODO
+                }
             }
         }
     }

@@ -418,6 +418,11 @@ const Job = union(enum) {
     }
 };
 
+pub fn name(self: *const Qcu) []const u8 {
+    const root_file = self.files.get(.root);
+    return root_file.source_file.qualifiedNamespace();
+}
+
 pub fn work(self: *Qcu) !void {
     while (self.work_queue.pop()) |job|
         try job.execute();
