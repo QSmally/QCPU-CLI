@@ -1,7 +1,12 @@
 
 pub const qcpu = @import("qcpu.zig");
+pub const structs = @import("structs.zig");
 pub const indexable_list = @import("indexable_list.zig");
 pub const instruction = @import("instruction.zig");
+pub const verilog = @import("verilog.zig");
+pub const docs = @import("docs.zig");
+
+pub const Compilation = @import("Compilation.zig");
 pub const Qcu = @import("Qcu.zig");
 pub const SourceFile = @import("SourceFile.zig");
 pub const Token = @import("Token.zig");
@@ -12,6 +17,7 @@ pub const AsmAst = @import("AsmAst.zig");
 pub const AsmIr = @import("AsmIr.zig");
 pub const AsmCompute = @import("AsmCompute.zig");
 pub const AsmSemanticAir = @import("AsmSemanticAir.zig");
+pub const AsmLiveness = @import("AsmLiveness.zig");
 pub const Linker = @import("Linker.zig");
 
 test {

@@ -1,10 +1,11 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
-const Compilation = @import("Compilation.zig");
-const Qcu = @import("Qcu.zig");
+const structs = @import("structs.zig");
 const docs = @import("docs.zig");
 const verilog = @import("verilog.zig");
+const Compilation = @import("Compilation.zig");
+const Qcu = @import("Qcu.zig");
 
 const version_str = "0.1.0";
 
@@ -23,6 +24,7 @@ fn help(writer: *std.Io.Writer) !void {
 
     inline for (&[_] struct { []const u8, type } {
         .{ "general options", CliOptions },
+        .{ "output options", OutputOptions },
         .{ "compilation unit options", Qcu.Options }
     }) |category| {
         try writer.print("{s}\n", .{ category[0] });
@@ -73,6 +75,9 @@ fn doEverything(
     if (run_options.doptions)
         try stderr.print("{any}\n", .{ run_options });
 
+    if (structs.popCount(u32, structs.unmerge(OutputOptions, run_options)) > 1)
+        return error.MultipleOutput;
+
     if (run_options.version)
         return try version(stdout);
 
@@ -94,7 +99,7 @@ fn doEverything(
             arena,
             std.Io.Dir.cwd(),
             root_file_path,
-            unmerge(Qcu.Options, run_options),
+            structs.unmerge(Qcu.Options, run_options),
             stderr
         ) catch |err| switch (err) {
             error.FileNotFound => {
@@ -139,6 +144,7 @@ pub fn main(init: std.process.Init) u8 {
         switch (err) {
             error.ArgumentExpected => stderr.interface.print("error: {s}: expected option value\n", .{ parser.current_value }) catch {},
             error.OptionNotFound => stderr.interface.print("error: {s}: unknown option\n", .{ parser.current_value }) catch {},
+            error.MultipleOutput => stderr.interface.print("error: multiple output options\n", .{}) catch {},
             error.Nothing => stderr.interface.print("error: nothing to do\n", .{}) catch {},
             error.DocsNotFound => stderr.interface.print("error: documentation not found\n", .{}) catch {},
             error.Break => {},
@@ -157,8 +163,10 @@ const CliOptions = struct {
     docs: ?[]const u8 = null,
     // run options
     doptions: bool = false,
-    verbose: bool = false,
-    // output modes
+    verbose: bool = false
+};
+
+const OutputOptions = struct {
     binary: bool = false,
     verilog: bool = false,
     virtualise: bool = false
@@ -166,6 +174,7 @@ const CliOptions = struct {
 
 const Options = blk: {
     const cli = @typeInfo(CliOptions).@"struct";
+    const output = @typeInfo(OutputOptions).@"struct";
     const qcu = @typeInfo(Qcu.Options).@"struct";
     // const virt = @typeInfo(Virtualiser.Options).@"struct";
 
@@ -173,18 +182,10 @@ const Options = blk: {
     break :blk @Struct(
        .auto,
        null,
-       cli.field_names ++ qcu.field_names,
-       cli.field_types ++ qcu.field_types,
-       cli.field_attrs ++ qcu.field_attrs);
+       cli.field_names ++ output.field_names ++ qcu.field_names,
+       cli.field_types ++ output.field_types ++ qcu.field_types,
+       cli.field_attrs ++ output.field_attrs ++ qcu.field_attrs);
 };
-
-fn unmerge(comptime T: type, self: Options) T {
-    var specific_options: T = undefined;
-
-    inline for (@typeInfo(T).@"struct".field_names) |name|
-        @field(specific_options, name) = @field(self, name);
-    return specific_options;
-}
 
 fn Arguments(comptime T: type) type {
     return struct {
@@ -270,17 +271,6 @@ fn Arguments(comptime T: type) type {
 }
 
 // Tests
-
-test "unmerge options" {
-    const options = Options {
-        .version = true,
-        .help = true };
-    const concrete_options = unmerge(CliOptions, options);
-
-    try std.testing.expectEqual(options.version, concrete_options.version);
-    try std.testing.expectEqual(options.help, concrete_options.help);
-    try std.testing.expectEqual(options.virtualise, concrete_options.virtualise);
-}
 
 test "arguments iterator" {
     const foo = std.mem.splitScalar(u8, "foo bar roo", ' ');

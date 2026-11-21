@@ -1474,7 +1474,7 @@ const TestBridge = struct {
 
 fn testSemantics(
     input: [:0]const u8,
-    code: []const @typeInfo(Air.Operation).@"union".tag_type.?,
+    code: []const @typeInfo(Compilation.Mir.Operation).@"union".tag_type.?,
     referenced_blocks: []const AsmIr.Block.List.Index,
     errors: []const (SemanticError || AsmCompute.EvaluationError)
 ) !void {

@@ -2,6 +2,7 @@
 // Intermediate Representation
 
 const std = @import("std");
+const structs = @import("structs.zig");
 const indexable_list = @import("indexable_list.zig");
 const Qcu = @import("Qcu.zig");
 const SourceFile = @import("SourceFile.zig");
@@ -999,6 +1000,12 @@ const IrGen = struct {
         aligned: bool = false
     };
 
+    const LinkInfoInstr = structs.Fields(LinkInfoOptions, &.{
+        "physically",
+        "origin",
+        "aligned"
+    });
+
     fn parseLinkInfo(self: *IrGen, builtin: Builtin) !void {
         std.debug.assert(builtin.token.tag == .builtin_linkinfo);
 
@@ -1006,22 +1013,16 @@ const IrGen = struct {
         var iterator = self.containerIterator(builtin.arguments);
 
         const ty: LinkInfo.Type = blk: {
-            const instr_count =
-                @as(u32, if (options.physically) 1 else 0) +
-                @as(u32, if (options.origin) 1 else 0) +
-                @as(u32, if (options.aligned) 1 else 0);
+            const instr = structs.unmerge(LinkInfoInstr, options);
+            const instr_count = structs.popCount(u32, instr);
+
             if (instr_count != 1) {
                 try self.addError(error.LinkInfo, builtin.token, "@linkinfo requires exactly one instruction option, found {}", .{ instr_count });
                 return;
             }
 
             const type_info = @typeInfo(LinkInfo.Type).@"union";
-
-            const instr_ty: type_info.tag_type.? =
-                if (options.physically) .physically else
-                if (options.origin) .origin else
-                if (options.aligned) .aligned else
-                unreachable;
+            const instr_ty = structs.enumSelect(type_info.tag_type.?, instr);
 
             inline for (type_info.field_names, type_info.field_types) |instr_name, Ty| {
                 if (std.mem.eql(u8, instr_name, @tagName(instr_ty))) {
