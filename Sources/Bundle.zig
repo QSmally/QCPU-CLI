@@ -14,8 +14,9 @@ allocator: std.mem.Allocator,
 options: Qcu.Options,
 stderr: *std.Io.Writer,
 
-units: std.ArrayList(*Qcu) = .empty,
-// virt_boot: VirtBootDevice,
+targets: std.ArrayList(*Qcu) = .empty,
+virt_boot: VirtBootDevice = .{},
+// virt_memory: VirtMemoryDevice,
 
 const log = std.log.scoped(.Bundle);
 
@@ -33,13 +34,13 @@ pub fn init(
 }
 
 pub fn deinit(self: *Bundle) void {
-    for (self.units.items) |qcu|
+    for (self.targets.items) |qcu|
         qcu.deinit();
-    self.units.deinit(self.allocator);
+    self.targets.deinit(self.allocator);
 }
 
-pub fn processUnit(self: *Bundle, pwd: std.Io.Dir, root_file_path: []const u8) !void {
-    log.debug("create unit {s}", .{ root_file_path });
+pub fn createTarget(self: *Bundle, pwd: std.Io.Dir, root_file_path: []const u8) !void {
+    log.debug("createTarget {s}", .{ root_file_path });
 
     const qcu = Qcu.init(
         self.io,
@@ -56,7 +57,7 @@ pub fn processUnit(self: *Bundle, pwd: std.Io.Dir, root_file_path: []const u8) !
         else => |the_err| return the_err
     };
 
-    try self.units.append(self.allocator, qcu);
+    try self.targets.append(self.allocator, qcu);
 
     qcu.work() catch |err| {
         for (qcu.errors.items) |the_err|
@@ -71,15 +72,42 @@ pub fn processUnit(self: *Bundle, pwd: std.Io.Dir, root_file_path: []const u8) !
     // }
 }
 
-// const virt_boot_address = 0x0000;
+const VirtDevice = struct {
 
-// pub fn getVirtDevice(self: *const Bundle, physical_address: u16) !VirtDevice {
-//     return switch (physical_address) {
-//         virt_boot_address...(virt_boot_address + VirtBootDevice.bytes - 1) => self.virt_boot,
-//         // 0x0400...(0x0400 + VirtUartDevice.bytes - 1) => self.virt_uart0
-//         0x0400...0xFFFF => error.DeviceNotFound
-//     };
-// }
+    pub const VTable = struct {
+        // read: *const fn (*anyopaque, u16) u16
+    };
+
+    vtable: VTable,
+    context: *anyopaque,
+
+    // fn emitError(self: *const Bridge, err: Error) !void {
+    //     try self.vtable.emitError(self.context, err);
+    // }
+};
+
+const VirtBootDevice = struct {
+
+    pub const bytes = 1024;
+
+    const table = VirtDevice.VTable {
+
+    };
+
+    pub fn virtDevice(self: *VirtBootDevice) VirtDevice {
+        return .{ .vtable = table, .context = self };
+    }
+};
+
+const virt_boot_address = 0x0000;
+
+pub fn getVirtDevice(self: *const Bundle, physical_address: u16) !VirtDevice {
+    return switch (physical_address) {
+        virt_boot_address...(virt_boot_address + VirtBootDevice.bytes - 1) => self.virt_boot.virtDevice(),
+        // 0x0400...(0x0400 + VirtUartDevice.bytes - 1) => self.virt_uart0.virtDevice(),
+        0x0400...0xFFFF => error.DeviceNotFound
+    };
+}
 
 pub fn dumpSectionTraceNear(
     self: *const Bundle,
@@ -104,7 +132,7 @@ pub fn dumpSectionTraceNear(
 pub fn findSectionNear(self: *const Bundle, physical_address: u32) ?*const Section {
     var nearest_section: ?*const Section = null;
 
-    for (self.units.items) |qcu| {
+    for (self.targets.items) |qcu| {
         for (qcu.linker.linked_sections.list.items) |*section| {
             if (physical_address < section.origin or physical_address > section.origin + section.bytes())
                 continue;

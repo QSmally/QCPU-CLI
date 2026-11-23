@@ -694,6 +694,7 @@ pub const LinkerAddress = struct {
         file_index: Qcu.File.List.Index,
         /// Asserts block.ty == .section
         block_index: AsmIr.Block.List.Index,
+        mode: enum { normal, difference },
         locality: Linker.Locality,
         namespace: []const u8,
         label: []const u8

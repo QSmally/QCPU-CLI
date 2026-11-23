@@ -98,7 +98,7 @@ fn doEverything(
     defer bundle.deinit();
 
     for (run_files) |root_file_path| {
-        try bundle.processUnit(std.Io.Dir.cwd(), root_file_path);
+        try bundle.createTarget(std.Io.Dir.cwd(), root_file_path);
     }
 
     if (run_options.binary)

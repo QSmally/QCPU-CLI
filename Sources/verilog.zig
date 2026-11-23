@@ -28,7 +28,7 @@ pub fn output(bundle: *const Bundle, writer: *std.Io.Writer) !void {
         \\
     );
 
-    for (bundle.units.items) |qcu| {
+    for (bundle.targets.items) |qcu| {
         for (qcu.linker.linked_sections.list.items) |*section| {
             try writer.print("{s}// @section {s}.{s} ({} bytes)\n", .{
                 indent,

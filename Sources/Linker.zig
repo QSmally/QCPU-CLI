@@ -402,7 +402,7 @@ fn resolveAddressConstraint(
 ) !u32 {
     const mask: i32 = @intCast(std.math.pow(usize, 2, bits) - 1);
 
-    const full_dynamic_address: AsmCompute.ComputeTimeInt = if (value.dynamic) |dynamic| blk: {
+    const dynamic_address: AsmCompute.ComputeTimeInt = if (value.dynamic) |dynamic| blk: {
         const unified_label = try resolveQualifiedNamespaceOwned(
             self.qcu.allocator,
             dynamic.locality,
@@ -410,15 +410,36 @@ fn resolveAddressConstraint(
             dynamic.label);
         defer self.qcu.allocator.free(unified_label);
 
+        log.debug("resolve namespace:{s} label:{s}", .{ dynamic.namespace, dynamic.label });
+
         const address = self.unified_references.get(unified_label) orelse {
             try self.addError(error.UnknownReference, token, "unknown reference '{s}'", .{ unified_label });
             return error.Break;
         };
-        break :blk @intCast(address);
+
+        break :blk switch (dynamic.mode) {
+            .normal => @intCast(address),
+            .difference => blk1: {
+                const last_namespace_index = std.mem.findScalarLast(u8, dynamic.label, '.') orelse dynamic.label.len;
+                const base_label = dynamic.label[0..last_namespace_index];
+                const base_unified_label = try resolveQualifiedNamespaceOwned(
+                    self.qcu.allocator,
+                    dynamic.locality,
+                    dynamic.namespace,
+                    base_label);
+                defer self.qcu.allocator.free(base_unified_label);
+
+                const base_address = self.unified_references.get(base_unified_label) orelse {
+                    try self.addError(error.UnknownReference, token, "unknown reference '{s}'", .{ unified_label });
+                    return error.Break;
+                };
+                break :blk1 @intCast(address - base_address);
+            }
+        };
     } else 0;
 
-    const dynamic_address: AsmCompute.ComputeTimeInt = @intCast(full_dynamic_address & value.bit_mask);
-    var global_address = dynamic_address + value.offset;
+    const masked_dynamic_address: AsmCompute.ComputeTimeInt = @intCast(dynamic_address & value.bit_mask);
+    var global_address = masked_dynamic_address + value.offset;
 
     if (relative_address) |the_ip| {
         global_address -= the_ip;

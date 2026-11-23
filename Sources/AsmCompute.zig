@@ -851,6 +851,11 @@ fn evaluateResultDepth(
                         .dynamic = .{
                             .file_index = result.scope.file_index,
                             .block_index = block_index,
+                            .mode = switch (result.token.inner_token.tag) {
+                                .reference_label => .normal,
+                                .difference_label => .difference,
+                                else => unreachable
+                            },
                             .locality = result.scope.getLocality(),
                             .namespace = try result.scope.getNamespace(),
                             .label = result.label,
