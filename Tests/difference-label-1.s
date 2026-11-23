@@ -15,4 +15,4 @@ _:                u16 &foo.field2
 
 @section data
 
-.foo:             someheader
+foo:              someheader

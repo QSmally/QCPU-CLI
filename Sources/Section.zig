@@ -695,9 +695,29 @@ pub const LinkerAddress = struct {
         /// Asserts block.ty == .section
         block_index: AsmIr.Block.List.Index,
         mode: enum { normal, difference },
-        locality: Linker.Locality,
+        locality: Locality,
         namespace: []const u8,
         label: []const u8
+    };
+
+    pub const Locality = enum {
+
+        global,
+        local,
+
+        pub fn resolveQualifiedNamespaceOwned(
+            self: Locality,
+            allocator: std.mem.Allocator,
+            namespace: []const u8,
+            label: []const u8
+        ) ![]const u8 {
+            const local_indicator = if (self == .local)
+                ":local" else
+                "";
+            return if (label.len > 0)
+                try allocator.print("{s}{s}.{s}", .{ namespace, local_indicator, label }) else
+                try allocator.print("{s}{s}", .{ namespace, local_indicator });
+        }
     };
 };
 

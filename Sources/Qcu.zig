@@ -86,7 +86,7 @@ pub fn deinit(self: *Qcu) void {
     self.semantically_analysed.deinit(self.allocator);
     self.bucket.deinit();
     self.linker.deinit();
-    // Self-destruct
+    self.linker.destroy();
     self.allocator.destroy(self);
 }
 
@@ -123,7 +123,7 @@ pub const File = struct {
 
         const file_type = source_file.fileType();
 
-        log.debug("add file {s} (file type {s})", .{ source_file.real_path, @tagName(file_type) });
+        log.debug("add({s}) ({s})", .{ source_file.real_path, @tagName(file_type) });
 
         file.* = .{
             .qcu = qcu,
@@ -143,7 +143,6 @@ pub const File = struct {
         if (self.ir) |*ir| ir.deinit(self.qcu.allocator);
         if (self.ast) |*ast| ast.deinit(self.qcu.allocator);
         self.source_file.deinit(self.qcu.allocator);
-        // Self-destruct
         self.qcu.allocator.destroy(self);
     }
 
@@ -158,7 +157,7 @@ pub const File = struct {
         std.debug.assert(self.ast == null);
         std.debug.assert(self.ir == null);
 
-        log.debug("static analysis {s}", .{ self.source_file.fileName() });
+        log.debug("staticAnalysis({s})", .{ self.source_file.fileName() });
 
         self.ast = try AsmAst.init(
             self.qcu.allocator,
@@ -231,7 +230,10 @@ pub const File = struct {
         if (self.qcu.semantically_analysed.contains(block_id)) return;
         try self.qcu.semantically_analysed.put(self.qcu.allocator, block_id, {});
 
-        log.debug("semantic analysis {} {s}", .{ block_index.raw(), @tagName(eval_reason) });
+        log.debug("semanticAnalysis({s}, {}) ({s})", .{
+            self.source_file.fileName(),
+            block_index.raw(),
+            @tagName(eval_reason) });
 
         const namespace = self.source_file.qualifiedNamespace();
         var sema = self.createSemanticAnalyser(namespace);
@@ -273,9 +275,10 @@ pub const File = struct {
     }
 
     pub fn liveness(self: *File, block_index: Linker.BlockList.Index) !void {
-        log.debug("liveness {}", .{ block_index.raw() });
         const block = self.qcu.linker.link_list.get(block_index);
         const instance = AsmLiveness.init(self.qcu.allocator, .{ .vtable = livenessTable, .context = self });
+
+        log.debug("liveness({s}, {})", .{ self.source_file.fileName(), block_index.raw() });
 
         try instance.analyseBlock(block);
 
@@ -352,7 +355,7 @@ pub const File = struct {
         const index: File.List.Index = .at(@intCast(self.qcu.files.list.items.len));
         const file_type = source_file.fileType();
 
-        log.debug("resolve file {s} (file type {s})", .{ source_file.real_path, @tagName(file_type) });
+        log.debug("import({s}) ({s})", .{ source_file.real_path, @tagName(file_type) });
 
         file.* = .{
             .qcu = self.qcu,
@@ -383,9 +386,11 @@ pub const File = struct {
         eval_reason: AsmSemanticAir.Block.EvalReason
     ) !void {
         const self: *File = @alignCast(@ptrCast(context));
-        log.debug("ensureBlockAnalysed {} {}", .{ file_index.raw(), block_index.raw() });
         const other_file = self.qcu.files.get(file_index);
         std.debug.assert(other_file.ir != null);
+
+        log.debug("ensureBlockAnalysed({s}, {})", .{ other_file.source_file.fileName(), block_index.raw() });
+
         try self.qcu.work_queue.push(self.qcu.allocator, .{ .semantic_analysis = .{
             other_file,
             block_index,

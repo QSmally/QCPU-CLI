@@ -58,6 +58,7 @@ fn help(writer: *std.Io.Writer) !void {
 
 fn doEverything(
     io: std.Io,
+    gpa: std.mem.Allocator,
     arena: std.mem.Allocator,
     stdout: *std.Io.Writer,
     stderr: *std.Io.Writer,
@@ -94,7 +95,7 @@ fn doEverything(
 
     const qcu_options = structs.unmerge(Qcu.Options, run_options);
     const virt_options = structs.unmerge(Virtualiser.Options, run_options);
-    var bundle = Bundle.init(io, arena, qcu_options, stderr);
+    var bundle = Bundle.init(io, gpa, qcu_options, stderr);
     defer bundle.deinit();
 
     for (run_files) |root_file_path| {
@@ -128,6 +129,7 @@ pub fn main(init: std.process.Init) u8 {
 
     doEverything(
         init.io,
+        init.gpa,
         init.arena.allocator(),
         &stdout.interface,
         &stderr.interface,

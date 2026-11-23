@@ -40,7 +40,7 @@ pub fn deinit(self: *Bundle) void {
 }
 
 pub fn createTarget(self: *Bundle, pwd: std.Io.Dir, root_file_path: []const u8) !void {
-    log.debug("createTarget {s}", .{ root_file_path });
+    log.debug("createTarget({s})", .{ root_file_path });
 
     const qcu = Qcu.init(
         self.io,

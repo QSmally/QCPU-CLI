@@ -36,7 +36,7 @@ pub fn deinit(self: *Linker) void {
 }
 
 pub fn destroy(self: *Linker) void {
-    for (self.linked_sections) |the_linked_section|
+    for (self.linked_sections.list.items) |*the_linked_section|
         the_linked_section.deinit(self.qcu.allocator);
     self.linked_sections.deinit(self.qcu.allocator);
     self.unified_references.deinit(self.qcu.allocator);
@@ -135,7 +135,7 @@ pub fn linkSectionsTransferOwnership(self: *Linker, link_info: []const LinkInfo)
         try self.addError(error.DuplicateLinkInfo, link_info[0].token, "duplicate @linkinfo definition", .{});
         try self.addError(error.NoteDefinedHere, existing_link_info[0].token, "previously defined here", .{});
         try self.addError(error.Note, link_info[0].token, "cannot determine order of separate @linkinfo groups", .{});
-        return;
+        return error.Break;
     }
 
     self.link_info = link_info;
@@ -160,7 +160,7 @@ pub fn performLink(self: *Linker) LinkError!void {
         return error.Break;
     };
 
-    log.debug("performLink link_info.len={} link_list.len={}", .{ info.len, self.link_list.len() });
+    log.debug("performLink(link_info.len={}, link_list.len={})", .{ info.len, self.link_list.len() });
 
     try self.pending_list.resize(self.qcu.allocator, self.link_list.len(), true);
 
@@ -403,36 +403,27 @@ fn resolveAddressConstraint(
     const mask: i32 = @intCast(std.math.pow(usize, 2, bits) - 1);
 
     const dynamic_address: AsmCompute.ComputeTimeInt = if (value.dynamic) |dynamic| blk: {
-        const unified_label = try resolveQualifiedNamespaceOwned(
-            self.qcu.allocator,
+        log.debug("resolveAddressConstraint({s}, {s})", .{ dynamic.namespace, dynamic.label });
+
+        const address = try self.resolveLinkerAddress(
             dynamic.locality,
             dynamic.namespace,
-            dynamic.label);
-        defer self.qcu.allocator.free(unified_label);
-
-        log.debug("resolve namespace:{s} label:{s}", .{ dynamic.namespace, dynamic.label });
-
-        const address = self.unified_references.get(unified_label) orelse {
-            try self.addError(error.UnknownReference, token, "unknown reference '{s}'", .{ unified_label });
-            return error.Break;
-        };
+            dynamic.label,
+            token);
 
         break :blk switch (dynamic.mode) {
             .normal => @intCast(address),
             .difference => blk1: {
-                const last_namespace_index = std.mem.findScalarLast(u8, dynamic.label, '.') orelse dynamic.label.len;
+                const last_namespace_index = std.mem.findScalarLast(u8, dynamic.label, '.') orelse 0;
                 const base_label = dynamic.label[0..last_namespace_index];
-                const base_unified_label = try resolveQualifiedNamespaceOwned(
-                    self.qcu.allocator,
+
+                log.debug("resolveAddressConstraint({s}, {s})", .{ dynamic.namespace, base_label });
+
+                const base_address = try self.resolveLinkerAddress(
                     dynamic.locality,
                     dynamic.namespace,
-                    base_label);
-                defer self.qcu.allocator.free(base_unified_label);
-
-                const base_address = self.unified_references.get(base_unified_label) orelse {
-                    try self.addError(error.UnknownReference, token, "unknown reference '{s}'", .{ unified_label });
-                    return error.Break;
-                };
+                    base_label,
+                    token);
                 break :blk1 @intCast(address - base_address);
             }
         };
@@ -508,6 +499,47 @@ fn resolveAddressConstraint(
     return result & @as(u32, @bitCast(mask));
 }
 
+fn resolveLinkerAddress(
+    self: *Linker,
+    locality: Section.LinkerAddress.Locality,
+    namespace: []const u8,
+    label: []const u8,
+    token: SourceFile.Token
+) !u32 {
+    switch (locality) {
+        .global => {
+            if (try self.getAddress(.global, namespace, label)) |address|
+                return address;
+        },
+        .local => {
+            if (try self.getAddress(.local, namespace, label)) |address|
+                return address;
+            if (try self.getAddress(.global, namespace, label)) |address|
+                return address;
+        }
+    }
+
+    if (label.len > 0)
+        try self.addError(error.UnknownReference, token, "unknown reference '{s}.{s}'", .{ namespace, label }) else
+        try self.addError(error.UnknownReference, token, "unknown reference '{s}'", .{ namespace });
+    return error.Break;
+}
+
+fn getAddress(
+    self: *const Linker,
+    locality: Section.LinkerAddress.Locality,
+    namespace: []const u8,
+    label: []const u8
+) !?u32 {
+    const unified_label = try locality.resolveQualifiedNamespaceOwned(
+        self.qcu.allocator,
+        namespace,
+        label);
+    defer self.qcu.allocator.free(unified_label);
+
+    return self.unified_references.get(unified_label);
+}
+
 pub fn resolveTotalBytes(self: *const Linker) u32 {
     std.debug.assert(self.linked_sections.len() > 0);
     const root_section = self.linked_sections.get(.root);
@@ -517,20 +549,6 @@ pub fn resolveTotalBytes(self: *const Linker) u32 {
         last_section.origin -
         root_section.origin +
         last_section.bytes();
-}
-
-pub const Locality = enum { global, local };
-
-pub fn resolveQualifiedNamespaceOwned(
-    allocator: std.mem.Allocator,
-    locality: Locality,
-    namespace: []const u8,
-    label: []const u8
-) ![]const u8 {
-    const local_namespace = if (locality == .local)
-        ":local" else
-        "";
-    return try allocator.print("{s}{s}.{s}", .{ namespace, local_namespace, label });
 }
 
 fn maskedShift(int: u16, mask: usize) u16 {

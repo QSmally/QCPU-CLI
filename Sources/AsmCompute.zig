@@ -1141,7 +1141,7 @@ fn demoteGlobalScope(self: *const AsmCompute) AsmCompute {
         self.bridge);
 }
 
-fn getLocality(self: *const AsmCompute) Linker.Locality {
+fn getLocality(self: *const AsmCompute) Section.LinkerAddress.Locality {
     if (self.scope) |the_scope| {
         if (the_scope.untyped_block.ty == .header)
             return .local;

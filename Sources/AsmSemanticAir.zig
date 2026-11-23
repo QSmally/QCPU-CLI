@@ -263,8 +263,9 @@ pub fn analyseBlock(
     block_index: AsmIr.Block.List.Index,
     eval_reason: Block.EvalReason
 ) ParseError!void {
+    log.debug("analyseBlock({s}, {})", .{ self.source_file.fileName(), block_index.raw() });
+
     const block = self.ir.blocks.get(block_index);
-    log.debug("analyseBlock {s} {s}({})", .{ self.source_file.fileName(), block.name, block_index.raw() });
     std.debug.assert(block.ty == .section);
     std.debug.assert(self.output == .suppressed); // check illegal behaviour
 
@@ -286,8 +287,14 @@ fn analyseBlockInto(
     block_index: AsmIr.Block.List.Index,
     owner: *AsmSemanticAir
 ) AnalysisError!void {
+    log.debug("analyseBlockInto({s}, {}, {s})", .{
+        self.source_file.fileName(),
+        block_index.raw(),
+        self.namespace });
+    std.debug.assert(self.namespace.len > 0);
+    std.debug.assert(self.namespace[self.namespace.len - 1] != '.');
+
     const block = self.ir.blocks.get(block_index);
-    log.debug("analyseBlockInto {s} {s}({})", .{ self.source_file.fileName(), block.name, block_index.raw() });
     std.debug.assert(block.ty == .header);
     std.debug.assert(self.output == .suppressed); // check illegal behaviour
 
@@ -332,7 +339,7 @@ fn analyseBodyInner(self: *AsmSemanticAir, body: []const AsmIr.Ir) AnalysisError
 
     while (cursor < body.len) {
         const ir = body[cursor];
-        log.debug("analyse[{}] ty {any}", .{ cursor, ir.ty });
+        log.debug("analyse[{}] {any}", .{ cursor, ir.ty });
 
         switch (ir.ty) {
             .@"align" => try self.irAlign(ir),
@@ -551,10 +558,10 @@ fn addReference(
         .header => self.untyped_block.ty == .header and token.inner_token.tag != .label
     };
 
-    const locality: Linker.Locality = if (is_local)
+    const locality: Section.LinkerAddress.Locality = if (is_local)
         .local else
         .global;
-    const qualified_name = try Linker.resolveQualifiedNamespaceOwned(self.allocator, locality, self.namespace, name);
+    const qualified_name = try locality.resolveQualifiedNamespaceOwned(self.allocator, self.namespace, name);
     errdefer self.allocator.free(qualified_name);
 
     if (block.references.get(qualified_name)) |result| {
@@ -661,20 +668,25 @@ fn explainTokenOrigin(
     }
 }
 
+fn getFirstAddressLabel(self: *const AsmSemanticAir) ?[]const u8 {
+    return if (self.reference_pool.items.len > 0 and self.reference_pool.items[0].ty == .address)
+        self.reference_pool.items[0].token.slice() else
+        null;
+}
+
+fn createNamespaceBucket(self: *AsmSemanticAir, label: []const u8) ![]const u8 {
+    std.debug.assert(label.len > 0);
+    return try self.bucket.print("{s}.{s}", .{ self.namespace, label });
+}
+
 const Crc32 = std.hash.crc.@"CRC-32/ISO-HDLC";
 
-fn createReferenceNamespaceBucket(
+fn createAnonymousNamespaceBucket(
     self: *AsmSemanticAir,
     unique_node_index: AsmAst.Node.List.Index,
     unique_file_index: Qcu.File.List.Index,
     unique_block_index: AsmIr.Block.List.Index
 ) ![]const u8 {
-    if (self.reference_pool.items.len > 0) {
-        return try self.bucket.print("{s}.{s}", .{
-            self.namespace,
-            self.reference_pool.items[0].token.slice() });
-    }
-
     var unique_value = Crc32.init();
     unique_value.update(self.namespace);                       // location called from
     unique_value.update(&std.mem.toBytes(unique_node_index));  // location called from
@@ -682,7 +694,7 @@ fn createReferenceNamespaceBucket(
     unique_value.update(&std.mem.toBytes(unique_file_index));  // location of header
 
     const hash = std.mem.toBytes(unique_value.final());
-    return try self.bucket.print("{s}:anon_{x}", .{ self.namespace, hash });
+    return try self.bucket.print("{s}.anon_{x}", .{ self.namespace, hash });
 }
 
 fn resolveSymbolsInto(
@@ -868,10 +880,20 @@ fn irHeader(self: *AsmSemanticAir, ir: AsmIr.Ir) !void {
     const compute = self.getCompute();
     const header = try compute.evaluateConstantResult(.header, ir.ty.header.node_index);
 
-    const namespace = try self.createReferenceNamespaceBucket(
-        ir.ty.header.node_index,
-        header.file_index,
-        header.block_index);
+    const namespace = if (self.getFirstAddressLabel()) |label| blk: {
+        break :blk try self.createNamespaceBucket(label);
+    } else blk: {
+        const anon_namespace = try self.createAnonymousNamespaceBucket(
+            ir.ty.header.node_index,
+            header.file_index,
+            header.block_index);
+        const namespace_index = std.mem.findScalar(u8, anon_namespace, '.') orelse 0;
+        try self.reference_pool.append(self.arena.allocator(), .{
+            .token = self.source_file.qualifiedToken(ir.token),
+            .name = anon_namespace[(namespace_index + 1)..],
+            .ty = .address });
+        break :blk anon_namespace;
+    };
 
     var scope = self.bridge.createScope(header.file_index, namespace);
     defer scope.deinit();

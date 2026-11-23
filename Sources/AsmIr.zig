@@ -40,6 +40,7 @@ pub fn deinit(self: *AsmIr, allocator: std.mem.Allocator) void {
     for (self.blocks.items) |block|
         block.deinit(allocator);
     self.blocks.deinit(allocator);
+    allocator.free(self.link_info);
     self.symbols.deinit(allocator);
 }
 
@@ -648,7 +649,7 @@ const IrGen = struct {
             .is_entrypoint = options.entrypoint } };
         const block_index = try self.addBlock(builtin.token, name, ty);
 
-        log.debug("lowerSectionBlock {s} (block_index={})", .{ name, block_index });
+        log.debug("lowerSectionBlock({s})", .{ name });
 
         try self.lowerBlock(block_index, builtin.payload);
     }
@@ -672,7 +673,7 @@ const IrGen = struct {
             .is_entrypoint = options.entrypoint } };
         const block_index = try self.addBlock(builtin.token, existing_block.name, ty);
 
-        log.debug("lowerBarrierBlock {s} (block_index={?} -> {})", .{ existing_block.name, self.block_index, block_index });
+        log.debug("lowerBarrierBlock({s}) ({?} -> {})", .{ existing_block.name, self.block_index, block_index });
 
         try self.lowerBlock(block_index, builtin.payload);
     }
@@ -697,7 +698,7 @@ const IrGen = struct {
         const ty: Block.Type = .{ .header = arguments };
         const block_index = try self.addBlock(builtin.token, name, ty);
 
-        log.debug("lowerHeaderBlock {s} (block_index={})", .{ name, block_index });
+        log.debug("lowerHeaderBlock({s}) ({})", .{ name, block_index });
 
         const symbol = Symbol {
             .token = name_token,
