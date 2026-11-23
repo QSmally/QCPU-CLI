@@ -3,5 +3,5 @@
 
 _:                jmpr 2
 
-@linkinfo(physically) 0x100
+@linkinfo(virt) "boot"
 @linkinfo(origin) root, 0

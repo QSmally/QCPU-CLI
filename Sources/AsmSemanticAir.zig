@@ -3,8 +3,7 @@
 
 const std = @import("std");
 const indexable_list = @import("indexable_list.zig");
-const instruction = @import("instruction.zig");
-const Compilation = @import("Compilation.zig");
+const Section = @import("Section.zig");
 const Qcu = @import("Qcu.zig");
 const SourceFile = @import("SourceFile.zig");
 const Token = @import("Token.zig");
@@ -205,7 +204,7 @@ pub const Block = struct {
 pub const Air = struct {
 
     token: SourceFile.Token,
-    op: Compilation.Mir.Operation,
+    op: Section.Mir.Operation,
     is_labeled: bool,
 
     pub const List = indexable_list.IndexableList(Air);
@@ -214,6 +213,7 @@ pub const Air = struct {
 pub const SemanticError = error {
     DuplicateReference,
     VoidedReference,
+    InvalidOption,
     AddressNegative,
     AlignPowerTwo,
     InvalidFormat,
@@ -392,29 +392,59 @@ pub fn parseLinkInfoOwned(self: *AsmSemanticAir) ![]const Linker.LinkInfo {
 
     for (self.ir.link_info) |li| {
         const ty: Linker.LinkInfo.Type = switch (li.ty) {
-            .physically => |origin| blk: {
-                const result = try compute.evaluateConstantResult(.scalar, origin.expression);
+            .virt => |virt| blk: {
+                const result = try compute.evaluateConstantResult(.string, virt.device);
+                var components = std.mem.splitScalar(u8, result.text, ':');
+                const device_name = components.first();
 
-                const node = self.tree.nodes.get(origin.expression);
+                const node = self.tree.nodes.get(virt.device);
                 const token = self.tree.tokens.get(node.token);
                 const qualified_token = self.source_file.qualifiedToken(token);
 
-                if (result.value < 0) {
-                    try self.addError(error.AddressNegative, qualified_token, "address of {} is illegal", .{ result.value });
-                    try self.explainTokenOrigin(qualified_token, result.folded_token, "address");
-                    return error.Break;
+                const type_info = @typeInfo(Linker.LinkInfo.VirtDevice).@"union";
+
+                inline for (type_info.field_names, type_info.field_types) |virt_name, Ty| {
+                    if (std.mem.eql(u8, virt_name, device_name)) {
+                        const virt_device: Linker.LinkInfo.VirtDevice = switch (Ty) {
+                            u32 => blk1: {
+                                const address_str = components.next() orelse {
+                                    try self.addError(error.InvalidFormat, qualified_token, "invalid format for option '{s}'; expected an address", .{ device_name });
+                                    return error.Break;
+                                };
+                                const address = std.fmt.parseInt(u32, address_str, 0) catch {
+                                    try self.addError(error.InvalidFormat, qualified_token, "invalid address '{s}' for option '{s}'", .{ address_str, device_name });
+                                    return error.Break;
+                                };
+                                break :blk1 @unionInit(Linker.LinkInfo.VirtDevice, virt_name, address);
+                            },
+                            void => @unionInit(Linker.LinkInfo.VirtDevice, virt_name, {}),
+                            else => comptime unreachable
+                        };
+
+                        if (virt_device == .none) {
+                            try self.addError(error.InvalidOption, qualified_token, "option '{s}' is invalid", .{ device_name });
+                            return error.Break;
+                        }
+
+                        if (components.next() != null) {
+                            try self.addError(error.InvalidFormat, qualified_token, "invalid format for option '{s}'", .{ device_name });
+                            return error.Break;
+                        }
+
+                        break :blk .{ .virt = .{ .device = virt_device } };
+                    }
                 }
 
-                break :blk .{ .physically = .{ .address = @intCast(result.value) } };
+                try self.addError(error.InvalidOption, qualified_token, "option '{s}' is invalid", .{ device_name });
+                return error.Break;
             },
             .origin => |origin| blk: {
                 const result = try compute.evaluateConstantResult(.scalar, origin.expression);
 
-                const node = self.tree.nodes.get(origin.expression);
-                const token = self.tree.tokens.get(node.token);
-                const qualified_token = self.source_file.qualifiedToken(token);
-
                 if (result.value < 0) {
+                    const node = self.tree.nodes.get(origin.expression);
+                    const token = self.tree.tokens.get(node.token);
+                    const qualified_token = self.source_file.qualifiedToken(token);
                     try self.addError(error.AddressNegative, qualified_token, "address of {} is illegal", .{ result.value });
                     try self.explainTokenOrigin(qualified_token, result.folded_token, "address");
                     return error.Break;
@@ -549,7 +579,7 @@ fn addReference(
 fn emitAir(
     self: *AsmSemanticAir,
     token: SourceFile.Token,
-    op: Compilation.Mir.Operation,
+    op: Section.Mir.Operation,
     mode: enum { flush, no_flush }
 ) !void {
     switch (self.output) {
@@ -1015,7 +1045,7 @@ const InstrSelection = struct {
     pub fn matches(self: *const InstrSelection, comptime T: type) !switch (T) {
         void => bool,
         i8, i16, i24, i32,
-        u8, u16, u24, u32 => ?instruction.LinkerAddress,
+        u8, u16, u24, u32 => ?Section.LinkerAddress,
         else => ?T
     } {
         if (T == void) {
@@ -1055,7 +1085,7 @@ const InstrSelection = struct {
         operand_index: AsmAst.Node.List.Index
     ) !switch (T) {
         i8, i16, i24, i32,
-        u8, u16, u24, u32 => ?instruction.LinkerAddress,
+        u8, u16, u24, u32 => ?Section.LinkerAddress,
         else => ?T
     } {
         // TODO: don't evaluate this on every `matches` call
@@ -1070,15 +1100,15 @@ const InstrSelection = struct {
         };
 
         return switch (T) {
-            instruction.Register.DataRegister => if (casted_result.register.isDataRegister())
+            Section.Register.DataRegister => if (casted_result.register.isDataRegister())
                 .fromGeneral(casted_result.register) else
                 null,
-            instruction.Register.AddressRegister => if (casted_result.register.isAddressRegister())
+            Section.Register.AddressRegister => if (casted_result.register.isAddressRegister())
                 .fromGeneral(casted_result.register) else
                 null,
-            instruction.LinkerAddress => casted_result.linker_address,
-            instruction.Flag => casted_result.flag,
-            instruction.LinkerIndex => switch (casted_result.mode) {
+            Section.LinkerAddress => casted_result.linker_address,
+            Section.Flag => casted_result.flag,
+            Section.LinkerIndex => switch (casted_result.mode) {
                 .linker_address => |linker_address| .{
                     .address = linker_address,
                     .register = casted_result.register },
@@ -1095,201 +1125,201 @@ fn instrSelection(
     self: *AsmSemanticAir,
     instr_token: SourceFile.Token,
     operands: AsmAst.Node.Operands
-) !Compilation.Mir.Operation {
+) !Section.Mir.Operation {
     const compute = self.getCompute();
     const selection = InstrSelection.init(compute, instr_token, operands);
 
-    const instr_tag = std.meta.stringToEnum(instruction.MachineInstr.Tag, instr_token.slice()).?;
+    const instr_tag = std.meta.stringToEnum(Section.MachineInstr.Tag, instr_token.slice()).?;
 
     switch (instr_tag) {
         .add => {
-            if (try selection.matches(instruction.MachineInstr.DDD)) |op| {
+            if (try selection.matches(Section.MachineInstr.DDD)) |op| {
                 if (op.rd == .zr and op.rs1 == .zr and op.rs2 == .zr)
                     return .{ .instruction = .bkpt };
                 return .{ .instruction = .{ .add_ddd = op } };
             }
-            if (try selection.matches(instruction.MachineInstr.AAA)) |op|
+            if (try selection.matches(Section.MachineInstr.AAA)) |op|
                 return .{ .instruction = .{ .add_aaa = op } };
-            if (try selection.matches(instruction.MachineInstr.DAD)) |op|
+            if (try selection.matches(Section.MachineInstr.DAD)) |op|
                 return .{ .instruction = .{ .add_dad = op } };
-            if (try selection.matches(instruction.MachineInstr.AAD)) |op|
+            if (try selection.matches(Section.MachineInstr.AAD)) |op|
                 return .{ .instruction = .{ .add_aad = op } };
         },
         .addi => {
-            if (try selection.matches(instruction.MachineInstr.DI)) |op|
+            if (try selection.matches(Section.MachineInstr.DI)) |op|
                 return .{ .instruction = .{ .addi_di = op } };
-            if (try selection.matches(instruction.MachineInstr.AI)) |op|
+            if (try selection.matches(Section.MachineInstr.AI)) |op|
                 return .{ .instruction = .{ .addi_ai = op } };
         },
         .cmpi => {
-            if (try selection.matches(instruction.MachineInstr.DI)) |op|
+            if (try selection.matches(Section.MachineInstr.DI)) |op|
                 return .{ .instruction = .{ .cmpi_di = op } };
         },
         .movec => {
-            if (try selection.matches(instruction.MachineInstr.CDD)) |op|
+            if (try selection.matches(Section.MachineInstr.CDD)) |op|
                 return .{ .instruction = .{ .movec_cdd = op } };
-            if (try selection.matches(instruction.MachineInstr.CAA)) |op|
+            if (try selection.matches(Section.MachineInstr.CAA)) |op|
                 return .{ .instruction = .{ .movec_caa = op } };
         },
         .movez => {
-            if (try selection.matches(instruction.MachineInstr.DDD)) |op|
+            if (try selection.matches(Section.MachineInstr.DDD)) |op|
                 return .{ .instruction = .{ .movez_ddd = op } };
-            if (try selection.matches(instruction.MachineInstr.AAA)) |op|
+            if (try selection.matches(Section.MachineInstr.AAA)) |op|
                 return .{ .instruction = .{ .movez_aaa = op } };
         },
         .sub => {
-            if (try selection.matches(instruction.MachineInstr.DDD)) |op|
+            if (try selection.matches(Section.MachineInstr.DDD)) |op|
                 return .{ .instruction = .{ .sub_ddd = op } };
-            if (try selection.matches(instruction.MachineInstr.AAA)) |op|
+            if (try selection.matches(Section.MachineInstr.AAA)) |op|
                 return .{ .instruction = .{ .sub_aaa = op } };
         },
         .slt => {
-            if (try selection.matches(instruction.MachineInstr.DDD)) |op|
+            if (try selection.matches(Section.MachineInstr.DDD)) |op|
                 return .{ .instruction = .{ .slt_ddd = op } };
         },
         .sltu => {
-            if (try selection.matches(instruction.MachineInstr.DDD)) |op|
+            if (try selection.matches(Section.MachineInstr.DDD)) |op|
                 return .{ .instruction = .{ .sltu_ddd = op } };
         },
         .ior => {
-            if (try selection.matches(instruction.MachineInstr.DDD)) |op|
+            if (try selection.matches(Section.MachineInstr.DDD)) |op|
                 return .{ .instruction = .{ .ior_ddd = op } };
         },
         .@"and" => {
-            if (try selection.matches(instruction.MachineInstr.DDD)) |op|
+            if (try selection.matches(Section.MachineInstr.DDD)) |op|
                 return .{ .instruction = .{ .and_ddd = op } };
         },
         .xor => {
-            if (try selection.matches(instruction.MachineInstr.DDD)) |op|
+            if (try selection.matches(Section.MachineInstr.DDD)) |op|
                 return .{ .instruction = .{ .xor_ddd = op } };
         },
         .iori => {
-            if (try selection.matches(instruction.MachineInstr.DI)) |op|
+            if (try selection.matches(Section.MachineInstr.DI)) |op|
                 return .{ .instruction = .{ .iori_di = op } };
         },
         .ioriu => {
-            if (try selection.matches(instruction.MachineInstr.DI)) |op|
+            if (try selection.matches(Section.MachineInstr.DI)) |op|
                 return .{ .instruction = .{ .ioriu_di = op } };
         },
         .andi => {
-            if (try selection.matches(instruction.MachineInstr.DI)) |op|
+            if (try selection.matches(Section.MachineInstr.DI)) |op|
                 return .{ .instruction = .{ .andi_di = op } };
         },
         .andiu => {
-            if (try selection.matches(instruction.MachineInstr.DI)) |op|
+            if (try selection.matches(Section.MachineInstr.DI)) |op|
                 return .{ .instruction = .{ .andiu_di = op } };
         },
         .mask => {
-            if (try selection.matches(instruction.MachineInstr.DI)) |op|
+            if (try selection.matches(Section.MachineInstr.DI)) |op|
                 return .{ .instruction = .{ .mask_di = op } };
         },
         .xori => {
-            if (try selection.matches(instruction.MachineInstr.DI)) |op|
+            if (try selection.matches(Section.MachineInstr.DI)) |op|
                 return .{ .instruction = .{ .xori_di = op } };
         },
         .xoriu => {
-            if (try selection.matches(instruction.MachineInstr.DI)) |op|
+            if (try selection.matches(Section.MachineInstr.DI)) |op|
                 return .{ .instruction = .{ .xoriu_di = op } };
         },
         .bsl => {
-            if (try selection.matches(instruction.MachineInstr.DDI)) |op|
+            if (try selection.matches(Section.MachineInstr.DDI)) |op|
                 return .{ .instruction = .{ .bsl_ddi = op } };
         },
         .bsr => {
-            if (try selection.matches(instruction.MachineInstr.DDI)) |op|
+            if (try selection.matches(Section.MachineInstr.DDI)) |op|
                 return .{ .instruction = .{ .bsr_ddi = op } };
         },
         .bsrs => {
-            if (try selection.matches(instruction.MachineInstr.DDI)) |op|
+            if (try selection.matches(Section.MachineInstr.DDI)) |op|
                 return .{ .instruction = .{ .bsrs_ddi = op } };
         },
         .brr => {
-            if (try selection.matches(instruction.MachineInstr.DDI)) |op|
+            if (try selection.matches(Section.MachineInstr.DDI)) |op|
                 return .{ .instruction = .{ .brr_ddi = op } };
         },
         .lli => {
-            if (try selection.matches(instruction.MachineInstr.DI)) |op|
+            if (try selection.matches(Section.MachineInstr.DI)) |op|
                 return .{ .instruction = .{ .lli_di = op } };
         },
         .lui => {
-            if (try selection.matches(instruction.MachineInstr.DI)) |op|
+            if (try selection.matches(Section.MachineInstr.DI)) |op|
                 return .{ .instruction = .{ .lui_di = op } };
         },
         .lua => {
-            if (try selection.matches(instruction.MachineInstr.AI)) |op|
+            if (try selection.matches(Section.MachineInstr.AI)) |op|
                 return .{ .instruction = .{ .lua_ai = op } };
         },
         .jmpl => {
-            if (try selection.matches(instruction.MachineInstr.I)) |op|
+            if (try selection.matches(Section.MachineInstr.I)) |op|
                 return .{ .instruction = .{ .jmpl_i = op } };
         },
         .jmprl => {
-            if (try selection.matches(instruction.MachineInstr.I)) |op|
+            if (try selection.matches(Section.MachineInstr.I)) |op|
                 return .{ .instruction = .{ .jmprl_i = op } };
         },
         .brh => {
-            if (try selection.matches(instruction.MachineInstr.CI)) |op|
+            if (try selection.matches(Section.MachineInstr.CI)) |op|
                 return .{ .instruction = .{ .brh_ci = op } };
         },
         .brhl => {
-            if (try selection.matches(instruction.MachineInstr.CI)) |op|
+            if (try selection.matches(Section.MachineInstr.CI)) |op|
                 return .{ .instruction = .{ .brhl_ci = op } };
         },
         .xch => {
-            if (try selection.matches(instruction.MachineInstr.DX)) |op|
+            if (try selection.matches(Section.MachineInstr.DX)) |op|
                 return .{ .instruction = .{ .xch_dx = op } };
         },
         .xchw => {
-            if (try selection.matches(instruction.MachineInstr.DX)) |op|
+            if (try selection.matches(Section.MachineInstr.DX)) |op|
                 return .{ .instruction = .{ .xchw_dx = op } };
         },
         .move => {
-            if (try selection.matches(instruction.MachineInstr.DX)) |op|
+            if (try selection.matches(Section.MachineInstr.DX)) |op|
                 return .{ .instruction = .{ .move_dx = op } };
-            if (try selection.matches(instruction.MachineInstr.XD)) |op|
+            if (try selection.matches(Section.MachineInstr.XD)) |op|
                 return .{ .instruction = .{ .move_xd = op } };
-            if (try selection.matches(instruction.MachineInstr.DM)) |op|
+            if (try selection.matches(Section.MachineInstr.DM)) |op|
                 return .{ .instruction = .{ .move_dm = op } };
-            if (try selection.matches(instruction.MachineInstr.DP)) |op|
+            if (try selection.matches(Section.MachineInstr.DP)) |op|
                 return .{ .instruction = .{ .move_dp = op } };
-            if (try selection.matches(instruction.MachineInstr.MD)) |op|
+            if (try selection.matches(Section.MachineInstr.MD)) |op|
                 return .{ .instruction = .{ .move_md = op } };
-            if (try selection.matches(instruction.MachineInstr.PD)) |op|
+            if (try selection.matches(Section.MachineInstr.PD)) |op|
                 return .{ .instruction = .{ .move_pd = op } };
 
-            if (try selection.matches(instruction.MachineInstr.DD)) |op|
+            if (try selection.matches(Section.MachineInstr.DD)) |op|
                 return .{ .instruction = .{ .add_ddd = .{ .rd = op.rd, .rs1 = .zr, .rs2 = op.rs1 } } };
-            if (try selection.matches(instruction.MachineInstr.AA)) |op|
+            if (try selection.matches(Section.MachineInstr.AA)) |op|
                 return .{ .instruction = .{ .add_aaa = .{ .rd = op.rd, .rs1 = .zr, .rs2 = op.rs1 } } };
-            if (try selection.matches(instruction.MachineInstr.DA)) |op|
+            if (try selection.matches(Section.MachineInstr.DA)) |op|
                 return .{ .instruction = .{ .add_dad = .{ .rd = op.rd, .rs1 = op.rs1, .rs2 = .zr } } };
-            if (try selection.matches(instruction.MachineInstr.AD)) |op|
+            if (try selection.matches(Section.MachineInstr.AD)) |op|
                 return .{ .instruction = .{ .add_aad = .{ .rd = op.rd, .rs1 = .zr, .rs2 = op.rs1 } } };
         },
         .movew => {
-            if (try selection.matches(instruction.MachineInstr.DX)) |op|
+            if (try selection.matches(Section.MachineInstr.DX)) |op|
                 return .{ .instruction = .{ .movew_dx = op } };
-            if (try selection.matches(instruction.MachineInstr.XD)) |op|
+            if (try selection.matches(Section.MachineInstr.XD)) |op|
                 return .{ .instruction = .{ .movew_xd = op } };
-            if (try selection.matches(instruction.MachineInstr.DM)) |op|
+            if (try selection.matches(Section.MachineInstr.DM)) |op|
                 return .{ .instruction = .{ .movew_dm = op } };
-            if (try selection.matches(instruction.MachineInstr.DP)) |op|
+            if (try selection.matches(Section.MachineInstr.DP)) |op|
                 return .{ .instruction = .{ .movew_dp = op } };
-            if (try selection.matches(instruction.MachineInstr.MD)) |op|
+            if (try selection.matches(Section.MachineInstr.MD)) |op|
                 return .{ .instruction = .{ .movew_md = op } };
-            if (try selection.matches(instruction.MachineInstr.PD)) |op|
+            if (try selection.matches(Section.MachineInstr.PD)) |op|
                 return .{ .instruction = .{ .movew_pd = op } };
         },
         .sysc => {
-            if (try selection.matches(instruction.MachineInstr.II)) |op|
+            if (try selection.matches(Section.MachineInstr.II)) |op|
                 return .{ .instruction = .{ .sysc_i = op } };
         },
         .csrr => {
-            if (try selection.matches(instruction.MachineInstr.DII)) |op|
+            if (try selection.matches(Section.MachineInstr.DII)) |op|
                 return .{ .instruction = .{ .csrr_dii = op } };
         },
         .csrw => {
-            if (try selection.matches(instruction.MachineInstr.DII)) |op|
+            if (try selection.matches(Section.MachineInstr.DII)) |op|
                 return .{ .instruction = .{ .csrw_dii = op } };
         },
         .reti => {
@@ -1326,7 +1356,7 @@ fn instrSelection(
                 return .{ .instruction = .bkpt };
         },
         .jmpr => {
-            if (try selection.matches(instruction.MachineInstr.I)) |op|
+            if (try selection.matches(Section.MachineInstr.I)) |op|
                 return .{ .instruction = .{ .addi_ai = .{ .rd = .ip, .i = op.i } } };
         },
 
@@ -1371,8 +1401,8 @@ fn instrSelection(
     return error.Break;
 }
 
-fn lazilyAnalyseInstrReference(self: *AsmSemanticAir, instr: instruction.MachineInstr, token: Token) !void {
-    const label: instruction.LinkerAddress = switch (instr) {
+fn lazilyAnalyseInstrReference(self: *AsmSemanticAir, instr: Section.MachineInstr, token: Token) !void {
+    const label: Section.LinkerAddress = switch (instr) {
         inline else => |ty| blk: {
             const Ty = @TypeOf(ty);
 
@@ -1384,8 +1414,8 @@ fn lazilyAnalyseInstrReference(self: *AsmSemanticAir, instr: instruction.Machine
 
             inline for (type_info.field_names, type_info.field_types) |field_name, field_ty| {
                 const address = switch (field_ty) {
-                    instruction.LinkerAddress => @field(ty, field_name),
-                    instruction.LinkerIndex => @field(ty, field_name).address,
+                    Section.LinkerAddress => @field(ty, field_name),
+                    Section.LinkerIndex => @field(ty, field_name).address,
                     else => continue
                 };
                 break :blk address;
@@ -1398,7 +1428,7 @@ fn lazilyAnalyseInstrReference(self: *AsmSemanticAir, instr: instruction.Machine
     try self.lazilyAnalyseReference(label, token);
 }
 
-fn lazilyAnalyseReference(self: *AsmSemanticAir, label: instruction.LinkerAddress, token: Token) !void {
+fn lazilyAnalyseReference(self: *AsmSemanticAir, label: Section.LinkerAddress, token: Token) !void {
     if (label.dynamic) |dynamic| {
         try self.bridge.ensureBlockAnalysed(dynamic.file_index, dynamic.block_index, .{ .reference = .{
             .section_name = self.getCurrentBlock().name,
@@ -1474,7 +1504,7 @@ const TestBridge = struct {
 
 fn testSemantics(
     input: [:0]const u8,
-    code: []const @typeInfo(Compilation.Mir.Operation).@"union".tag_type.?,
+    code: []const @typeInfo(Section.Mir.Operation).@"union".tag_type.?,
     referenced_blocks: []const AsmIr.Block.List.Index,
     errors: []const (SemanticError || AsmCompute.EvaluationError)
 ) !void {

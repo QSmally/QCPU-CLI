@@ -1,7 +1,7 @@
 
 const std = @import("std");
 const indexable_list = @import("indexable_list.zig");
-const instruction = @import("instruction.zig");
+const Section = @import("Section.zig");
 
 const Token = @This();
 
@@ -242,11 +242,11 @@ pub fn slice(self: Token, buffer: [:0]const u8) []const u8 {
 }
 
 pub fn keyword(identifier: []const u8) ?Tag {
-    if (std.meta.stringToEnum(instruction.MachineInstr.Tag, identifier) != null)
+    if (std.meta.stringToEnum(Section.MachineInstr.Tag, identifier) != null)
         return .instruction;
-    if (std.meta.stringToEnum(instruction.Register, identifier) != null)
+    if (std.meta.stringToEnum(Section.Register, identifier) != null)
         return .argument;
-    if (std.meta.stringToEnum(instruction.Flag, identifier) != null)
+    if (std.meta.stringToEnum(Section.Flag, identifier) != null)
         return .argument;
     return null;
 }

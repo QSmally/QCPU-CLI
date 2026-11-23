@@ -2,7 +2,7 @@
 // Compute
 
 const std = @import("std");
-const instruction = @import("instruction.zig");
+const Section = @import("Section.zig");
 const Qcu = @import("Qcu.zig");
 const SourceFile = @import("SourceFile.zig");
 const Token = @import("Token.zig");
@@ -118,7 +118,7 @@ pub const Result = union(Type) {
 
     pub const LinkerAddressType = struct {
         folded_token: SourceFile.Token,
-        linker_address: instruction.LinkerAddress,
+        linker_address: Section.LinkerAddress,
 
         pub fn fromScalar(scalar: ScalarType) LinkerAddressType {
             return .{
@@ -138,16 +138,16 @@ pub const Result = union(Type) {
 
     pub const RegisterType = struct {
         folded_token: SourceFile.Token,
-        register: instruction.Register
+        register: Section.Register
     };
 
     pub const IndexType = struct {
         folded_token: SourceFile.Token,
-        register: instruction.Register.AddressRegister,
+        register: Section.Register.AddressRegister,
         mode: Mode,
 
         pub const Mode = union(enum) {
-            linker_address: instruction.LinkerAddress,
+            linker_address: Section.LinkerAddress,
             predecrement,
             postincrement
         };
@@ -155,7 +155,7 @@ pub const Result = union(Type) {
 
     pub const FlagType = struct {
         folded_token: SourceFile.Token,
-        flag: instruction.Flag
+        flag: Section.Flag
     };
 
     pub const SizeType = struct {
@@ -319,12 +319,12 @@ fn explainTokenOrigin(
 
 fn typeCastAddressRegister(
     self: *const AsmCompute,
-    register: instruction.Register,
+    register: Section.Register,
     result_token: SourceFile.Token,
     token: Token
-) !instruction.Register.AddressRegister {
+) !Section.Register.AddressRegister {
     if (register.isAddressRegister()) {
-        return instruction.Register.AddressRegister.fromGeneral(register);
+        return Section.Register.AddressRegister.fromGeneral(register);
     }
 
     try self.explainAddressRegisterError(result_token, token);
@@ -429,11 +429,11 @@ pub fn typeCast(
 
 pub fn mapTy(comptime T: type) Result.Type {
     return switch (T) {
-        instruction.Register.DataRegister => .register,
-        instruction.Register.AddressRegister => .register,
-        instruction.LinkerAddress => .linker_address,
-        instruction.Flag => .flag,
-        instruction.LinkerIndex => .index,
+        Section.Register.DataRegister => .register,
+        Section.Register.AddressRegister => .register,
+        Section.LinkerAddress => .linker_address,
+        Section.Flag => .flag,
+        Section.LinkerIndex => .index,
         i8, i16, i24, i32,
         u8, u16, u24, u32 => .linker_address,
         else => @compileError("ty not supported: " ++ @typeName(T))
@@ -904,8 +904,8 @@ const masks = std.StaticStringMap(ComputeTimeInt).initComptime(.{
 
 const ArgumentType = union(enum) {
     size: u32,
-    register: instruction.Register,
-    flag: instruction.Flag
+    register: Section.Register,
+    flag: Section.Flag
 };
 
 const typed_arguments = std.StaticStringMap(ArgumentType).initComptime(.{
@@ -1087,8 +1087,10 @@ const FileScopedSymbol = struct {
 };
 
 fn getFileScopedSymbol(self: *const AsmCompute, identifier: []const u8) ?FileScopedSymbol {
-    if (self.scope) |the_scope| {
-        std.debug.assert(the_scope.output != .suppressed);
+    if (self.scope) |the_scope| blk: {
+        if (the_scope.output == .suppressed) {
+            break :blk;
+        }
 
         // it's a deferred symbol, e.g. a header argument, so we're moving our
         // scope to where the argument was passed; it might be a totally

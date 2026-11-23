@@ -1,10 +1,267 @@
 
 const std = @import("std");
+const indexable_list = @import("indexable_list.zig");
+const SourceFile = @import("SourceFile.zig");
 const Qcu = @import("Qcu.zig");
 const AsmIr = @import("AsmIr.zig");
 const AsmSemanticAir = @import("AsmSemanticAir.zig");
 const AsmCompute = @import("AsmCompute.zig");
 const Linker = @import("Linker.zig");
+
+const Section = @This();
+
+identifier: []const u8,
+origin: u32,
+linkinfo_token: SourceFile.Token,
+
+content: Mir.List = .empty,
+
+pub const List = indexable_list.IndexableList(Section);
+
+pub fn init(identifier: []const u8, origin: u32, linkinfo_token: SourceFile.Token) Section {
+    return .{
+        .identifier = identifier,
+        .origin = origin,
+        .linkinfo_token = linkinfo_token };
+}
+
+pub fn deinit(self: *Section, allocator: std.mem.Allocator) void {
+    self.content.deinit(allocator);
+}
+
+pub fn nextAddress(self: *const Section) u32 {
+    return self.origin + self.bytes();
+}
+
+pub fn localAddressOf(self: *const Section, index: Mir.List.Index) u32 {
+    var total_bytes: u32 = 0;
+    for (self.content.list.items[0..index.raw()]) |mir| total_bytes += mir.op.bytes();
+    return total_bytes;
+}
+
+pub fn bytes(self: *const Section) u32 {
+    return self.localAddressOf(.at(self.content.len()));
+}
+
+pub const Range = struct {
+    min: u32,
+    max: ?u32
+};
+
+pub const Note = struct {
+    address: u32,
+    message: []const u8
+};
+
+pub fn dumpTraceRange(
+    self: *const Section,
+    range: Range,
+    note: ?Note,
+    writer: *std.Io.Writer
+) !void {
+    try writer.print("@section {s} ({} bytes)\n", .{
+        self.identifier,
+        self.bytes() });
+    if (range.min > 0) {
+        try writer.writeAll("... (omitted)\n");
+    }
+
+    const len: u32 = if (range.max) |max| max else self.origin + self.bytes();
+
+    for (self.content.list.items, 0..) |mir, index| {
+        const global_address = self.origin + self.localAddressOf(.fromIndex(index));
+
+        if (global_address < range.min)
+            continue;
+        if (global_address + mir.op.bytes() > len)
+            continue;
+
+        try writer.print("    0x{X:0>4}   ", .{ global_address });
+        defer writer.writeByte('\n') catch {};
+
+        if (mir.op == .instruction)
+            try writer.print("0b{b:0>16}   ", .{ mir.binary });
+        try mir.render(writer);
+
+        if (note) |the_note| {
+            if (the_note.address >= global_address and the_note.address < global_address + mir.op.bytes())
+                try writer.print("   <-- {s}", .{ the_note.message });
+        }
+    }
+
+    if (len != self.origin + self.bytes()) {
+        try writer.writeAll("... (omitted)\n");
+    }
+}
+
+pub fn dumpTrace(self: *const Section, writer: *std.Io.Writer) !void {
+    try self.dumpTraceRange(.{ .min = 0, .max = null }, null, writer);
+}
+
+pub const Mir = struct {
+
+    token: SourceFile.Token,
+    op: Operation,
+
+    binary: u32 = 0,
+
+    pub const List = indexable_list.IndexableList(Mir);
+
+    pub const Operation = union(enum) {
+
+        instruction: MachineInstr,
+        padding: u32,
+        data: struct { bytes: u32, value: LinkerAddress },
+        ascii: struct { text: []const u8, sentinel: ?u8 },
+
+        pub fn bytes(self: Operation) u32 {
+            return switch (self) {
+                .instruction => 2,
+                .padding => |padding| padding,
+                .data => |data| data.bytes,
+                .ascii => |ascii| blk: {
+                    const text_len: u32 = @intCast(ascii.text.len);
+                    const sentinel_len: u32 = if (ascii.sentinel != null) 1 else 0;
+                    break :blk text_len + sentinel_len;
+                }
+            };
+        }
+
+        pub fn isJump(self: Operation) bool {
+            return switch (self) {
+                .instruction => |instr| switch (instr) {
+                    // these can reference the instruction ptr, but are conditional
+                    .movec_caa,
+                    .movez_aaa => false,
+
+                    // we know these can't jump unconditionally
+                    .brh_ci,
+                    .brhl_ci => false,
+
+                    // these implicitly reference the instruction ptr
+                    .bkpt,
+                    .jmpl_i,
+                    .jmprl_i => true,
+
+                    // it's a jump if the `rd` operand is the instruction ptr
+                    inline else => |operands| blk: {
+                        const Ty = @TypeOf(operands);
+
+                        if (Ty == void) {
+                            break :blk false;
+                        }
+
+                        if (@hasField(Ty, "rd") and @TypeOf(operands.rd) == Register.AddressRegister) {
+                            break :blk operands.rd == .ip;
+                        }
+
+                        break :blk false;
+                    }
+                },
+                .padding,
+                .data,
+                .ascii => false
+            };
+        }
+    };
+
+    pub fn getAddress(self: *const Mir) u32 {
+        return switch (self.op) {
+            .instruction => |instr| switch (instr) {
+                inline else => |operands| blk: {
+                    const T = @TypeOf(operands);
+
+                    if (T == void or !@hasDecl(T, "i_mask")) {
+                        unreachable;
+                    }
+
+                    const imm_mask = @as(u16, T.i_mask);
+                    const address = self.binary >> @ctz(imm_mask);
+                    // TODO: fix for segmented masks and x_mask
+                    const address_mask = std.math.pow(u32, 2, @popCount(imm_mask)) - 1;
+                    break :blk address & address_mask;
+                }
+            },
+            .padding => unreachable,
+            .data => self.binary,
+            .ascii => unreachable
+        };
+    }
+
+    pub fn render(self: *const Mir, writer: *std.Io.Writer) !void {
+        switch (self.op) {
+            .instruction => |instr| {
+                try writer.print("{s}", .{ instr.qualifiedName() });
+
+                switch (instr) {
+                    inline else => |operands| blk: {
+                        const T = @TypeOf(operands);
+
+                        if (T == void) {
+                            break :blk;
+                        }
+
+                        const type_info = @typeInfo(T).@"struct";
+
+                        inline for (type_info.field_names, type_info.field_types, 0..) |name, Type, i| {
+                            const operand = @field(operands, name);
+
+                            if (i > 0) {
+                                try writer.writeByte(',');
+                            }
+
+                            switch (Type) {
+                                Register.DataRegister,
+                                Register.AddressRegister,
+                                Flag => try writer.print(" {s}", .{ @tagName(operand) }),
+                                LinkerAddress => if (operand.dynamic) |dynamic| {
+                                    if (operand.bit_mask == -1) {
+                                        try writer.print(" .{s} + {}", .{
+                                            dynamic.label,
+                                            operand.offset });
+                                    } else {
+                                        try writer.print(" .{s}'0x{X} + {}", .{
+                                            dynamic.label,
+                                            operand.bit_mask,
+                                            operand.offset });
+                                    }
+                                } else {
+                                    try writer.print(" {}", .{ operand.offset });
+                                },
+                                LinkerIndex => if (operand.address.dynamic) |dynamic| {
+                                    if (operand.address.bit_mask == -1) {
+                                        try writer.print(" (.{s} + {})({s})", .{
+                                            dynamic.label,
+                                            operand.address.offset,
+                                            @tagName(operand.register) });
+                                    } else {
+                                        try writer.print(" (.{s}'0x{X} + {})({s})", .{
+                                            dynamic.label,
+                                            operand.address.bit_mask,
+                                            operand.address.offset,
+                                            @tagName(operand.register) });
+                                    }
+                                } else {
+                                    try writer.print(" {}({s})", .{ operand.address.offset, @tagName(operand.register) });
+                                },
+                                else => comptime unreachable
+                            }
+                        }
+                    }
+                }
+            },
+            .padding => |padding| try writer.print("* {} byte{s}", .{
+                padding,
+                if (padding == 1) "" else "s" }),
+            .data => try writer.print("0x{0X} ({0})", .{ self.getAddress() }),
+            .ascii => |ascii| {
+                if (ascii.sentinel) |sentinel|
+                    try writer.print("\"{s}\" {}", .{ ascii.text, sentinel }) else
+                    try writer.print("\"{s}\"", .{ ascii.text });
+            }
+        }
+    }
+};
 
 pub const MachineInstr = union(enum) {
 
@@ -69,6 +326,8 @@ pub const MachineInstr = union(enum) {
     nop,
     ssf,
     rsf,
+
+    pub const alignment: std.mem.Alignment = .@"2";
 
     pub const Tag = blk: {
         @setEvalBranchQuota(5000);

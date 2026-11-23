@@ -31,6 +31,30 @@ pub fn Fields(comptime T: type, comptime list: []const []const u8) type {
         field_attrs);
 }
 
+pub fn Merge(comptime list: []const type) type {
+    var field_names: []const [:0]const u8 = &.{};
+    var field_types: []const type = &.{};
+    var field_attrs: []const std.lang.Type.Struct.FieldAttributes = &.{};
+
+    for (list) |T| {
+        const type_info = @typeInfo(T).@"struct";
+
+        // Merging structs at compile-time? Hell yeah!
+        for (type_info.field_names, type_info.field_types, type_info.field_attrs) |name, Ty, attr| {
+            field_names = field_names ++ .{ name };
+            field_types = field_types ++ .{ Ty };
+            field_attrs = field_attrs ++ .{ attr };
+        }
+    }
+
+    return @Struct(
+        .auto,
+        null,
+        field_names,
+        field_types,
+        field_attrs);
+}
+
 pub fn unmerge(comptime T: type, global_options: anytype) T {
     var concrete_options: T = undefined;
 

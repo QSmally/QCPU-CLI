@@ -1,10 +1,10 @@
 
 const std = @import("std");
-const Compilation = @import("Compilation.zig");
+const Bundle = @import("Bundle.zig");
 
 const indent: [12]u8 = @splat(' ');
 
-pub fn output(comp: *const Compilation, writer: *std.Io.Writer) !void {
+pub fn output(bundle: *const Bundle, writer: *std.Io.Writer) !void {
     try writer.writeAll(
         \\//
         \\// QCPU 2 boot memory
@@ -28,7 +28,7 @@ pub fn output(comp: *const Compilation, writer: *std.Io.Writer) !void {
         \\
     );
 
-    for (comp.units.items) |qcu| {
+    for (bundle.units.items) |qcu| {
         for (qcu.linker.linked_sections.list.items) |*section| {
             try writer.print("{s}// @section {s}.{s} ({} bytes)\n", .{
                 indent,
@@ -37,7 +37,7 @@ pub fn output(comp: *const Compilation, writer: *std.Io.Writer) !void {
                 section.bytes() });
 
             for (section.content.list.items, 0..) |mir, index| {
-                const address = qcu.linker.resolvePhysicalAddress(section, .fromIndex(index));
+                const address = section.origin + section.localAddressOf(.fromIndex(index));
 
                 switch (mir.op) {
                     .instruction => {

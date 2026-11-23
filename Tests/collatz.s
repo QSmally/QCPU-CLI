@@ -6,6 +6,7 @@
 _:                lli d1, begin_value
                   jmpr .loop
 
+@linkinfo(virt) "boot"
 @linkinfo(origin) root, 0
 @linkinfo(aligned) text, 2
 

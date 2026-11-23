@@ -3,8 +3,7 @@
 
 const std = @import("std");
 const indexable_list = @import("indexable_list.zig");
-const instruction = @import("instruction.zig");
-const Compilation = @import("Compilation.zig");
+const Section = @import("Section.zig");
 const Qcu = @import("Qcu.zig");
 const SourceFile = @import("SourceFile.zig");
 const AsmSemanticAir = @import("AsmSemanticAir.zig");
@@ -17,9 +16,9 @@ qcu: *Qcu,
 link_list: BlockList = .empty,
 pending_list: std.DynamicBitSetUnmanaged = .{},
 link_info: ?[]const LinkInfo = null,
-physical_origin: u32 = 0,
-linked_sections: Compilation.Section.List = .empty,
+linked_sections: Section.List = .empty,
 unified_references: std.StringHashMapUnmanaged(u32) = .empty,
+virt: LinkInfo.VirtDevice = .none,
 
 const log = std.log.scoped(.Linker);
 
@@ -61,8 +60,8 @@ pub const LinkInfo = struct {
     ty: Type,
 
     pub const Type = union(enum) {
-        physically: struct {
-            address: u32
+        virt: struct {
+            device: VirtDevice
         },
         origin: struct {
             section_name: []const u8,
@@ -72,6 +71,12 @@ pub const LinkInfo = struct {
             section_name: []const u8,
             alignment: std.mem.Alignment
         }
+    };
+
+    pub const VirtDevice = union(enum) {
+        none,
+        boot,
+        memory: u32
     };
 };
 
@@ -160,7 +165,7 @@ pub fn performLink(self: *Linker) LinkError!void {
     try self.pending_list.resize(self.qcu.allocator, self.link_list.len(), true);
 
     for (info) |li| switch (li.ty) {
-        .physically => |physically| try self.emitLinkPhysically(physically.address),
+        .virt => |virt| try self.emitLinkVirt(li.token, virt.device),
         .origin => |origin| try self.emitLinkOrigin(li.token, origin.section_name, origin.address),
         .aligned => |aligned| try self.emitLinkAligned(li.token, aligned.section_name, aligned.alignment)
     };
@@ -193,8 +198,18 @@ pub fn performLink(self: *Linker) LinkError!void {
     }
 }
 
-fn emitLinkPhysically(self: *Linker, address: u32) !void {
-    self.physical_origin = address;
+fn emitLinkVirt(self: *Linker, token: SourceFile.Token, virt: LinkInfo.VirtDevice) !void {
+    if (self.virt == .none) {
+        self.virt = virt;
+        return;
+    }
+
+    try self.addError(error.InvalidLinkSections, token, "@linkinfo(virt) is multiply defined", .{});
+    for (self.link_info.?) |li| if (li.ty == .virt) {
+        try self.addError(error.NoteDefinedHere, li.token, "first defined here", .{});
+        break;
+    };
+    return error.Break;
 }
 
 fn emitLinkOrigin(
@@ -230,7 +245,7 @@ fn createSection(
     identifier: []const u8,
     address: u32,
     linkinfo_token: SourceFile.Token
-) !Compilation.Section.List.Index {
+) !Section.List.Index {
     if (self.findSection(identifier)) |existing_section| {
         try self.addError(error.DuplicateSection, linkinfo_token, "duplicate mapping for section '{s}'", .{ identifier });
         try self.addError(error.NoteDefinedHere, existing_section.linkinfo_token, "previously mapped here", .{});
@@ -246,13 +261,13 @@ fn createSection(
         }
     }
 
-    const section = Compilation.Section.init(identifier, address, linkinfo_token);
+    const section = Section.init(identifier, address, linkinfo_token);
     const index = self.linked_sections.len();
     try self.linked_sections.append(self.qcu.allocator, section);
     return .at(index);
 }
 
-fn findSection(self: *const Linker, identifier: []const u8) ?*const Compilation.Section {
+fn findSection(self: *const Linker, identifier: []const u8) ?*const Section {
     for (self.linked_sections.list.items) |*section| {
         if (std.mem.eql(u8, section.identifier, identifier))
             return section;
@@ -261,7 +276,7 @@ fn findSection(self: *const Linker, identifier: []const u8) ?*const Compilation.
     return null;
 }
 
-fn processSectionBlocks(self: *Linker, section_index: Compilation.Section.List.Index) !void {
+fn processSectionBlocks(self: *Linker, section_index: Section.List.Index) !void {
     const section = self.linked_sections.getReference(section_index);
     for (self.link_list.list.items, 0..) |block, index| {
         if (!std.mem.eql(u8, block.name, section.identifier))
@@ -273,7 +288,7 @@ fn processSectionBlocks(self: *Linker, section_index: Compilation.Section.List.I
     }
 }
 
-fn emitSectionBlock(self: *Linker, section: *Compilation.Section, block: AsmSemanticAir.Block) !void {
+fn emitSectionBlock(self: *Linker, section: *Section, block: AsmSemanticAir.Block) !void {
     if (block.bytes() < 1) {
         return;
     }
@@ -323,7 +338,7 @@ fn emitSectionBlock(self: *Linker, section: *Compilation.Section, block: AsmSema
     }
 }
 
-fn resolveBinaryInstr(self: *Linker, mir: *Compilation.Mir, ip: usize) !void {
+fn resolveBinaryInstr(self: *Linker, mir: *Section.Mir, ip: usize) !void {
     switch (mir.op) {
         .instruction => |instr| switch (instr) {
             inline else => |operands| blk: {
@@ -342,28 +357,26 @@ fn resolveBinaryInstr(self: *Linker, mir: *Compilation.Mir, ip: usize) !void {
                     const mask = @field(T, id ++ "_mask");
 
                     const result = switch (Type) {
-                        instruction.Register.DataRegister,
-                        instruction.Register.AddressRegister,
-                        instruction.Flag => @backingInt(operand),
-                        instruction.LinkerAddress => addr: {
+                        Section.Register.DataRegister,
+                        Section.Register.AddressRegister,
+                        Section.Flag => @backingInt(operand),
+                        Section.LinkerAddress => addr: {
                             const bits = @popCount(@as(u16, mask));
                             const relative_ip: ?i32 = if (mir.op.instruction.isRelativeIp()) @intCast(ip) else null;
                             const address = try self.resolveAddressConstraint(operand, relative_ip, instr.immAlignment(), bits, mir.token);
-                            mir.address = address;
                             break :addr address;
                         },
-                        instruction.LinkerIndex => addr: {
+                        Section.LinkerIndex => addr: {
                             const bits = @popCount(@as(u16, mask));
                             const relative_ip: ?i32 = if (mir.op.instruction.isRelativeIp()) @intCast(ip) else null;
                             const address = try self.resolveAddressConstraint(operand.address, relative_ip, instr.immAlignment(), bits, mir.token);
-                            mir.address = address;
                             break :addr address;
                         },
                         else => comptime unreachable
                     };
                     mir.binary |= @intCast(maskedShift(@intCast(result), mask));
 
-                    if (Type == instruction.LinkerIndex) {
+                    if (Type == Section.LinkerIndex) {
                         const reg_mask = @field(T, id ++ "_mask_src");
                         const register = @backingInt(operand.register);
                         mir.binary |= @intCast(maskedShift(register, reg_mask));
@@ -372,9 +385,7 @@ fn resolveBinaryInstr(self: *Linker, mir: *Compilation.Mir, ip: usize) !void {
             }
         },
         .data => |data| {
-            const result = try self.resolveAddressConstraint(data.value, null, .@"1", data.bytes * 8, mir.token);
-            mir.address = result;
-            mir.binary = mir.address;
+            mir.binary = try self.resolveAddressConstraint(data.value, null, .@"1", data.bytes * 8, mir.token);
         },
         .padding,
         .ascii => {}
@@ -383,7 +394,7 @@ fn resolveBinaryInstr(self: *Linker, mir: *Compilation.Mir, ip: usize) !void {
 
 fn resolveAddressConstraint(
     self: *Linker,
-    value: instruction.LinkerAddress,
+    value: Section.LinkerAddress,
     relative_address: ?i32,
     alignment: std.mem.Alignment,
     bits: usize,
@@ -474,21 +485,6 @@ fn resolveAddressConstraint(
 
     const result: u32 = @bitCast(global_address);
     return result & @as(u32, @bitCast(mask));
-}
-
-pub fn resolvePhysicalAddress(
-    self: *const Linker,
-    section: *const Compilation.Section,
-    index: Compilation.Mir.List.Index
-) u32 {
-    std.debug.assert(self.linked_sections.len() > 0);
-    const root_section = self.linked_sections.get(.root);
-
-    return
-        self.physical_origin +
-        section.origin -
-        root_section.origin +
-        section.localAddressOf(index);
 }
 
 pub fn resolveTotalBytes(self: *const Linker) u32 {

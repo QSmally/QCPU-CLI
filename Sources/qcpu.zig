@@ -4,8 +4,9 @@ const std = @import("std");
 const structs = @import("structs.zig");
 const docs = @import("docs.zig");
 const verilog = @import("verilog.zig");
-const Compilation = @import("Compilation.zig");
+const Bundle = @import("Bundle.zig");
 const Qcu = @import("Qcu.zig");
+const Virtualiser = @import("Virtualiser.zig");
 
 const version_str = "0.1.0";
 
@@ -25,7 +26,8 @@ fn help(writer: *std.Io.Writer) !void {
     inline for (&[_] struct { []const u8, type } {
         .{ "general options", CliOptions },
         .{ "output options", OutputOptions },
-        .{ "compilation unit options", Qcu.Options }
+        .{ "compilation unit options", Qcu.Options },
+        .{ "virtualiser options", Virtualiser.Options }
     }) |category| {
         try writer.print("{s}\n", .{ category[0] });
 
@@ -40,7 +42,7 @@ fn help(writer: *std.Io.Writer) !void {
                 []const u8 => "string (default " ++ attrs.defaultValue(Type).? ++ ")",
                 ?[]const u8 => "string",
                 bool => "",
-                u32 => "number (default " ++ std.fmt.comptimePrint("{}", attrs.defaultValue(Type).?) ++ ")",
+                u32 => "number (default " ++ std.fmt.comptimePrint("{}", .{ attrs.defaultValue(Type).? }) ++ ")",
                 ?u32 => "number",
                 else => @typeName(Type)
             };
@@ -90,31 +92,21 @@ fn doEverything(
     if (run_files.len == 0)
         return error.Nothing;
 
-    var compilation = Compilation.init(arena);
-    defer compilation.deinit();
+    const qcu_options = structs.unmerge(Qcu.Options, run_options);
+    const virt_options = structs.unmerge(Virtualiser.Options, run_options);
+    var bundle = Bundle.init(io, arena, qcu_options, stderr);
+    defer bundle.deinit();
 
     for (run_files) |root_file_path| {
-        const qcu = Qcu.init(
-            io,
-            arena,
-            std.Io.Dir.cwd(),
-            root_file_path,
-            structs.unmerge(Qcu.Options, run_options),
-            stderr
-        ) catch |err| switch (err) {
-            error.FileNotFound => {
-                try stderr.print("error: {s}: file not found", .{ root_file_path });
-                return error.Break;
-            },
-            else => |the_err| return the_err
-        };
-        try compilation.addTransferOwnership(qcu);
+        try bundle.processUnit(std.Io.Dir.cwd(), root_file_path);
     }
 
-    try compilation.work(stderr);
-
+    if (run_options.binary)
+        return error.NotImplemented;
     if (run_options.verilog)
-        try verilog.output(&compilation, stdout);
+        try verilog.output(&bundle, stdout);
+    if (run_options.virtualise)
+        try Virtualiser.begin(&bundle, virt_options);
 }
 
 const ArgumentsParser = Arguments(std.process.Args.Iterator);
@@ -157,11 +149,9 @@ pub fn main(init: std.process.Init) u8 {
 }
 
 const CliOptions = struct {
-    // run modes
     version: bool = false,
     help: bool = false,
     docs: ?[]const u8 = null,
-    // run options
     doptions: bool = false,
     verbose: bool = false
 };
@@ -172,20 +162,7 @@ const OutputOptions = struct {
     virtualise: bool = false
 };
 
-const Options = blk: {
-    const cli = @typeInfo(CliOptions).@"struct";
-    const output = @typeInfo(OutputOptions).@"struct";
-    const qcu = @typeInfo(Qcu.Options).@"struct";
-    // const virt = @typeInfo(Virtualiser.Options).@"struct";
-
-    // Merging structs at compile-time? Hell yeah!
-    break :blk @Struct(
-       .auto,
-       null,
-       cli.field_names ++ output.field_names ++ qcu.field_names,
-       cli.field_types ++ output.field_types ++ qcu.field_types,
-       cli.field_attrs ++ output.field_attrs ++ qcu.field_attrs);
-};
+const Options = structs.Merge(&.{ CliOptions, OutputOptions, Qcu.Options, Virtualiser.Options });
 
 fn Arguments(comptime T: type) type {
     return struct {

@@ -217,9 +217,9 @@ pub const LinkInfo = struct {
     ty: Type,
 
     pub const Type = union(enum) {
-        /// expression: physical address origin expression
-        physically: struct {
-            expression: AsmAst.Node.List.Index
+        /// device: virt device string expression
+        virt: struct {
+            device: AsmAst.Node.List.Index
         },
         /// section_name: section name
         /// expression: section address origin expression
@@ -995,13 +995,13 @@ const IrGen = struct {
 
     const LinkInfoOptions = struct {
         expose: bool = false,
-        physically: bool = false,
+        virt: bool = false,
         origin: bool = false,
         aligned: bool = false
     };
 
     const LinkInfoInstr = structs.Fields(LinkInfoOptions, &.{
-        "physically",
+        "virt",
         "origin",
         "aligned"
     });
@@ -1041,6 +1041,11 @@ const IrGen = struct {
                             },
                             AsmAst.Node.List.Index => {
                                 const node_index = try iterator.expectAny(builtin.token, "an expression") orelse return;
+                                const node = self.tree.nodes.get(node_index);
+
+                                if (node.tag == .string) {
+                                    try self.maybeEmitSentinelError(node);
+                                }
 
                                 @field(arguments, field_name) = node_index;
                             },
@@ -1095,8 +1100,9 @@ const IrGen = struct {
         // string arguments will be checked for unnecessary sentinels, but
         // expressions (those from @define) won't be, because those may also be
         // used for ascii instructions
-        if (message_node.tag == .string)
+        if (message_node.tag == .string) {
             try self.maybeEmitSentinelError(message_node);
+        }
 
         const block = self.getCurrentBlock().?;
         try block.content.append(self.allocator, .{
